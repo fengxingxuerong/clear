@@ -1,0 +1,19 @@
+# 依赖
+node_modules/
+node_modules.zip
+electron-app/node_modules/
+
+# 构建产物
+dist/
+electron-app/assets/
+*.tsbuildinfo
+
+# 打包产物
+electron-dist/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+*.log
+.DS_Store
+Thumbs.db

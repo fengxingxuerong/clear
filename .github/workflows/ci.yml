@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --no-fund --no-audit
+
+      - name: Type check (tsc)
+        run: npx tsc -b
+
+      - name: Lint (eslint)
+        run: npm run lint
+
+      - name: Unit tests (vitest)
+        run: npx vitest run
+
+      - name: Engine regression (scan-bugs)
+        run: npx tsx scripts/scan-bugs.ts
+
+      - name: Quality gate (verify-quality)
+        run: npx tsx scripts/verify-quality.ts
+
+      - name: Production build
+        run: npm run build
