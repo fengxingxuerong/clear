@@ -77,6 +77,8 @@ export interface FingerprintReport {
   pass: boolean;
   issues: FingerprintIssue[];
   sentenceCV: number;
+  /** 句长标准差（朱雀官方口径参考：AI 文本常落在 5~8 区间） */
+  sentenceStd?: number;
 }
 
 /** 对任意文本做确定性指纹自检：把内部回归套件变成用户功能。
@@ -130,14 +132,22 @@ export function fingerprintCheck(text: string): FingerprintReport {
       hint: "值得注意的是/毋庸置疑 这类词是检测器一票抓的特征",
     });
   }
-  // 6) 节奏过平
+  // 6) 节奏过平（突发性双通道：CV 相对判据 + 句长标准差绝对判据，后者为朱雀官方口径）
   const stats = sentenceStats(text);
   const cv = Number(stats.cv.toFixed(2));
+  const std = Number(stats.std.toFixed(1));
   if (stats.count >= 4 && cv < MIN_BURSTINESS_CV) {
     issues.push({
       name: "句长节奏过平",
       count: 1,
       hint: `句长变异系数 ${cv}（建议 >0.45），AI 句子长度均匀`,
+    });
+  }
+  if (stats.count >= 6 && std >= 4.5 && std <= 8.5) {
+    issues.push({
+      name: "句长标准差落入 AI 特征带",
+      count: 1,
+      hint: `句长标准差 ${std}（实测 AI 文本多在 5~8 区间），长短句交错可拉开`,
     });
   }
 // 7) 半角逗号过多（反向检查：过度混入也是新指纹）
@@ -152,7 +162,7 @@ export function fingerprintCheck(text: string): FingerprintReport {
       hint: "模拟手滑要克制，超过 15% 反而是新指纹",
     });
   }
-  return { pass: issues.length === 0, issues, sentenceCV: cv };
+  return { pass: issues.length === 0, issues, sentenceCV: cv, sentenceStd: std };
 }
 
 /* ----------------------------- 本地忠实度校验 ----------------------------- */

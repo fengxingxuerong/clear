@@ -17,7 +17,7 @@ export function FingerprintPanel({ fingerprint, fidelity, checkingOutput }: Fing
   <div className="bench-head">
     指纹体检（本地，不联网）· {checkingOutput ? "检查去味结果" : "检查原文"}
     {fingerprint.pass
-      ? ` — ✅ 未检出指纹，句长CV ${fingerprint.sentenceCV}`
+      ? ` — ✅ 未检出指纹，句长CV ${fingerprint.sentenceCV}${fingerprint.sentenceStd != null ? ` / 标准差 ${fingerprint.sentenceStd}` : ""}`
       : ` — ${fingerprint.issues.length} 项指纹`}
   </div>
   {!fingerprint.pass &&
