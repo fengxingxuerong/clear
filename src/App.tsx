@@ -9,10 +9,20 @@ import {
 import {
   fingerprintCheck,
   checkFidelityLocal,
+  pplIssues as derivePplIssues,
   FingerprintReport,
   type ScoreBreakdown,
 } from "./engine/humanize";
 import { DetectorConfig, scoreViaDetector } from "./api/detector";
+import {
+  computePplFeature,
+  ensurePplModel,
+  pplStatus,
+  isPplReady,
+  type PplProgressInfo,
+} from "./ppl/ppl-client";
+import type { PplIssueLite } from "./components/FingerprintPanel";
+import type { PplFeature } from "./ppl/scorer-core";
 import {
   loadApi,
   saveApi,
@@ -22,6 +32,8 @@ import {
   saveDetector,
   loadZhuqueMode,
   saveZhuqueMode,
+  loadPplEnabled,
+  savePplEnabled,
   hasSecureStore,
   saveApiKeySecure,
   saveDetectorKeySecure,
@@ -74,9 +86,60 @@ export default function App({
   const [roundScores, setRoundScores] = useState<number[]>([]);
   const [fingerprint, setFingerprint] = useState<FingerprintReport | null>(null);
   const [fidelity, setFidelity] = useState<{ pass: boolean; problems: string[] } | null>(null);
+  // ---- 困惑度第 8 项状态机 ----
+  const [pplEnabled, setPplEnabled] = useState<boolean>(loadPplEnabled());
+  const [pplState, setPplState] = useState<
+    "idle" | "need-download" | "downloading" | "loading" | "done" | "error" | "unsupported"
+  >("idle");
+  const [pplFeature, setPplFeature] = useState<PplFeature | null>(null);
+  const [pplIssues, setPplIssues] = useState<PplIssueLite[] | null>(null);
+  const [pplProgress, setPplProgress] = useState<number | null>(null);
+  const [pplNote, setPplNote] = useState<string | null>(null);
   const [showDiff, setShowDiff] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [history, setHistory] = useState<HistoryEntry[]>(() => loadHistory());
+
+  // 第 8 项（困惑度）：模型就绪才推理；未下载转引导态；失败静默降级为仅 7 项
+  async function runPplFeature(target: string): Promise<void> {
+    if (!loadPplEnabled()) return;
+    try {
+      const st = await pplStatus();
+      if (!st.supported) {
+        setPplState("unsupported");
+        return;
+      }
+      if (!isPplReady()) {
+        setPplState("need-download");
+        return;
+      }
+      setPplState("loading");
+      const feature = await computePplFeature(target);
+      setPplFeature(feature);
+      setPplIssues(derivePplIssues(feature));
+      setPplState("done");
+    } catch {
+      setPplFeature(null);
+      setPplIssues(null);
+      setPplState("error");
+    }
+  }
+
+  async function ensurePpl(): Promise<void> {
+    if (pplState === "downloading") return;
+    setPplState("downloading");
+    setPplProgress(0);
+    try {
+      await ensurePplModel((p: PplProgressInfo) => {
+        if (typeof p.progress === "number") setPplProgress(p.progress);
+      });
+      setPplState("idle");
+      const target = output.trim() ? output : input;
+      if (target.trim()) void runPplFeature(target);
+    } catch (e: unknown) {
+      setPplState("error");
+      setPplNote("模型下载失败：" + (e instanceof Error ? e.message : String(e)));
+    }
+  }
 
   function handleFingerprint() {
     const target = output.trim() ? output : input;
@@ -84,6 +147,8 @@ export default function App({
     const fid = output.trim() ? checkFidelityLocal(input, output) : null;
     setFingerprint(fingerprintCheck(target));
     setFidelity(fid);
+    setPplNote(null);
+    void runPplFeature(target);
   }
 
   async function handleHumanize() {
@@ -180,7 +245,7 @@ export default function App({
     }
   }
 
-  function handleSaveSettings(a: ApiConfig, d: DetectorConfig, z: boolean) {
+  function handleSaveSettings(a: ApiConfig, d: DetectorConfig, z: boolean, ppl: boolean) {
     // 桌面版：主 API Key 与外部检测器 Key 都通过 safeStorage 加密存储；Web 版仍走 localStorage
     if (hasSecureStore()) {
       void saveApiKeySecure(a.apiKey);
@@ -192,9 +257,11 @@ export default function App({
       saveDetector(d);
     }
     saveZhuqueMode(z);
+    savePplEnabled(ppl);
     setApi(a);
     setDetector(d);
     setZhuqueMode(z);
+    setPplEnabled(ppl);
     setShowSettings(false);
     setNote("设置已保存（仅存本地）");
   }
@@ -359,6 +426,13 @@ export default function App({
             fingerprint={fingerprint}
             fidelity={fidelity}
             checkingOutput={outputHasText}
+            pplEnabled={pplEnabled}
+            pplState={pplState}
+            pplFeature={pplFeature}
+            pplIssues={pplIssues}
+            pplProgress={pplProgress}
+            pplNote={pplNote}
+            onDownloadPpl={() => void ensurePpl()}
           />
 
       {before && after && (
@@ -403,6 +477,7 @@ export default function App({
           api={api}
           detector={detector}
           zhuqueMode={zhuqueMode}
+          pplEnabled={pplEnabled}
           onClose={() => setShowSettings(false)}
           onSave={handleSaveSettings}
         />

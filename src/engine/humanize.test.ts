@@ -1,6 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { humanize, aiScore, humanizeWithScore, crossChunkCleanup } from "./humanize.ts";
 import { VOCAB, DIALECT_VOCAB } from "./humanize-data.ts";
+import {
+  pplIssues,
+  PPL_MIN_MEAN_NLL,
+  PPL_MAX_WIN_STD,
+  PPL_MIN_CHARS,
+  PPL_MIN_WINDOWS,
+} from "./humanize-metrics.ts";
 
 // 真断言版回归测试：任何失败都让 vitest（以及 npm test / CI）以非零退出码收场，
 // 而不是 console.log 冒烟后恒绿。
@@ -123,4 +130,38 @@ describe("数据词典完整性", () => {
       expect(dups).toEqual([]);
     });
   }
+});
+
+
+describe("pplIssues 第 8 项判定", () => {
+  const win = { charStart: 0, charEnd: 100, scoredCount: 80, meanNll: 0.5 };
+  const base = {
+    meanNll: 1.2,
+    winStd: 0.3,
+    scoredChars: 300,
+    windows: [win, { ...win }, { ...win }],
+  };
+
+  it("均值通道：meanNll 低于 PPL_MIN_MEAN_NLL 报「困惑度异常低」", () => {
+    const issues = pplIssues({ ...base, meanNll: PPL_MIN_MEAN_NLL - 0.01 });
+    expect(issues.some((i) => i.name === "困惑度异常低")).toBe(true);
+  });
+
+  it("均值通道：人工写作量级（约 1.2 nat）不触发任何问题", () => {
+    expect(pplIssues(base)).toHaveLength(0);
+  });
+
+  it("平坦通道：窗数达标且 winStd 低于 PPL_MAX_WIN_STD 才报「困惑度曲线过平」", () => {
+    const issues = pplIssues({ ...base, winStd: PPL_MAX_WIN_STD / 2 });
+    expect(issues.map((i) => i.name)).toContain("困惑度曲线过平");
+  });
+
+  it("平坦通道：窗口数不足时不判", () => {
+    const few = { ...base, windows: base.windows.slice(0, PPL_MIN_WINDOWS - 1) };
+    expect(pplIssues(few)).toHaveLength(0);
+  });
+
+  it("短文（低于 PPL_MIN_CHARS）静默跳过", () => {
+    expect(pplIssues({ ...base, scoredChars: PPL_MIN_CHARS - 1, meanNll: 0 })).toHaveLength(0);
+  });
 });

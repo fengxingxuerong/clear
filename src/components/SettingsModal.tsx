@@ -12,8 +12,9 @@ interface SettingsModalProps {
   api: ApiConfig;
   detector: DetectorConfig;
   zhuqueMode: boolean;
+  pplEnabled: boolean;
   onClose: () => void;
-  onSave: (api: ApiConfig, detector: DetectorConfig, zhuqueMode: boolean) => void;
+  onSave: (api: ApiConfig, detector: DetectorConfig, zhuqueMode: boolean, pplEnabled: boolean) => void;
 }
 
 const STYLE_OPTIONS: { value: RewriteStyle; label: string }[] = [
@@ -22,11 +23,19 @@ const STYLE_OPTIONS: { value: RewriteStyle; label: string }[] = [
   { value: "academic", label: "学术体（论文降AIGC）" },
 ];
 
-export function SettingsModal({ api, detector, zhuqueMode, onClose, onSave }: SettingsModalProps) {
+export function SettingsModal({
+  api,
+  detector,
+  zhuqueMode,
+  pplEnabled,
+  onClose,
+  onSave,
+}: SettingsModalProps) {
   // 草稿态：模态内编辑不立即持久化，点「保存」统一落盘，避免半保存的中间态
   const [draftApi, setDraftApi] = useState<ApiConfig>(api);
   const [draftDetector, setDraftDetector] = useState<DetectorConfig>(detector);
   const [draftZhuque, setDraftZhuque] = useState<boolean>(zhuqueMode);
+  const [draftPpl, setDraftPpl] = useState<boolean>(pplEnabled);
   // 温度输入中间态：允许清空/逐字编辑，失焦时才归一化进草稿（避免受控回弹跳值）
   const [tempText, setTempText] = useState(String(api.temperature));
 
@@ -224,6 +233,21 @@ export function SettingsModal({ api, detector, zhuqueMode, onClose, onSave }: Se
           />
         </label>
 
+        <div className="modal-divider">困惑度体检（第 8 项 · 本地 ONNX 小模型）</div>
+        <p className="modal-tip">
+          用本地小模型近似朱雀官方点名的「困惑度」指标：均值过低＝对语言模型过于可预测，
+          曲线过平＝全文置信度缺乏人类起伏。首次使用需下载约 100MB 模型，之后完全离线。
+          关闭后指纹体检只跑前 7 项。
+        </p>
+        <label className="row">
+          <span>启用困惑度检查</span>
+          <input
+            type="checkbox"
+            checked={draftPpl}
+            onChange={(e) => setDraftPpl(e.target.checked)}
+          />
+        </label>
+
         <div className="modal-divider">对标检测器（可选 · 如朱雀）</div>
         <p className="modal-tip">
           把 {`{text}`} POST 到你的检测器接口，从返回 JSON
@@ -295,7 +319,10 @@ export function SettingsModal({ api, detector, zhuqueMode, onClose, onSave }: Se
         </label>
 
         <div className="modal-actions">
-          <button className="primary" onClick={() => onSave(draftApi, draftDetector, draftZhuque)}>
+          <button
+            className="primary"
+            onClick={() => onSave(draftApi, draftDetector, draftZhuque, draftPpl)}
+          >
             保存
           </button>
         </div>

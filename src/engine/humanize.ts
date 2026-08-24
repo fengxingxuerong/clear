@@ -68,6 +68,9 @@ import {
   FingerprintIssue,
   checkFidelityLocal,
   FidelityReport,
+  pplIssues,
+  PPL_MIN_MEAN_NLL,
+  PPL_MAX_WIN_STD,
 } from "./humanize-metrics.ts";
 
 // 公开 API 面：这些符号从本文件被 App.tsx / llm.ts / 测试文件导入
@@ -87,6 +90,9 @@ export {
   aiScore,
   fingerprintCheck,
   checkFidelityLocal,
+  pplIssues,
+  PPL_MIN_MEAN_NLL,
+  PPL_MAX_WIN_STD,
 };
 export type {
   RewriteStyle,

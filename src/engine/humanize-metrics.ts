@@ -14,6 +14,7 @@ import {
   sentenceStats,
   MIN_BURSTINESS_CV,
 } from "./humanize-data.ts";
+import type { PplFeature } from "../ppl/scorer-core.ts";
 
 /* ----------------------------- AI 味评分（本地启发式代理） ----------------------------- */
 
@@ -163,6 +164,41 @@ export function fingerprintCheck(text: string): FingerprintReport {
     });
   }
   return { pass: issues.length === 0, issues, sentenceCV: cv, sentenceStd: std };
+}
+
+/* ------------------- 第 8 项：困惑度特征判定（评分由宿主层注入） ------------------- */
+// 朱雀官方点名的困惑度指标，本地用 ONNX MLM 伪困惑度近似（Salazar 打分法）。
+// 阈值来自 scripts/ppl-calibrate.ts 本地标定：分组掩码 K=5 下人工组 meanNll∈[0.98,1.35]、
+// AI 组∈[0.18,0.42]，完全线性可分，取间隔中点 0.70。随朱雀回传数据迭代（见
+// docs/fingerprint-and-zhuque-calibration.md §5）。本函数是纯函数，不感知模型与宿主的存在。
+
+/** 全文平均 NLL 低于此值报「困惑度异常低」（单位 nat；标定间隔中点，见 §5） */
+export const PPL_MIN_MEAN_NLL = 0.7;
+/** 窗间 NLL 样本标准差低于此值报「困惑度曲线过平」（标定两组 max 均 ≈0.10） */
+export const PPL_MAX_WIN_STD = 0.12;
+/** 参与打分字数下限：短文的困惑度不可靠，不判定 */
+export const PPL_MIN_CHARS = 60;
+/** 平坦通道最少窗口数：窗口太少谈不了"起伏" */
+export const PPL_MIN_WINDOWS = 3;
+
+export function pplIssues(feature: PplFeature): FingerprintIssue[] {
+  const issues: FingerprintIssue[] = [];
+  if (feature.scoredChars < PPL_MIN_CHARS) return issues;
+  if (feature.meanNll < PPL_MIN_MEAN_NLL) {
+    issues.push({
+      name: "困惑度异常低",
+      count: 1,
+      hint: `字均NLL ${feature.meanNll.toFixed(2)} nat（<${PPL_MIN_MEAN_NLL}）：对语言模型过于可预测，AI 生成特征`,
+    });
+  }
+  if (feature.windows.length >= PPL_MIN_WINDOWS && feature.winStd < PPL_MAX_WIN_STD) {
+    issues.push({
+      name: "困惑度曲线过平",
+      count: 1,
+      hint: `窗间NLL标准差 ${feature.winStd.toFixed(2)}（<${PPL_MAX_WIN_STD}）：全文置信度缺乏起伏，生成式特征`,
+    });
+  }
+  return issues;
 }
 
 /* ----------------------------- 本地忠实度校验 ----------------------------- */

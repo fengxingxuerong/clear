@@ -1,5 +1,9 @@
 // 趣AI味 · Electron 主进程（仅负责开窗口加载本地 Web 构建，无 Rust）
 const { app, BrowserWindow, ipcMain, safeStorage } = require("electron");
+const { registerPplIpc } = require("./ppl-engine.cjs");
+
+// 困惑度模型镜像源（设置面板可改）；注册 IPC 前定义，引用稳定对象传给引擎
+const pplMirrorRef = { value: null };
 const path = require("path");
 const fs = require("fs");
 
@@ -9,6 +13,7 @@ if (!gotLock) {
   app.quit();
 } else {
   registerSecureStore();
+  registerPplIpc(ipcMain, pplMirrorRef);
   createWindowWhenReady();
 
   app.on("second-instance", () => {
@@ -58,9 +63,11 @@ function writeSecureStore(data) {
 }
 
 function registerSecureStore() {
-  if (!safeStorage.isEncryptionAvailable()) return; // 系统不支持加密时跳过，退回 localStorage
+  // 无论系统是否支持加密都必须注册通道：不注册会让渲染层 invoke 报
+  // "No handler registered"。加密不可用时由处理器返回兜底值（退回 localStorage）。
 
   ipcMain.handle("secure-store-get", (_event, key) => {
+    if (!safeStorage.isEncryptionAvailable()) return null;
     const enc = readSecureStore()[key];
     if (!enc) return null;
     try {
@@ -71,6 +78,7 @@ function registerSecureStore() {
   });
 
   ipcMain.handle("secure-store-set", (_event, key, value) => {
+    if (!safeStorage.isEncryptionAvailable()) return false;
     const data = readSecureStore();
     if (!value) {
       delete data[key];

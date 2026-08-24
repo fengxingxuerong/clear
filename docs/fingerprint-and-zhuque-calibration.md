@@ -19,7 +19,7 @@
                │ 提供换算与阈值预估
                ▼
 ┌─────────────────────────────┐
-│ fingerprintCheck（本地,开源） │ ←── 7 项确定性检查（本文档 §2）
+│ fingerprintCheck（本地,开源） │ ←── 8 项检查（本文档 §2 与 §5）
 │ aiScore（本地代理分）          │
 └─────────────────────────────┘
 ```
@@ -74,7 +74,7 @@
 - **报告字段**：`FingerprintReport.sentenceStd`（可选字段，向后兼容）
 - **依据**：人类写作长短句交错（high burstiness），LLM 输出长度分布过平且集中
 - **注**：引擎侧 `boostBurstiness()`（强度 >0.4 时启用）是本项修复器
-- **缺口声明**：官方另一核心指标「困惑度」依赖语言模型推理，本地规则集无法等价实现——当前以映射标定（§3）间接覆盖
+- **缺口修复**：官方另一核心指标「困惑度」已由第 8 项检查落地——本地 ONNX 小模型的 MLM 伪困惑度近似，详见 §5
 
 来源：朱雀官方功能页（困惑度/突发性表述）、腾讯云社区《朱雀AI检测原理深度解析》（七维度、句长标准差 5~8 实测区间）。
 
@@ -95,7 +95,7 @@ if (!report.pass) {
 }
 ```
 
-UI 入口：「指纹体检」按钮；回归套件中同组规则以种子扫描形式长期值守。
+UI 入口：「指纹体检」按钮；回归套件中同组规则以种子扫描形式长期值守。第 8 项困惑度在同一面板展示，宿主不可用或推理失败时静默降级为仅显前 7 项。
 
 ---
 
@@ -160,3 +160,55 @@ UI 入口：「指纹体检」按钮；回归套件中同组规则以种子扫�
 | `applyZhuqueFeatures` | humanize.ts:366 | 朱雀模式特征注入（zhuqueMode 且强度 ≥0.35） |
 | `boostBurstiness` | humanize-text.ts | 句长节奏兜底（§2.6 的修复器） |
 | `PAD_WORDS / FORMULAIC` | humanize-vocab.ts | 垫词/套话词典 |
+| `pplIssues` | humanize-metrics.ts | 第 8 项困惑度两通道判定（§5） |
+| `computePplFeature` | src/ppl/ppl-client.ts | 双宿主困惑度特征编排 |
+| `scorer-core.ts` | src/ppl/ | 切窗/选点/logsumexp 纯内核 |
+---
+
+## 5. 第 8 项检查：本地困惑度近似（PPL Feature）
+
+> 朱雀官方点名的两大核心指标中，「突发性」由 §2.6 覆盖；本节补上最后一块——「困惑度」。
+> 实现方式：本地 ONNX 小模型推理的 MLM 伪困惑度近似，全程离线、文本不出机。
+> 设计规格：`docs/superpowers/specs/2026-08-25-ppl-feature-design.md`。
+
+### 5.1 原理与定位
+
+- **方法**：MLM 伪困惑度（Salazar et al., 2019 打分法，分组掩码变体）：把窗内可打分 token 均分为 `MASK_GROUPS = 5` 组轮流掩码——组内替换为 `[MASK]`、组外保留原文，逐组前向取各掩码位 log softmax 后原词分量的负对数似然（NLL，nat），最后按目标数加权平均。若全部位置同时掩码，每个字都近乎失去上下文，NLL 被压向词表熵上限而抹平人机差异；分组保留组外原文作上下文，恢复判别力且成本仅为逐位置打分的 1/K。标点同样参与打分，口径更贴近生成式困惑度。
+- **模型**：`Xenova/bert-base-chinese` int8 量化版（约 100MB），默认从镜像站 hf-mirror.com 下载；首次使用一键下载，之后完全离线。
+- **判定独立**：作为第 8 项独立检查呈现，不计入 aiScore，不改动 §3 已发布标定映射。
+- **设置开关**：设置弹窗新增复选框（默认开启）；关闭后指纹面板仅显示前 7 项。
+
+### 5.2 双通道判定（pplIssues）
+
+| 通道 | 判据 | 初版阈值 | 含义 |
+|---|---|---|---|
+| 均值通道 | 全文平均 NLL 过低 | < `PPL_MIN_MEAN_NLL`(0.70 nat) 报「困惑度异常低」 | 模型对每个字的走向都太有把握，是生成式行文的典型信号 |
+| 平坦通道 | 各窗 NLL 的窗间标准差过小 | 窗数 ≥ `PPL_MIN_WINDOWS`(3) 且 σ < `PPL_MAX_WIN_STD`(0.12) 报「困惑度曲线过平」 | 全文置信度无起伏，对应生成式「全程高置信」 |
+| 静默区 | 打分字数 < `PPL_MIN_CHARS`(60) 不判 | — | 短文本样本不足，避免误报 |
+
+滑窗参数：每窗 384 token、步进 320（512 上限扣除 [CLS]/[SEP]/[MASK] 余量）；每窗推理次数 = 掩码组数 K=5；长文按字数加权聚合均值 + 窗间样本 σ。
+
+对齐实现说明：transformers.js v4 不提供 offset_mapping 也未暴露词表，因此选点采用免对齐方案——BERT 的 MLM 打分只需要「token 位置 + 原词 id」，两者天然在 ids 序列里；跳过特殊 token（[PAD]/[UNK]/[CLS]/[SEP]/[MASK]，id 固定）与 UNK 即可，无需字符坐标。该规则在 scorer-core 与 ppl-engine.cjs 双侧镜像；分组掩码（MASK_GROUPS）同样双侧镜像。
+
+阈值初版由 `npx tsx scripts/ppl-calibrate.ts` 在人工写作/AI 生成对照语料上标定：分组掩码下人工组 meanNll ∈ [0.98, 1.35]、AI 组 ∈ [0.18, 0.42]，两组完全线性可分，取间隔中点 0.70 为均值阈值；两组窗间 σ max 均 ≈0.10，平坦阈值取 0.12。随真实分布回传迭代。**诚实声明：当前为小样本自标定（每组 4 篇），误报/漏报率未知，阈值会随数据积累修订。**
+
+### 5.3 分层架构
+
+| 层 | 位置 | 职责 | 说明 |
+|---|---|---|---|
+| 纯内核 | `src/ppl/scorer-core.ts` | 切窗 / 分组选掩码点 / logsumexp / 聚合 | 零第三方依赖，vitest 用 stub NLL 直测（22 例）；`pplIssues` 判定单测同文件覆盖 |
+| 判定 | `src/engine/humanize-metrics.ts` | `pplIssues` 两通道判定 + 阈值常量 | 以 type-only 引用内核，保持零运行时依赖 |
+| Electron 宿主 | `electron-app/ppl-engine.cjs` | onnxruntime-node 推理、下载进度、IPC（ppl-status / ppl-download / ppl-score） | 主进程独占原生 CPU 推理 |
+| Web 宿主 | `src/ppl/ppl-worker.ts` | WASM 推理 Worker，浏览器 Cache API 缓存 | 与 Electron 共享同一评分内核 |
+| 编排 | `src/ppl/ppl-client.ts` | 双宿主探测 / 就绪门控 / 窗口规划与坐标回填 | 渲染层拥有全部策略 |
+| UI | App.tsx / FingerprintPanel / SettingsModal | 状态机、面板展示、设置开关 | need-download → downloading → loading → done 状态机 |
+
+设计纪律：渲染层负责策略（切窗、聚合、判定），宿主只做机制（加载、下载、推理）；任何宿主失败都静默降级为前 7 项 + 提示行，绝不阻塞既有功能。
+
+### 5.4 已知边界
+
+- MLM 伪困惑度不是生成式困惑度本身，绝对数值不可跨模型比较，仅在本项目内做相对判定；
+- bert-base-chinese 对古文、诗歌、强领域术语覆盖较弱，这些体裁下第 8 项参考价值下降；
+- 模型约 100MB 不打进安装包，首次使用时在线下载（缓存于应用数据目录，之后离线）；
+- 免对齐选点规则（跳过特殊 token 与 UNK，id 固定值硬编码）与分组掩码参数（MASK_GROUPS = 5）均在 scorer-core 与 ppl-engine.cjs 双侧镜像，改动必须同步；
+- 聚合语义约定：内核 maskedMeanNll 返回"传入目标集的均值"，调用方乘回组大小还原为总和后再除全局目标数，等价于按目标数严格加权——若直接累加会构成双重平均（曾致数值缩小约一个组大小，已在 worker 与标定脚本修复，引擎为内联累加实现不受影响）。

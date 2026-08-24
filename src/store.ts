@@ -5,6 +5,7 @@ const K_API = "aihumanizer.api";
 const K_IT = "aihumanizer.intensity";
 const K_DET = "aihumanizer.detector";
 const K_ZQ = "aihumanizer.zhuque";
+const K_PPL = "aihumanizer.ppl";
 
 /** 逐字段清洗解析：localStorage 里旧版本残存字段 / 手动篡改 / 类型错乱
  *  只会被回退到默认值，不会让整个配置静默坏掉。 */
@@ -143,4 +144,13 @@ export function loadZhuqueMode(): boolean {
 
 export function saveZhuqueMode(v: boolean): void {
   localStorage.setItem(K_ZQ, String(v));
+}
+
+/** 困惑度体检开关（默认开）；关闭后指纹体检只跑前 7 项 */
+export function loadPplEnabled(): boolean {
+  return localStorage.getItem(K_PPL) !== "false";
+}
+
+export function savePplEnabled(v: boolean): void {
+  localStorage.setItem(K_PPL, v ? "true" : "false");
 }

@@ -3,6 +3,11 @@
 日期：2026-08-25
 状态：设计已经用户确认，随实现提交归档
 
+> **实现演进勘误（随实现归档时注明）**：transformers.js v4 实测不提供 offset_mapping 也未暴露词表，
+> 选点已改为「免对齐方案」（token 位置 + 原词 id 直接取自 ids 序列，跳过特殊 token 与 UNK）；
+> 打分采用分组掩码（MASK_GROUPS = 5）而非全文同时掩码，理由与细节见
+> docs/fingerprint-and-zhuque-calibration.md §5。本文其余设计决策（方案 A 双宿主、模型、滑窗、独立第 8 项）均照常落地。
+
 ## 1. 目标与动机
 
 朱雀官方科普点名两大核心指标：困惑度（Perplexity）与突发性（Burstiness）。
