@@ -3,6 +3,7 @@ import {
   runHumanize,
   ApiConfig,
   judgeScoreStable,
+  effectiveKeys,
   DEEP_MAX_ROUNDS,
   DEEP_TARGET_SCORE,
 } from "./api/llm";
@@ -10,9 +11,13 @@ import {
   fingerprintCheck,
   checkFidelityLocal,
   pplIssues as derivePplIssues,
+  aiScore,
   FingerprintReport,
   type ScoreBreakdown,
 } from "./engine/humanize";
+import { classifyGenre } from "./engine/classify-genre";
+import { CALIB, trackForGenre, predictOfficialPct } from "./engine/zhuque-calib";
+import { detectSemanticStable, semanticAvailable } from "./api/zhuque-semantic";
 import { DetectorConfig, scoreViaDetector } from "./api/detector";
 import {
   computePplFeature,
@@ -37,7 +42,40 @@ import {
   hasSecureStore,
   saveApiKeySecure,
   saveDetectorKeySecure,
+  loadFuseWeight,
+  saveFuseWeight,
+  loadLocal,
+  saveLocal,
+  type LocalSettings,
 } from "./store";
+import {
+  detectZhuque,
+  ZHUQUE_URL,
+  type ZhuqueReport,
+  type Calibration,
+  type SemanticLayer,
+} from "./engine/zhuque";
+import { detectAI, type DetectReport } from "./engine/detector";
+import {
+  addCalibPoint,
+  buildSubmission,
+  clearAllCalibration,
+  copyText,
+  loadCalibration,
+  openOfficial,
+  parseOfficialResult,
+  submissionAdvice,
+} from "./api/zhuque";
+import {
+  loadSamples,
+  generateBatch,
+  fillOfficial,
+  deleteSample,
+  clearAllSamples,
+  labStats,
+  seedTruthAnchors,
+  type CalibSample,
+} from "./api/calib-lab";
 import { SettingsModal } from "./components/SettingsModal";
 import { ScoreBadge } from "./components/ScoreBadge";
 import { TextPane } from "./components/TextPane";
@@ -45,6 +83,9 @@ import { DiffView } from "./components/DiffView";
 import { HistoryPanel } from "./components/HistoryPanel";
 import { FingerprintPanel } from "./components/FingerprintPanel";
 import { BenchmarkPanel } from "./components/BenchmarkPanel";
+import { ZhuquePanel } from "./components/ZhuquePanel";
+import { CalibLabModal } from "./components/CalibLabModal";
+import { LocalDetectPanel } from "./components/LocalDetectPanel";
 import { loadHistory, saveHistory, clearHistory, makeHistoryEntry, type HistoryEntry } from "./store-history";
 
 type Score = ScoreBreakdown;
@@ -70,6 +111,7 @@ export default function App({
   const [output, setOutput] = useState("");
   const [intensity, setIntensity] = useState<number>(loadIntensity());
   const [zhuqueMode, setZhuqueMode] = useState<boolean>(loadZhuqueMode());
+  const [genreOverride, setGenreOverride] = useState<"main" | "narrative" | "dialogue" | "humanHand" | null>(null);
   const [api, setApi] = useState<ApiConfig>(initialApi ?? loadApi());
   const [detector, setDetector] = useState<DetectorConfig>(initialDetector ?? loadDetector());
   const [judgeScore, setJudgeScore] = useState<number | null>(null);
@@ -98,6 +140,25 @@ export default function App({
   const [showDiff, setShowDiff] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [history, setHistory] = useState<HistoryEntry[]>(() => loadHistory());
+  // ---- 朱雀检测（本地近似 + 官方校准）与本地 AI 检测 ----
+  const [detectIn, setDetectIn] = useState<DetectReport | null>(null);
+  const [detectOut, setDetectOut] = useState<DetectReport | null>(null);
+  const [showDetectFeatures, setShowDetectFeatures] = useState(false);
+  const [zq, setZq] = useState<ZhuqueReport | null>(null);
+  const [zqText, setZqText] = useState("");
+  const [zqCalib, setZqCalib] = useState<Calibration>(() => loadCalibration());
+  const [zqPaste, setZqPaste] = useState("");
+  const [zqMsg, setZqMsg] = useState("");
+  const [zqFeatures, setZqFeatures] = useState(false);
+  const [zqSem, setZqSem] = useState<SemanticLayer | null>(null);
+  const [zqSemLoading, setZqSemLoading] = useState(false);
+  const [zqWeight, setZqWeight] = useState<number>(() => loadFuseWeight());
+  const [showLab, setShowLab] = useState(false);
+  const [labSamples, setLabSamples] = useState<CalibSample[]>([]);
+  const [labText, setLabText] = useState("");
+  const [labPaste, setLabPaste] = useState<Record<string, string>>({});
+  const [labMsg, setLabMsg] = useState("");
+  const [local, setLocal] = useState<LocalSettings>(() => loadLocal());
 
   // 第 8 项（困惑度）：模型就绪才推理；未下载转引导态；失败静默降级为仅 7 项
   async function runPplFeature(target: string): Promise<void> {
@@ -117,6 +178,20 @@ export default function App({
       setPplFeature(feature);
       setPplIssues(derivePplIssues(feature));
       setPplState("done");
+      // 困惑度层就绪：朱雀检测面板若已打开，自动带上第 13 维重算综合分
+      if (zqText) {
+        setZq(
+          detectZhuque(zqText, {
+            calibration: zqCalib,
+            ppl: {
+              meanNll: feature.meanNll,
+              winStd: feature.winStd,
+              scoredChars: feature.scoredChars,
+              windowCount: feature.windows.length,
+            },
+          }),
+        );
+      }
     } catch {
       setPplFeature(null);
       setPplIssues(null);
@@ -171,6 +246,8 @@ export default function App({
           );
         },
         zhuqueMode,
+        genreOverride ?? undefined,
+        local.bestOf ? { bestOf: true, candidates: local.candidates } : undefined,
       );
       setOutput(r.text);
       setBefore(r.before);
@@ -179,16 +256,31 @@ export default function App({
       setJudgeCritique([]);
       setDetectorScore(null);
       setRoundScores(r.roundScores || []);
+      // 闭环复检：本地 AI 检测（原文 vs 去味稿降档对照）+ 朱雀口径三档占比
+      const din = detectAI(input);
+      const dout = detectAI(r.text);
+      setDetectIn(din);
+      setDetectOut(dout);
+      setZqSem(null); // 新去味稿：旧语义层结果作废
+      const zt = r.text.trim();
+      setZqText(zt);
+      const zr = detectZhuque(zt, zhuqueOpts(zqCalib));
+      setZq(zr);
       let msg = r.usedApi
         ? r.roundScores?.length
           ? "已使用 API 深度去味"
           : "已使用 API（LLM）去味"
         : "使用本地引擎去味（未配置/未启用 API）";
       if (r.note) msg += " · " + r.note;
+      if (r.bestOf) {
+        msg += ` · 多候选择优：${r.bestOf.tried} 稿中挑最优（淘汰 ${r.bestOf.rejected} 稿，中选种子 ${r.bestOf.seed}）`;
+      }
       const visibleLen = input.replace(/\s/g, "").length;
       if (visibleLen < ZHUQUE_MIN_CHARS) {
         msg += ` · 提示：朱雀检测要求不少于 ${ZHUQUE_MIN_CHARS} 字（当前 ${visibleLen} 字），去味本身不受影响`;
       }
+      msg += ` · 本地检测：${din.levelText}(${din.probability}%) → ${dout.levelText}(${dout.probability}%)`;
+      msg += ` · 朱雀口径：AI特征占比 ${zr.ratios.ai}%（${zr.labelText}）`;
       // 检测器自动闭环：已配置外部检测器时，去味后自动送检一次（真实分回显，
       // 形成"改写→检测"闭环的一部分），不再需要手动点「用外部检测器」
       if (detector.enabled && detector.url.trim() && r.text.trim()) {
@@ -219,7 +311,7 @@ export default function App({
   }
 
   async function handleJudge() {
-    if (!api.enabled || !api.apiKey || !output) return;
+    if (!api.enabled || effectiveKeys(api).length === 0 || !output) return;
     setJudging(true);
     try {
       const r = await judgeScoreStable(output, api);
@@ -245,7 +337,164 @@ export default function App({
     }
   }
 
-  function handleSaveSettings(a: ApiConfig, d: DetectorConfig, z: boolean, ppl: boolean) {
+  /* ---- 本地 AI 检测（14 特征离线启发式，原文 vs 去味稿降档对照） ---- */
+
+  function handleLocalDetect() {
+    const target = output.trim() ? output : input;
+    if (!target.trim()) return;
+    setDetectIn(detectAI(input));
+    setDetectOut(output.trim() ? detectAI(output) : null);
+    setShowDetectFeatures(false);
+  }
+
+  /* ---- 朱雀检测（本地近似 + 官方校准） ---- */
+
+  function zqTarget(): string {
+    return (output.trim() ? output : input).trim();
+  }
+
+  /** 检测选项：校准映射 + 困惑度层（模型就绪时自动并入，字数不足时引擎内部忽略） */
+  function zhuqueOpts(cal: Calibration | null) {
+    return {
+      calibration: cal,
+      ppl: pplFeature
+        ? {
+            meanNll: pplFeature.meanNll,
+            winStd: pplFeature.winStd,
+            scoredChars: pplFeature.scoredChars,
+            windowCount: pplFeature.windows.length,
+          }
+        : null,
+    };
+  }
+
+  function handleZhuque() {
+    const t = zqTarget();
+    if (!t) return;
+    setZqText(t);
+    setZq(detectZhuque(t, zhuqueOpts(zqCalib)));
+    setZqMsg("");
+    setZqSem(null); // 换文本即作废旧的语义层结果，防止张冠李戴
+  }
+
+  async function handleZqCopySubmit() {
+    const sub = buildSubmission(zqTarget());
+    if (!sub.chars) return;
+    const ok = await copyText(sub.text);
+    setZqMsg(
+      `${submissionAdvice(sub.chars)}｜${ok ? "已复制，去官方页面粘贴即可" : "复制失败，请手动复制"}`
+    );
+  }
+
+  function handleZqOpenOfficial() {
+    if (!openOfficial()) setZqMsg(`浏览器拦截了弹窗，请手动打开 ${ZHUQUE_URL}`);
+  }
+
+  function handleZqSaveCalib() {
+    const p = parseOfficialResult(zqPaste);
+    if (!p.ok || p.probability === null || !zq) {
+      setZqMsg(p.note || "解析失败，粘一行官方结果再试");
+      return;
+    }
+    const cal = addCalibPoint(zq.composite, p.probability);
+    setZqCalib(cal);
+    setZq(detectZhuque(zqText || zqTarget(), zhuqueOpts(cal)));
+    setZqPaste("");
+    setZqMsg(`已记录：本地综合分 ${zq.composite} → 官方 ${p.probability}%（${p.labelText}），现有 ${cal.n} 个校准点`);
+  }
+
+  async function handleZqSemantic() {
+    const t = zqText || zqTarget();
+    if (!t || !semanticAvailable(api)) return;
+    setZqSemLoading(true);
+    setZqMsg("");
+    try {
+      const r = await detectSemanticStable(t, api);
+      setZqSem({ score: r.score, critique: r.critique, source: r.source });
+    } catch (e: unknown) {
+      setZqMsg(
+        "语义层评判失败：" + (e instanceof Error ? e.message : String(e)) + "（本地表层结果不受影响）"
+      );
+    } finally {
+      setZqSemLoading(false);
+    }
+  }
+
+  function handleZqWeight(v: number) {
+    setZqWeight(v);
+    saveFuseWeight(v);
+  }
+
+  function handleZqClearCalib() {
+    clearAllCalibration();
+    setZqCalib({ a: 1, b: 0, n: 0, points: [] });
+    if (zqText) setZq(detectZhuque(zqText, zhuqueOpts(null)));
+    setZqMsg("已清空校准数据（样本保留，可重新回填）");
+  }
+
+  /* ---- 校准实验室（攒真值 → 自动重拟映射与权重） ---- */
+
+  function handleLabOpen() {
+    setLabSamples(loadSamples());
+    setLabMsg("");
+    setShowLab(true);
+  }
+
+  function handleLabGenerate() {
+    if (!labText.trim()) return;
+    const batch = generateBatch(labText);
+    if (!batch.length) return;
+    setLabSamples(loadSamples());
+    setLabText("");
+    setLabMsg(`已生成 ${batch.length} 条样本（原文 + 本地引擎 0.3/0.6/0.9），逐条「复制」去官方送检`);
+  }
+
+  function handleLabFill(id: string, input: string) {
+    const r = fillOfficial(id, input);
+    setLabMsg(r.note);
+    if (r.ok) {
+      setLabSamples(loadSamples());
+      setLabPaste((p) => ({ ...p, [id]: "" }));
+      // 回填成功 → 同步主面板的校准映射
+      const cal = loadCalibration();
+      setZqCalib(cal);
+      if (zqText) setZq(detectZhuque(zqText, zhuqueOpts(cal)));
+    }
+  }
+
+  function handleLabDelete(id: string) {
+    deleteSample(id);
+    setLabSamples(loadSamples());
+    setLabMsg("已删除该样本");
+  }
+
+  function handleLabClear() {
+    clearAllSamples();
+    setLabSamples([]);
+    setZqCalib({ a: 1, b: 0, n: 0, points: [] });
+    if (zqText) setZq(detectZhuque(zqText, zhuqueOpts(null)));
+    setLabMsg("已清空样本库与校准点");
+  }
+
+  function handleLabApplyWeight(w: number) {
+    handleZqWeight(w);
+    setLabMsg(`已把语义层权重默认值设为 ${Math.round(w * 100)}%（拟合自 ${labStats().filled} 条回填样本）`);
+  }
+
+  function handleLabSeed() {
+    const r = seedTruthAnchors();
+    setLabSamples(loadSamples());
+    const cal = loadCalibration();
+    setZqCalib(cal);
+    if (zqText) setZq(detectZhuque(zqText, zhuqueOpts(cal)));
+    setLabMsg(
+      r.added
+        ? `已预置 ${r.added} 条样本D官方真值锚点（surface 按当前引擎重算）；注意：锚点参与拟合属自证，真评估靠后续留出样本`
+        : `真值锚点已存在（共 ${r.total} 条样本）`
+    );
+  }
+
+  function handleSaveSettings(a: ApiConfig, d: DetectorConfig, z: boolean, ppl: boolean, l: LocalSettings) {
     // 桌面版：主 API Key 与外部检测器 Key 都通过 safeStorage 加密存储；Web 版仍走 localStorage
     if (hasSecureStore()) {
       void saveApiKeySecure(a.apiKey);
@@ -258,10 +507,12 @@ export default function App({
     }
     saveZhuqueMode(z);
     savePplEnabled(ppl);
+    saveLocal(l);
     setApi(a);
     setDetector(d);
     setZhuqueMode(z);
     setPplEnabled(ppl);
+    setLocal(l);
     setShowSettings(false);
     setNote("设置已保存（仅存本地）");
   }
@@ -278,6 +529,18 @@ export default function App({
   // 非空判定派生为布尔值：渲染体里只比布尔，避免每次按键对全文做 trim() 拷贝
   const inputHasText = useMemo(() => input.trim().length > 0, [input]);
   const outputHasText = useMemo(() => output.trim().length > 0, [output]);
+
+  // 朱雀面板的体裁线预测：v3 18 点 OLS（与对标评分面板共用 engine/zhuque-calib 同一把尺子）
+  const zqGenreEstimate = (() => {
+    const t = zqText || (output.trim() ? output : input).trim();
+    if (!t) return null;
+    const g = genreOverride ?? classifyGenre(t).genre;
+    const track = trackForGenre(g);
+    return {
+      pct: Math.round(predictOfficialPct(aiScore(t).score, track) * 10) / 10,
+      tag: CALIB[track].x40Tag,
+    };
+  })();
 
   // ---- 稳定回调（供 memo 化的 TextPane 使用，避免右侧面板随左侧输入重渲） ----
   const hotkeyRef = useRef<() => void>(() => {});
@@ -301,6 +564,11 @@ export default function App({
     setRoundScores([]);
     setFingerprint(null);
     setFidelity(null);
+    setDetectIn(null);
+    setDetectOut(null);
+    setZq(null);
+    setZqSem(null);
+    setZqMsg("");
   }
 
   function handleSample() {
@@ -354,7 +622,7 @@ export default function App({
             onChange={(e) => setIntensity(parseFloat(e.target.value))}
           />
         </div>
-        {api.enabled && api.apiKey.trim() && (
+        {api.enabled && effectiveKeys(api).length > 0 && (
           <span
             className="mode-tag"
             title={
@@ -420,6 +688,16 @@ export default function App({
         >
           指纹体检
         </button>
+        <button className="ghost" onClick={handleLocalDetect} disabled={!inputHasText}>
+          AI 检测
+        </button>
+        <button
+          className="ghost"
+          onClick={handleZhuque}
+          disabled={!inputHasText && !outputHasText}
+        >
+          朱雀检测
+        </button>
       </div>
 
           <FingerprintPanel
@@ -467,8 +745,65 @@ export default function App({
             onJudge={handleJudge}
             onDetect={handleDetect}
             onManualScore={setZhuqueManualScore}
+            onGenreChange={setGenreOverride}
             onNote={setNote}
           />
+
+      {(detectIn || detectOut) && (
+        <LocalDetectPanel
+          detectIn={detectIn}
+          detectOut={detectOut}
+          showFeatures={showDetectFeatures}
+          onToggleFeatures={() => setShowDetectFeatures((v) => !v)}
+        />
+      )}
+
+      {zq && (
+        <ZhuquePanel
+          text={zqText || zqTarget()}
+          rep={zq}
+          calib={zqCalib}
+          paste={zqPaste}
+          msg={zqMsg}
+          showFeatures={zqFeatures}
+          sem={zqSem}
+          semLoading={zqSemLoading}
+          weight={zqWeight}
+          canRunSemantic={semanticAvailable(api)}
+          genreEstimate={zqGenreEstimate}
+          onPaste={setZqPaste}
+          onSaveCalib={handleZqSaveCalib}
+          onClearCalib={handleZqClearCalib}
+          onCopySubmit={handleZqCopySubmit}
+          onOpenOfficial={handleZqOpenOfficial}
+          onOpenLab={handleLabOpen}
+          onToggleFeatures={() => setZqFeatures((v) => !v)}
+          onRunSemantic={handleZqSemantic}
+          onWeight={handleZqWeight}
+        />
+      )}
+
+      {showLab && (
+        <CalibLabModal
+          samples={labSamples}
+          text={labText}
+          msg={labMsg}
+          pasteMap={labPaste}
+          onText={setLabText}
+          onPaste={(id, v) => setLabPaste((p) => ({ ...p, [id]: v }))}
+          onClose={() => setShowLab(false)}
+          onGenerate={handleLabGenerate}
+          onFill={handleLabFill}
+          onCopy={async (t) => {
+            const ok = await copyText(t);
+            setLabMsg(ok ? "已复制（超 2000 字会按句子边界截断）" : "复制失败，请手动复制");
+          }}
+          onDelete={handleLabDelete}
+          onClear={handleLabClear}
+          onApplyWeight={handleLabApplyWeight}
+          onSeed={handleLabSeed}
+        />
+      )}
 
       {note && <div className="note">{note}</div>}
 
@@ -478,6 +813,7 @@ export default function App({
           detector={detector}
           zhuqueMode={zhuqueMode}
           pplEnabled={pplEnabled}
+          local={local}
           onClose={() => setShowSettings(false)}
           onSave={handleSaveSettings}
         />
