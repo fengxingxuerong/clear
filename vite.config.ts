@@ -32,7 +32,7 @@ export default defineConfig({
   worker: { format: "es" },
   // Vitest 配置
   test: {
-    include: ["src/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     exclude: ["node_modules"],
   },
 });
