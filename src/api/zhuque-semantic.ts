@@ -27,20 +27,90 @@ export const ZHUQUE_DETECT_SYSTEM = `你是基于腾讯混元的 AI 文本检测
 第二步：最后一行单独输出一个 0 到 100 的整数，表示该文本被朱雀判为 AI 生成内容的综合概率（100=几乎必然判AI，0=几乎必然判人写）。参考口径：典型 AI 议论文 95+，深度改写稿 60~85，真人随笔 <20。按真实判断打分。
 除了痕迹清单和最后的数字，不要输出任何其他内容。`;
 
-/** 朱雀语义层稳定检测：交叉模型均值 / 单模型中位数（复用 llm-judge 的稳健聚合） */
+/** 朱雀语义层稳定检测：交叉模型均值 / 单模型中位数（复用 llm-judge 的稳健聚合）。
+ *  默认带 localStorage 缓存（键 = 文本指纹 + 模型签名）：同一文本重复检测不重复烧 API；
+ *  bypassCache=true 时强制真跑（面板「重跑语义层」按钮用）。 */
 export async function detectSemanticStable(
   text: string,
   cfg: ApiConfig,
+  opts: { bypassCache?: boolean } = {},
 ): Promise<SemanticLayer> {
+  if (!opts.bypassCache) {
+    const hit = loadSemanticCache(text, cfg);
+    if (hit) return { ...hit, source: hit.source + "（缓存）" };
+  }
   const r = await judgeScoreStable(text, cfg, 3, ZHUQUE_DETECT_SYSTEM);
   const cross = cfg.judgeModel.trim() && cfg.judgeModel.trim() !== cfg.model;
   const source = cross
     ? `朱雀检测员提示词 · ${cfg.model} + ${cfg.judgeModel}（交叉取均值）`
     : `朱雀检测员提示词 · ${cfg.model}（3 次取中位数）`;
-  return { score: r.score, critique: r.critique, source };
+  const sem: SemanticLayer = { score: r.score, critique: r.critique, source };
+  saveSemanticCache(text, cfg, sem);
+  return sem;
 }
 
 /** 语义层可用性判定（Key 池口径，与 UI 守卫一致） */
 export function semanticAvailable(cfg: ApiConfig): boolean {
   return cfg.enabled && effectiveKeys(cfg).length > 0;
+}
+
+/* ----------------------------- 语义层缓存 -----------------------------
+ * 同一段文本重复点「补语义层」每次真烧 2 次 LLM 调用（主+交叉），成本最高的一层。
+ * 缓存键 = 文本指纹 + 模型签名：换主模型/评判模型即视为不同评分，绝不串味。
+ * 存 localStorage，上限 50 条按时间淘汰；LLM 评分有漂移，「重跑」按钮显式绕过。
+ */
+
+const K_SEM_CACHE = "quaiwei.zhuque.semcache";
+const SEM_CACHE_MAX = 50;
+
+/** FNV-1a 32 位文本指纹 + 长度后缀（零依赖，长文碰撞概率可忽略） */
+export function textHash(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, "0") + ":" + s.length.toString(36);
+}
+
+function semanticCacheKey(text: string, cfg: ApiConfig): string {
+  return `${textHash(text)}|${cfg.model}|${cfg.judgeModel.trim()}`;
+}
+
+function readSemanticCache(): Record<string, SemanticLayer & { ts: number }> {
+  try {
+    const raw = localStorage.getItem(K_SEM_CACHE);
+    if (!raw) return {};
+    const v: unknown = JSON.parse(raw);
+    if (typeof v === "object" && v !== null && !Array.isArray(v)) {
+      return v as Record<string, SemanticLayer & { ts: number }>;
+    }
+  } catch {
+    /* 解析失败按空缓存处理 */
+  }
+  return {};
+}
+
+export function loadSemanticCache(text: string, cfg: ApiConfig): SemanticLayer | null {
+  const hit = readSemanticCache()[semanticCacheKey(text, cfg)];
+  if (!hit || typeof hit.score !== "number" || !isFinite(hit.score)) return null;
+  return {
+    score: Math.max(0, Math.min(100, hit.score)),
+    critique: hit.critique ?? [],
+    source: hit.source ?? "",
+  };
+}
+
+export function saveSemanticCache(text: string, cfg: ApiConfig, sem: SemanticLayer): void {
+  try {
+    const cache = readSemanticCache();
+    cache[semanticCacheKey(text, cfg)] = { ...sem, ts: Date.now() };
+    // 升序取末尾 50 条 = 保留最新：同毫秒写入时稳定排序仍按插入序，最旧的正确出局
+    const entries = Object.entries(cache)
+      .sort((a, b) => (a[1].ts ?? 0) - (b[1].ts ?? 0))
+      .slice(-SEM_CACHE_MAX);
+    localStorage.setItem(K_SEM_CACHE, JSON.stringify(Object.fromEntries(entries)));
+  } catch {
+    /* 存储不可用则静默跳过（语义层本身不受影响） */
+  }
 }

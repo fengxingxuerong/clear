@@ -403,13 +403,14 @@ export default function App({
     setZqMsg(`已记录：本地综合分 ${zq.composite} → 官方 ${p.probability}%（${p.labelText}），现有 ${cal.n} 个校准点`);
   }
 
-  async function handleZqSemantic() {
+  async function handleZqSemantic(bypassCache = false) {
     const t = zqText || zqTarget();
     if (!t || !semanticAvailable(api)) return;
     setZqSemLoading(true);
     setZqMsg("");
     try {
-      const r = await detectSemanticStable(t, api);
+      // 面板「重跑语义层」= 已有结果再点 → 显式绕过缓存真跑一次（LLM 评分会漂移）
+      const r = await detectSemanticStable(t, api, { bypassCache });
       setZqSem({ score: r.score, critique: r.critique, source: r.source });
     } catch (e: unknown) {
       setZqMsg(
@@ -778,7 +779,7 @@ export default function App({
           onOpenOfficial={handleZqOpenOfficial}
           onOpenLab={handleLabOpen}
           onToggleFeatures={() => setZqFeatures((v) => !v)}
-          onRunSemantic={handleZqSemantic}
+          onRunSemantic={() => void handleZqSemantic(!!zqSem)}
           onWeight={handleZqWeight}
         />
       )}

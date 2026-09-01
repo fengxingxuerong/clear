@@ -1,4 +1,5 @@
 import { humanize } from "../src/engine/humanize.ts";
+import { humanizeBestOf } from "../src/engine/humanize-bestof.ts";
 
 // 性能基准测试
 const longText = `随着人工智能技术的快速发展，大语言模型在各个领域的应用日益广泛。从自然语言处理到代码生成，从智能客服到内容创作，AI 正在深刻改变着我们的工作和生活方式。值得注意的是，这一技术变革不仅提升了生产效率，更为传统行业的数字化转型提供了新的可能。
@@ -38,3 +39,18 @@ console.log(`普通模式: ${(performance.now() - t0).toFixed(0)}ms`);
 const t1 = performance.now();
 humanize(full10, { intensity: 0.9, seed: 42, zhuqueMode: true });
 console.log(`朱雀模式: ${(performance.now() - t1).toFixed(0)}ms`);
+
+// 多候选择优（bestOf）：默认 8 稿，UI 默认开启，耗时必须保持在可交互范围
+console.log("\n=== bestOf 多候选择优（默认 8 稿，朱雀增强 0.9）===\n");
+for (const mult of [1, 10]) {
+  const full = Array(mult).fill(longText).join("\n\n");
+  const charCount = full.replace(/\s/g, "").length;
+  // 预热（含首次指纹/评分的 JIT 路径）
+  humanizeBestOf(full, { intensity: 0.9, seed: 42, zhuqueMode: true, candidates: 8 });
+  const t2 = performance.now();
+  humanizeBestOf(full, { intensity: 0.9, seed: 42, zhuqueMode: true, candidates: 8 });
+  const dt2 = performance.now() - t2;
+  console.log(
+    `x${mult.toString().padStart(2)}  | ${String(charCount).padStart(5)}字 | ${dt2.toFixed(0)}ms（8 稿择优，含指纹/忠实度门槛）`,
+  );
+}
