@@ -32,6 +32,9 @@ jobs:
       - name: Engine regression (scan-bugs)
         run: npx tsx scripts/scan-bugs.ts
 
+      - name: 12-sample metric regression
+        run: npx tsx scripts/regression-12samples.ts
+
       - name: Quality gate (verify-quality)
         run: npx tsx scripts/verify-quality.ts
 

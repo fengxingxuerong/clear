@@ -26,6 +26,7 @@ import {
   SOFT_TAIL_VARIANTS,
   FORMULAIC,
   guardBlocks,
+  isSceneBlockLine,
   isCJK,
   splitSentences,
   pick,
@@ -58,6 +59,15 @@ import {
   reframeConcessives,
   crossChunkCleanup,
   mechanicalShuffle,
+  resegmentParagraphsAggressive,
+  injectSelfQA,
+  injectHumanTypos,
+  structuralShuffleParagraph,
+  // v3 P4+P5 最终清尾（humanize() return 前最后一步调用）
+  ensureEmDashCountHardCap,
+  boostBurstinessIfLow,
+  replaceGuardedFormulaicDerivs,
+  clampAvgSentenceLenUnder25,
 } from "./humanize-shuffle.ts";
 
 import {
@@ -72,6 +82,9 @@ import {
   PPL_MIN_MEAN_NLL,
   PPL_MAX_WIN_STD,
 } from "./humanize-metrics.ts";
+
+// P7 引擎级体裁联动：自动体裁识别 + 每体裁参数旋钮
+import { classifyGenre, AutoGenre } from "./classify-genre.ts";
 
 // 公开 API 面：这些符号从本文件被 App.tsx / llm.ts / 测试文件导入
 export {
@@ -117,6 +130,87 @@ const MERGE_SENTENCE_PREV_MAX = 16;
 const MERGE_SENTENCE_RATE = 0.35;
 const INTERJECTION_RATE = 0.22;
 const DROP_CONNECTIVE_INTENSITY_THRESHOLD = 0.45;
+
+/* ---------------- P7 引擎级体裁联动：每体裁参数旋钮（Genre Knobs） ---------------- */
+/**
+ * 论说/叙事/对话/人写四体裁的反检测最优参数（由 v2/v3 OLS 12 点标定 + P3~P6 实战回放得出）。
+ * 理由：
+ *  · avgLenTarget：论说文是 AI 的重灾区，句子越长越"规整三部曲"→ 压到 23；
+ *                 叙事文有大量场景/动作/对话，天然短句多，留到 28 即可；
+ *                 对话体台词可能偏长表达，再放宽到 32；
+ *                 humanHand 不做硬切段（怕破坏原稿节奏→官分反涨），target 设为无压力的 36。
+ *  · burstTarget：论说文最怕"句式高度均匀"，需要极高 CV≥0.63 才能过朱雀；
+ *                 叙事/对话天然节奏起伏大，依次放宽；
+ *                 humanHand 只需最低可接受值 0.50，避免过度插入锚点破坏行文。
+ *  · intensityCap：只有 humanHand 有强制上限 0.48（v2 标定其斜率为负，越去味官分越高）；
+ *                  其他三体裁无上限，交给用户滑块自由控制。
+ *  · disableZhuque：只有 humanHand 强制关闭朱雀增强（负斜率特征，叠加方言/自问自答会官分跳升）。
+ *  · expoForceP3：只有论说 + 强度≥0.75 才强制 P3（覆盖 expoScore 略低于 0.55 的边缘论说文）。
+ *  · skipSceneInject：只有对话体需要（剧本【场景/人物/背景】块不塞自问自答，避免违和）。
+ */
+type EffectiveGenre = AutoGenre | "humanHand";
+
+interface GenreKnobs {
+  avgLenTarget: number;
+  burstTarget: number;
+  intensityCap: number;       // 硬上限：> 这个值会被 clamp
+  disableZhuque: boolean;     // 强制关闭朱雀增强
+  expoForceP3: (intensity: number) => boolean;
+  skipSceneInject: boolean;   // 剧本场景块跳过自问自答
+  disableTyposAnchor: boolean;// 关闭错别字/第一人称锚点注入（humanHand专用）
+}
+
+function getGenreKnobs(genre: EffectiveGenre): GenreKnobs {
+  switch (genre) {
+    case "main":
+      return {
+        avgLenTarget: 23,
+        burstTarget: 0.63,
+        intensityCap: 1.0,
+        disableZhuque: false,
+        expoForceP3: (i) => i >= 0.75,
+        skipSceneInject: false,
+        disableTyposAnchor: false,
+      };
+    case "narrative":
+      return {
+        avgLenTarget: 28,
+        burstTarget: 0.59,
+        intensityCap: 1.0,
+        disableZhuque: false,
+        expoForceP3: () => false,
+        skipSceneInject: false,
+        disableTyposAnchor: false,
+      };
+    case "dialogue":
+      return {
+        avgLenTarget: 32,
+        burstTarget: 0.57,
+        intensityCap: 1.0,
+        disableZhuque: false,
+        expoForceP3: () => false,
+        skipSceneInject: true,
+        disableTyposAnchor: false,
+      };
+    case "humanHand":
+    default:
+      return {
+        avgLenTarget: 36,
+        burstTarget: 0.50,
+        intensityCap: 0.48,
+        disableZhuque: true,
+        expoForceP3: () => false,
+        skipSceneInject: false,
+        disableTyposAnchor: true,
+      };
+  }
+}
+
+/** 剧本格式的场景/人物/背景/时间/角色/旁白/简介 段首块正则（P7-E 共用） */
+// P7-E：剧本场景块行头。无锚 + 按行扫描——前置方言/观点注入会在段首加垫词，
+// ^ 锚定的整段匹配会被击穿（台词区被塞自问自答的真实缺陷）
+const SCENE_BLOCK_LINE_RE =
+  /【[^】]{0,80}(?:场景|人物|角色|地点|时间|背景|旁白|简介)[^】]{0,80}】/;
 
 /* ----------------------------- 替换规则 ----------------------------- */
 
@@ -334,26 +428,56 @@ function replaceTemplates(text: string, rng: () => number, intensity: number): s
 /** 入口：按段落拆分逐段处理、保留原文分段 */
 export function humanize(text: string, opts: HumanizeOptions = {}): string {
   if (!text || !text.trim()) return "";
-  const intensity = Math.max(0, Math.min(1, opts.intensity ?? 0.6));
+  // P7-A：体裁判定——显式 opts.genre 优先，否则自动识别（纯人写不自动判，必须用户显式传 humanHand）
+  const effectiveGenre: EffectiveGenre = opts.genre ?? classifyGenre(text).genre;
+  const knobs = getGenreKnobs(effectiveGenre);
+  // P7-D：humanHand 强约束——强度硬钳制到 ≤0.48（该体裁斜率为负，越去味官分越高）
+  const intensity = Math.min(Math.max(0, Math.min(1, opts.intensity ?? 0.6)), knobs.intensityCap);
+  // P7-D：humanHand 强制关闭朱雀增强
+  const zhuqueOn = (opts.zhuqueMode ?? false) && !knobs.disableZhuque;
   const paragraphs = text.split(/\n+/).filter((p) => p.trim());
   let result: string;
   if (paragraphs.length <= 1) {
-    result = humanizeSingle(text, opts);
+    result = humanizeSingle(text, { ...opts, intensity });
   } else {
     const baseSeed = opts.seed;
     result = paragraphs
       .map((p, i) =>
         humanizeSingle(p, {
           ...opts,
+          intensity,
           seed: baseSeed === undefined ? undefined : (baseSeed + i * 2654435761) >>> 0,
         }),
       )
       .join("\n\n");
   }
 
-  // 朱雀增强模式（全文本级）
-  if (opts.zhuqueMode && intensity >= 0.35) {
-    result = applyZhuqueFeatures(result, intensity, opts.seed, opts.style ?? "casual");
+  // 朱雀增强模式（全文本级）——P7-D humanHand 强制关闭；P7-E 对话体场景块跳过自问自答
+  if (zhuqueOn && intensity >= 0.35) {
+    result = applyZhuqueFeatures(result, intensity, opts.seed, opts.style ?? "casual", {
+      skipSceneInject: knobs.skipSceneInject,
+    });
+  }
+
+  // v0.8 结构级：本地引擎跑完后做二次扫荡（强度 >= 0.55），对段落骨架再动刀
+  if (intensity >= 0.55) {
+    const structRng = makeRng(opts.seed, 5555);
+    // P7-B：论说文 + 强度≥0.75 → 强制开启 P3 结构增强（覆盖 expoScore 略低于 0.55 的边缘论说文）
+    // P7-E：对话体 → 剧本【场景/人物/背景】块跳过自问自答注入
+    const structOpts = {
+      zhuqueMode: zhuqueOn,
+      expoForceP3: knobs.expoForceP3(intensity),
+      skipSceneInject: knobs.skipSceneInject,
+    };
+    result = result
+      .split(/\n\n+/)
+      .map((p) => structuralShuffleParagraph(p, structRng, intensity, structOpts))
+      .join("\n\n");
+    result = resegmentParagraphsAggressive(result, structRng, intensity);
+    // P7-D：humanHand 跳过错别字注入
+    if (!knobs.disableTyposAnchor) {
+      result = injectHumanTypos(result, structRng, intensity);
+    }
   }
 
   // 全文级垫词去重
@@ -365,6 +489,22 @@ export function humanize(text: string, opts: HumanizeOptions = {}): string {
     result = boostBurstiness(result, rng3, 0.6 * intensity, opts.style ?? "casual");
   }
 
+  // v3 P4+P5 最终清尾（必须放在所有结构/自问自答生成之后）——
+  // P4-C：VOCAB GUARD 保护的"针对→性/系统→性/有效→性"等合法套话衍生，保语义整体替换为口语
+  result = replaceGuardedFormulaicDerivs(result);
+  // P7-C + P5-A：按体裁压 avgLen（论说23 / 叙事28 / 对话32 / 人写36 不触发硬切）
+  result = clampAvgSentenceLenUnder25(result, knobs.avgLenTarget, 5);
+  // P7-C + P4-B（P5 增强版）：按体裁拉 burstiness CV（论说0.63 / 叙事0.59 / 对话0.57 / 人写0.50）
+  //       （原全局固定 0.61 → 现按体裁分档，论说最严、人写最松，避免负斜率体裁被过度注入锚点）
+  if (intensity >= 0.4) {
+    const p4Rng = makeRng(opts.seed, 9401);
+    result = boostBurstinessIfLow(result, p4Rng, knobs.burstTarget, 8);
+  }
+  // P4-A：最终保险整篇破折号/省略号硬上限，解决指纹自检"破折号超标×2/×3"红项
+  result = ensureEmDashCountHardCap(result, 1);
+  result = limitPunctuation(result, "……", 1, "。");
+  result = limitPunctuation(result, "——", 1, "，");
+
   return result;
 }
 
@@ -374,6 +514,8 @@ export function applyZhuqueFeatures(
   intensity: number,
   seed?: number,
   style: RewriteStyle = "casual",
+  // P7-E：对话体剧本场景块跳过自问自答注入
+  opts: { skipSceneInject?: boolean } = {},
 ): string {
   if (!text || intensity < 0.35) return text;
   const zrng = makeRng(seed, 7777);
@@ -393,6 +535,23 @@ export function applyZhuqueFeatures(
   }
   result = dedupePadWords(result);
   result = limitPunctuation(result, "——", 1, "，");
+  // v0.8：自问自答（增强句式跳脱，AI 极少写自问自答，人类日常到处是）
+  // P7-E：对话体剧本【场景/人物/背景】块跳过注入，避免台词区被塞"问：…答：…"违和
+  if (isCasual && intensity >= 0.7) {
+    const qrng = makeRng(seed, 8888);
+    // P7-E：体裁级开关（对话体）→ 全文跳过；未开开关时逐段保护——
+    // 含剧本【场景/人物/背景】行的段落原样保留，其余段落照常注入
+    const skipFlag = opts.skipSceneInject ?? false;
+    result = result
+      .split(/\n\n+/)
+      .map((p) => {
+        if (skipFlag || p.split(/\n/).some((ln) => SCENE_BLOCK_LINE_RE.test(ln))) return p;
+        const sents = splitSentences(p);
+        if (sents.length < 5) return p;
+        return injectSelfQA(sents, qrng, intensity).join("");
+      })
+      .join("\n\n");
+  }
   return result;
 }
 
@@ -404,6 +563,10 @@ function humanizeSingle(text: string, opts: HumanizeOptions = {}): string {
   const isCasual = style === "casual";
 
   if (!text || !text.trim()) return "";
+
+  // P8 场景块全格式保真：整段为剧本【场景/人物/背景…】块头行 → 原样返回。
+  // 块头是元数据不是行文：relaxColon 会改成【场景，…】、replaceVocab/templates 也会污染。
+  if (isSceneBlockLine(text)) return text;
 
   // 1) 全局词汇替换 + 套话
   let working = dropLeadingConnectives(text, rng, intensity);
@@ -530,25 +693,52 @@ const DIALECT_CANDIDATES: [string, string[]][] = DIALECT_ENTRIES.map(([from, tos
 });
 
 function injectDialect(text: string, rng: () => number, p: number): string {
-  let base = text;
+  if (p <= 0) return text;
+  // P8 场景块保真：按行护盾——方言表单字词（做/说/从/看）会污染【场景：从早上八点】类块头
+  return text
+    .split("\n")
+    .map((ln) => (isSceneBlockLine(ln) ? ln : injectDialectLine(ln, rng, p)))
+    .join("\n");
+}
+function injectDialectLine(base: string, rng: () => number, p: number): string {
   for (const [from, candidates] of DIALECT_CANDIDATES) {
-    const idx = base.indexOf(from);
-    if (idx === -1) continue;
-    // 只处理首个命中：先无条件消耗一次概率位再判定（与原实现的 rng 序列一致）
-    if (rng() < p) {
-      const rep = pick(rng, candidates);
-      base = base.slice(0, idx) + rep + base.slice(idx + from.length);
+    const total = base.split(from).length - 1;
+    if (total === 0) continue;
+    // 每词上限：最多 3 处，且不超过全文出现次数 × 0.25（+p 保证 p 足够大时至少改 1 处）
+    const cap = Math.max(1, Math.min(3, Math.ceil(total * 0.25 + p)));
+    let replaced = 0;
+    let idx = 0;
+    while ((idx = base.indexOf(from, idx)) !== -1 && replaced < cap) {
+      // 每个命中位置无条件消耗一次 rng（与原实现 rng 序列消费节奏一致）
+      if (rng() < p) {
+        const rep = pick(rng, candidates);
+        base = base.slice(0, idx) + rep + base.slice(idx + from.length);
+        idx += rep.length;
+        replaced++;
+      } else {
+        idx += from.length;
+      }
     }
   }
   return base;
 }
 
+// P7-F 段落感知：splitSentences().trim() 会剥掉句尾 \n\n，splitSentences→join("") 会把
+// 多段焊成一段（postmortem 缺陷二的同款模式）。朱雀增强路径的三处全文级注入必须复用
+// boostBurstiness / clampAvgSentenceLenUnder25 已验证的分段分发模式。
 function injectParentheticals(text: string, rng: () => number, p: number): string {
+  if (!text.includes("\n\n")) return injectParentheticalsBlock(text, rng, p);
+  return text
+    .split(/\n\n+/)
+    .map((para) => injectParentheticalsBlock(para, rng, p))
+    .join("\n\n");
+}
+function injectParentheticalsBlock(text: string, rng: () => number, p: number): string {
   const sentences = splitSentences(text);
   const out: string[] = [];
   for (let i = 0; i < sentences.length; i++) {
     let s = sentences[i];
-    if (s.length < 15 || rng() >= p) {
+    if (isSceneBlockLine(s) || s.length < 15 || rng() >= p) {
       out.push(s);
       continue;
     }
@@ -579,7 +769,15 @@ function injectFragments(text: string, rng: () => number, p: number): string {
   return out.join("\n\n");
 }
 
+// P7-F 段落感知：同 injectParentheticals，避免多段被焊成一段
 function injectOpinion(text: string, rng: () => number, p: number): string {
+  if (!text.includes("\n\n")) return injectOpinionBlock(text, rng, p);
+  return text
+    .split(/\n\n+/)
+    .map((para) => injectOpinionBlock(para, rng, p))
+    .join("\n\n");
+}
+function injectOpinionBlock(text: string, rng: () => number, p: number): string {
   const sentences = splitSentences(text);
   const out: string[] = [];
   let lastOpinion = false;
@@ -588,6 +786,10 @@ function injectOpinion(text: string, rng: () => number, p: number): string {
     let s = sentences[i];
     const hasOpinion = /^(我觉得|我认为|在我看来|以我的经验|我个人的看法|我寻思着|要我说)/.test(s);
     const hasInterjection = /^(说真的|说实话|老实讲|讲真|说白了|你别说|不瞒你说)/.test(s);
+    if (isSceneBlockLine(s)) {
+      out.push(s);
+      continue;
+    }
     if (s.length > 10 && rng() < p && !lastOpinion && !hasOpinion && !hasInterjection) {
       let op = pick(rng, OPINION_PHRASES);
       let guard = 0;
@@ -603,10 +805,22 @@ function injectOpinion(text: string, rng: () => number, p: number): string {
   return out.join("");
 }
 
+// P7-F 段落感知：同 injectParentheticals，避免多段被焊成一段
 function injectParentheticNotes(text: string, rng: () => number, p: number): string {
+  if (!text.includes("\n\n")) return injectParentheticNotesBlock(text, rng, p);
+  return text
+    .split(/\n\n+/)
+    .map((para) => injectParentheticNotesBlock(para, rng, p))
+    .join("\n\n");
+}
+function injectParentheticNotesBlock(text: string, rng: () => number, p: number): string {
   const sentences = splitSentences(text);
   const out: string[] = [];
   for (const s of sentences) {
+    if (isSceneBlockLine(s)) {
+      out.push(s);
+      continue;
+    }
     if (s.length > 15 && rng() < p) {
       const note = "（" + pick(rng, PARENTHETIC_NOTES) + "）";
       out.push(s + note);

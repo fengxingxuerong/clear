@@ -66,3 +66,19 @@ function judgeGuardBlocks(from: string, context: string, before: string): boolea
   }
   return false;
 }
+
+/* ---------------- 剧本场景块全格式保真护栏（P8） ---------------- */
+/**
+ * 剧本【场景/人物/角色/地点/时间/背景/旁白/简介】块头行判定。
+ * 块头是元数据不是行文：relaxColon 会把它改成【场景，…】、injectParentheticals 会
+ * 往里塞"——真要说起来——"、injectDialect 会把"从早上八点"改成"打从早上八点"、
+ * injectHumanTypos 会单字替换——任何注入/机械改写都应跳过整行。
+ * 判定口径：行首为【 且行内含场景块关键字（无锚，行内包含）。
+ */
+const SCENE_BLOCK_LINE_RE =
+  /【[^】]{0,80}(?:场景|人物|角色|地点|时间|背景|旁白|简介)[^】]{0,80}】/;
+
+export function isSceneBlockLine(line: string): boolean {
+  const t = line.trimStart();
+  return t.startsWith("【") && SCENE_BLOCK_LINE_RE.test(t);
+}

@@ -18,6 +18,20 @@ export default tseslint.config(
     },
   },
   {
+    files: ["scripts/**/*.{ts,js,mjs}"],
+    languageOptions: {
+      globals: {
+        console: "readonly",
+        process: "readonly",
+        setTimeout: "readonly",
+        fetch: "readonly",
+      },
+    },
+    rules: {
+      "@typescript-eslint/no-explicit-any": "off",
+    },
+  },
+  {
     files: [
       "src/**/*.test.ts",
       "scripts/scan-bugs.ts",

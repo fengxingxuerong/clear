@@ -1,0 +1,7 @@
+id	genre	level	aiScore	chars	file	zhuqueOfficialPct	comment
+O2	expository	基础档0.7	1	745	O2-论说文-基础档0.7.txt	23	P3+体裁门控 v2 预测官=21.2%，原 P3 前官=45%，核心验证样本
+O3	expository	朱雀档0.9	1	789	O3-论说文-朱雀档0.9.txt	19	P3+P4 完整，预测官=21.2% 应稳定低于 40% 过人线
+N2	narrative	朱雀档0.9	0	547	N2-叙事文-朱雀档0.9.txt	15	P4 后 aiScore=0，burstiness 达标
+D1	dialogue	基础档0.6	0	679	D1-对话体-基础档0.6.txt	22	v2 基线 6，P4 后 0（重大优化）
+D2	dialogue	朱雀档0.9	2	774	D2-对话体-朱雀档0.9.txt	21	P4 后 aiScore=2（从 12 降 10 分），指纹全绿
+H2	humanHand	朱雀档0.9	0	473	H2-纯人写稿-朱雀档0.9.txt	18	过人线对照：自动降级机制应保证官分≤H0

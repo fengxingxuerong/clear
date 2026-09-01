@@ -14,6 +14,7 @@ import {
   sentenceStats,
   MIN_BURSTINESS_CV,
 } from "./humanize-data.ts";
+import { FORMULAIC_EXTRA } from "./humanize-vocab-extra.ts";
 import type { PplFeature } from "../ppl/scorer-core.ts";
 
 /* ----------------------------- AI 味评分（本地启发式代理） ----------------------------- */
@@ -38,10 +39,11 @@ export function aiScore(text: string): ScoreBreakdown {
     return { score: 0, formulaicHits: 0, sentenceCount: 0, burstiness: 0, avgLen: 0 };
   }
 
-  // 套话命中
+  // 套话命中（v0.8：合并 FORMULAIC + FORMULAIC_EXTRA，去重防双重计分）
   let hits = 0;
   const haystack = text;
-  for (const phrase of FORMULAIC) {
+  const ALL_FORMULAIC = Array.from(new Set([...FORMULAIC, ...FORMULAIC_EXTRA]));
+  for (const phrase of ALL_FORMULAIC) {
     if (!(phrase in VOCAB) && haystack.includes(phrase)) hits++;
   }
   for (const from of Object.keys(VOCAB)) {
@@ -120,11 +122,17 @@ export function fingerprintCheck(text: string): FingerprintReport {
       hint: "然而/因此/综上所述等，AI 骨架特征，直删或口语化",
     });
   }
-  // 5) AI 套话
+  // 5) AI 套话（v0.8：合并 FORMULAIC + FORMULAIC_EXTRA）
   let formulaic = 0;
-  for (const p of FORMULAIC) if (text.includes(p)) formulaic++;
-  for (const w of ["值得注意的是", "毋庸置疑", "应运而生", "至关重要"]) {
-    if (text.includes(w) && !FORMULAIC.includes(w)) formulaic++;
+  const ALL_FORMULAIC_FP = Array.from(new Set([...FORMULAIC, ...FORMULAIC_EXTRA]));
+  for (const p of ALL_FORMULAIC_FP) if (text.includes(p)) formulaic++;
+  const FP_EXTRA_HARD = [
+    "展望未来", "面向未来", "按下了快进键", "迈上了新的台阶",
+    "交出了一份满意的答卷", "具有里程碑意义",
+    "关键在于", "核心在于", "本质在于", "根本在于",
+  ];
+  for (const w of FP_EXTRA_HARD) {
+    if (text.includes(w) && !ALL_FORMULAIC_FP.includes(w)) formulaic++;
   }
   if (formulaic > 0) {
     issues.push({

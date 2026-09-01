@@ -12,7 +12,7 @@ import { splitSentences } from "./humanize-text";
 /** 文风预设：控制朱雀增强特征的开关门控 */
 export type RewriteStyle = "casual" | "plain" | "academic";
 
-/** 去味参数：核心引擎、机械扰动与评分共用 */
+/** 去味参数：核心替换、机械扰动与评分共用 */
 export interface HumanizeOptions {
   /** 去味强度 0~1，越大改得越狠（默认 0.6） */
   intensity?: number;
@@ -24,6 +24,13 @@ export interface HumanizeOptions {
   /** 文风预设：casual=自然口语（朱雀特征全开）/ plain=平实书面（禁方言/网络梗，保留结构操作）
    *  / academic=学术体（禁方言/网络梗/主观意见，保留结构操作）。 */
   style?: RewriteStyle;
+  /**
+   * v3 P7 引擎级体裁联动：
+   *  · main/narrative/dialogue：引擎自动/显式识别后，对应调 avgLen/burst 阈值、P3 结构门控强度
+   *  · humanHand：纯人写原稿，强制强度 ≤0.48、关闭朱雀增强、跳过自问自答/错别字等（负斜率，越去味越升官%）
+   *  · undefined（默认）：由 classifyGenre(text) 自动在 main/narrative/dialogue 三选内判定
+   */
+  genre?: "main" | "narrative" | "dialogue" | "humanHand";
 }
 
 /** 句长变异系数最低阈值（节奏兜底与指纹体检共用） */
