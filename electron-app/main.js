@@ -1,6 +1,70 @@
 // 趣AI味 · Electron 主进程（仅负责开窗口加载本地 Web 构建，无 Rust）
-const { app, BrowserWindow, ipcMain, safeStorage } = require("electron");
+const { app, BrowserWindow, ipcMain, safeStorage, session } = require("electron");
+const http = require("http");
 const { registerPplIpc } = require("./ppl-engine.cjs");
+
+// 内置 SenseNova 网关代理（常驻 LLM 通道的 CORS 解法，自 C 盘副本 v0.6.1 吸收）。
+// 网关 token.sensenova.cn 的 OPTIONS 预检返回 404，浏览器直连必挂；
+// 桌面版在本机起一个转发服务，页面里 /sensenova/* 的请求被 webRequest 重定向过来，
+// 由 Node 侧转发到网关（Node 发请求没有 CORS 概念）。
+const UPSTREAM = "https://token.sensenova.cn";
+
+/** 本机转发服务：/sensenova/* → https://token.sensenova.cn/* */
+function startProxy() {
+  return new Promise((resolve) => {
+    const server = http.createServer((req, res) => {
+      const cors = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "authorization, content-type",
+        "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+      };
+      // 预检直接放行（网关自己的 OPTIONS 是 404，这正是要代理的原因）
+      if (req.method === "OPTIONS") {
+        res.writeHead(204, cors);
+        return res.end();
+      }
+      const url = new URL(req.url, "http://127.0.0.1");
+      const target = UPSTREAM + url.pathname + url.search;
+      const chunks = [];
+      req.on("data", (c) => chunks.push(c));
+      req.on("end", () => {
+        const headers = { ...req.headers };
+        delete headers.host;
+        delete headers.origin;
+        delete headers.referer;
+        delete headers["content-length"];
+        const body = Buffer.concat(chunks);
+        fetch(target, {
+          method: req.method,
+          headers,
+          body: body.length ? body : undefined,
+        })
+          .then(async (up) => {
+            res.writeHead(up.status, {
+              "Content-Type": up.headers.get("content-type") || "application/json",
+              ...cors,
+            });
+            res.end(Buffer.from(await up.arrayBuffer()));
+          })
+          .catch((e) => {
+            res.writeHead(502, { "Content-Type": "application/json", ...cors });
+            res.end(JSON.stringify({ error: { message: "代理转发失败: " + String(e) } }));
+          });
+      });
+    });
+    // 端口被占就往后找（多开场景）
+    let port = 18964;
+    const tryListen = () => {
+      server.once("error", () => {
+        port++;
+        if (port > 18974) return resolve(null);
+        tryListen();
+      });
+      server.listen(port, "127.0.0.1", () => resolve(port));
+    };
+    tryListen();
+  });
+}
 
 // 困惑度模型镜像源（设置面板可改）；注册 IPC 前定义，引用稳定对象传给引擎
 const pplMirrorRef = { value: null };
@@ -106,6 +170,19 @@ function createWindow() {
       sandbox: true,
       preload: path.join(__dirname, "preload.js"),
     },
+  });
+
+  // 页面是 file:// 加载的，fetch("/sensenova/...") 会解析成 file:///sensenova/...，
+  // 拦截这类请求重定向到本机转发服务
+  startProxy().then((port) => {
+    if (port) {
+      session.defaultSession.webRequest.onBeforeRequest(
+        { urls: ["file:///sensenova/*", "file://*/sensenova/*"] },
+        (details, callback) => {
+          callback({ redirectURL: `http://127.0.0.1:${port}${details.url.replace(/^file:\/\/[^/]*/, "")}` });
+        }
+      );
+    }
   });
 
   // 加载打包进来的 Web 构建（dist 内容）

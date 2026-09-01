@@ -11,6 +11,8 @@ export interface ApiConfig {
   enabled: boolean;
   baseUrl: string;
   apiKey: string;
+  /** Key 池：多个 Key 换行/逗号分隔，429/401 自动切下一个（与 apiKey 合并去重） */
+  apiKeys?: string;
   model: string;
   temperature: number;
   /** 深度模式：多轮"改写→评分→再改写"闭环，直到达标或用完轮数 */
@@ -30,6 +32,28 @@ export interface ApiConfig {
   maxWaitSeconds?: number;
 }
 
+/* ---------------------- SenseNova 常驻预置 ----------------------
+ * 2026-09-01 实测（3 Key × 5 模型）：
+ *   deepseek-v4-flash      ✅ 1.5~3s，改写质量最好 → 默认主力
+ *   deepseek-v4-pro        ✅ 2~22s，质量稳但慢     → 备选改写（altModel）
+ *   glm-5.2                ✅ 2~16s，思考型（max_tokens≥1024 才有 content）→ 交叉评判
+ *   sensenova-6.8-flash-lite ⚠️ 可用但 12s+ 波动大，不预置
+ *   kimi-k3                ⚠️ 网关仅允许 temperature=1 且 TPM 限流紧，不预置（chat 已自动适配）
+ *   Key1 曾 429（配额）→ Key 池轮换是刚需，不是锦上添花
+ * baseUrl 用同源相对路径 /sensenova/v1：dev 由 vite 代理转发、桌面版由 Electron
+ * main.js 内置代理转发（网关 OPTIONS 预检 404，浏览器直连必挂）。静态托管 dist
+ * 的用户需自备反代或改填 CORS 放行的服务商。
+ */
+export const SENSENOVA_PRESET = {
+  baseUrl: "/sensenova/v1",
+  keys: [
+    "***REMOVED***",
+    "***REMOVED***",
+    "***REMOVED***",
+  ],
+  models: ["deepseek-v4-flash", "deepseek-v4-pro", "glm-5.2", "sensenova-6.8-flash-lite", "kimi-k3"],
+};
+
 export const DEFAULT_API: ApiConfig = {
   enabled: false,
   baseUrl: "https://api.openai.com/v1",
@@ -43,6 +67,17 @@ export const DEFAULT_API: ApiConfig = {
   reasoningEffort: undefined,
   maxWaitSeconds: 0,
 };
+
+/** 解析 Key 池：apiKey 与 apiKeys 合并去重（换行/逗号/分号分隔均可） */
+export function effectiveKeys(cfg: ApiConfig): string[] {
+  const raw = [cfg.apiKey || "", cfg.apiKeys || ""].join("\n");
+  const seen = new Set<string>();
+  for (const k of raw.split(/[\n,;，；]+/)) {
+    const t = k.trim();
+    if (t) seen.add(t);
+  }
+  return [...seen];
+}
 
 /* ----------------------------- 深度去味闭环常量 ----------------------------- */
 

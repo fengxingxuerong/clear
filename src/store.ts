@@ -1,11 +1,35 @@
 import { ApiConfig, DEFAULT_API } from "./api/llm";
 import { DetectorConfig, DEFAULT_DETECTOR } from "./api/detector";
+import { DEFAULT_SEMANTIC_WEIGHT } from "./engine/zhuque";
 
 const K_API = "aihumanizer.api";
 const K_IT = "aihumanizer.intensity";
 const K_DET = "aihumanizer.detector";
 const K_ZQ = "aihumanizer.zhuque";
 const K_PPL = "aihumanizer.ppl";
+const K_FUSE = "quaiwei.zhuque.fuse";
+const K_LOCAL = "aihumanizer.local";
+
+/** 本地引擎设置：多候选择优（自 C 盘副本 v0.6.0 吸收） */
+export interface LocalSettings {
+  bestOf: boolean;
+  candidates: number;
+}
+
+export const DEFAULT_LOCAL: LocalSettings = { bestOf: true, candidates: 8 };
+
+export function loadLocal(): LocalSettings {
+  const o = parseObject(localStorage.getItem(K_LOCAL));
+  if (!o) return { ...DEFAULT_LOCAL };
+  return {
+    bestOf: bool(o, "bestOf", DEFAULT_LOCAL.bestOf),
+    candidates: Math.max(1, Math.min(30, num(o, "candidates", DEFAULT_LOCAL.candidates))),
+  };
+}
+
+export function saveLocal(c: LocalSettings): void {
+  localStorage.setItem(K_LOCAL, JSON.stringify(c));
+}
 
 /** 逐字段清洗解析：localStorage 里旧版本残存字段 / 手动篡改 / 类型错乱
  *  只会被回退到默认值，不会让整个配置静默坏掉。 */
@@ -153,4 +177,14 @@ export function loadPplEnabled(): boolean {
 
 export function savePplEnabled(v: boolean): void {
   localStorage.setItem(K_PPL, v ? "true" : "false");
+}
+
+/** 朱雀检测「语义层权重」：表层×语义层加权融合用的 w（0~1，默认 DEFAULT_SEMANTIC_WEIGHT） */
+export function loadFuseWeight(): number {
+  const v = parseFloat(localStorage.getItem(K_FUSE) || "");
+  return isNaN(v) ? DEFAULT_SEMANTIC_WEIGHT : Math.max(0, Math.min(1, v));
+}
+
+export function saveFuseWeight(v: number): void {
+  localStorage.setItem(K_FUSE, String(v));
 }

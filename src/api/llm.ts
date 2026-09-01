@@ -16,7 +16,9 @@ export * from "./llm-humanize";
 export * from "./llm-judge";
 
 import { humanize, aiScore, checkFidelityLocal, applyZhuqueFeatures, crossChunkCleanup } from "../engine/humanize";
-import { ApiConfig, DEEP_MAX_ROUNDS, DEEP_TARGET_SCORE } from "./llm-config";
+import { humanizeBestOf } from "../engine/humanize-bestof";
+import { classifyGenre } from "../engine/classify-genre";
+import { ApiConfig, DEEP_MAX_ROUNDS, DEEP_TARGET_SCORE, effectiveKeys } from "./llm-config";
 import { CHUNK_THRESHOLD, splitIntoChunks } from "./llm-chunk";
 import { humanizeViaApi, humanizeViaApiDeep } from "./llm-humanize";
 import { errMsg } from "./llm-judge";
@@ -29,6 +31,31 @@ export interface RunResult {
   note: string;
   /** 深度模式各轮评分 */
   roundScores: number[];
+  /** 多候选择优信息（仅本地引擎路径有） */
+  bestOf?: { tried: number; rejected: number; seed: number };
+}
+
+/** 本地引擎选项：多候选择优 */
+export interface LocalOptions {
+  bestOf?: boolean;
+  candidates?: number;
+}
+
+/** 本地引擎统一出口：按是否开启择优分流（API 失败回退同样尊重该设置） */
+function runLocal(
+  text: string,
+  intensity: number,
+  zhuqueMode: boolean | undefined,
+  genre: "main" | "narrative" | "dialogue" | "humanHand" | undefined,
+  style: ApiConfig["style"],
+  local?: LocalOptions,
+): { text: string; after: ReturnType<typeof aiScore>; bestOf: RunResult["bestOf"] } {
+  if (local?.bestOf) {
+    const r = humanizeBestOf(text, { intensity, zhuqueMode, style, genre, candidates: local.candidates });
+    return { text: r.text, after: r.after, bestOf: { tried: r.tried, rejected: r.rejected, seed: r.seed } };
+  }
+  const out = humanize(text, { intensity, zhuqueMode, style, genre });
+  return { text: out, after: aiScore(out), bestOf: undefined };
 }
 
 /** 统一分发：优先 API（深度/单轮），失败回退本地引擎 */
@@ -38,14 +65,17 @@ export async function runHumanize(
   cfg: ApiConfig,
   onProgress?: (round: number, score: number | null, stage?: string) => void,
   zhuqueMode?: boolean,
+  genre?: "main" | "narrative" | "dialogue" | "humanHand",
+  local?: LocalOptions,
 ): Promise<RunResult> {
   const before = aiScore(text);
   let usedApi = false;
   let note = "";
   let outText: string;
   let roundScores: number[] = [];
+  let bestOf: RunResult["bestOf"];
 
-  if (cfg.enabled && cfg.apiKey.trim()) {
+  if (cfg.enabled && effectiveKeys(cfg).length > 0) {
     try {
       // 长文分块（v0.5.0）：超阈值按段落切块逐块处理再拼接，避免长上下文中段质量衰减
       const visibleLen = text.replace(/\s/g, "").length;
@@ -91,7 +121,7 @@ export async function runHumanize(
           (anyIssue ? " · 部分块有未修复质检问题" : "");
         // 朱雀增强：对 API 输出叠加本地反检测特征（不跑本地引擎，避免二次改写）
         if (zhuqueMode && intensity >= 0.35) {
-          outText = applyZhuqueFeatures(outText, intensity, undefined, cfg.style);
+          outText = applyZhuqueFeatures(outText, intensity, undefined, cfg.style, { skipSceneInject: (genre ?? classifyGenre(outText).genre) === "dialogue" });
           note += " · 朱雀增强已叠加";
         }
         return {
@@ -134,19 +164,24 @@ export async function runHumanize(
         usedApi = true;
       }
     } catch (e: unknown) {
-      outText = humanize(text, { intensity, zhuqueMode, style: cfg.style });
+      // 回退本地引擎时同样尊重择优设置
+      const r = runLocal(text, intensity, zhuqueMode, genre, cfg.style, local);
+      outText = r.text;
+      bestOf = r.bestOf;
       note = `API 调用失败，已回退本地引擎：${errMsg(e)}`;
     }
   } else {
-    outText = humanize(text, { intensity, zhuqueMode, style: cfg.style });
+    const r = runLocal(text, intensity, zhuqueMode, genre, cfg.style, local);
+    outText = r.text;
+    bestOf = r.bestOf;
   }
 
   // 朱雀增强：对 API 输出叠加反检测特征（不跑本地引擎，避免二次改写）
   if (zhuqueMode && intensity >= 0.35 && usedApi) {
-    outText = applyZhuqueFeatures(outText, intensity, undefined, cfg.style);
+    outText = applyZhuqueFeatures(outText, intensity, undefined, cfg.style, { skipSceneInject: (genre ?? classifyGenre(outText).genre) === "dialogue" });
     note += (note ? " · " : "") + "朱雀增强已叠加";
   }
 
   const after = aiScore(outText);
-  return { text: outText, before, after, usedApi, note, roundScores };
+  return { text: outText, before, after, usedApi, note, roundScores, bestOf };
 }

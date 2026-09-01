@@ -5,16 +5,25 @@ import {
   RewriteStyle,
   DEEP_MAX_ROUNDS,
   DEEP_TARGET_SCORE,
+  SENSENOVA_PRESET,
 } from "../api/llm";
 import { DetectorConfig, DEFAULT_DETECTOR } from "../api/detector";
+import type { LocalSettings } from "../store";
 
 interface SettingsModalProps {
   api: ApiConfig;
   detector: DetectorConfig;
   zhuqueMode: boolean;
   pplEnabled: boolean;
+  local: LocalSettings;
   onClose: () => void;
-  onSave: (api: ApiConfig, detector: DetectorConfig, zhuqueMode: boolean, pplEnabled: boolean) => void;
+  onSave: (
+    api: ApiConfig,
+    detector: DetectorConfig,
+    zhuqueMode: boolean,
+    pplEnabled: boolean,
+    local: LocalSettings,
+  ) => void;
 }
 
 const STYLE_OPTIONS: { value: RewriteStyle; label: string }[] = [
@@ -28,6 +37,7 @@ export function SettingsModal({
   detector,
   zhuqueMode,
   pplEnabled,
+  local,
   onClose,
   onSave,
 }: SettingsModalProps) {
@@ -36,6 +46,7 @@ export function SettingsModal({
   const [draftDetector, setDraftDetector] = useState<DetectorConfig>(detector);
   const [draftZhuque, setDraftZhuque] = useState<boolean>(zhuqueMode);
   const [draftPpl, setDraftPpl] = useState<boolean>(pplEnabled);
+  const [draftLocal, setDraftLocal] = useState<LocalSettings>(local);
   // 温度输入中间态：允许清空/逐字编辑，失焦时才归一化进草稿（避免受控回弹跳值）
   const [tempText, setTempText] = useState(String(api.temperature));
 
@@ -87,6 +98,47 @@ export function SettingsModal({
             onChange={(e) => updateApi({ apiKey: e.target.value })}
             placeholder="sk-..."
           />
+        </label>
+        <label className="row" style={{ alignItems: "flex-start" }}>
+          <span>
+            Key 池
+            <br />
+            <small style={{ color: "var(--muted)" }}>
+              每行一个
+              <br />
+              429 自动切换
+            </small>
+          </span>
+          <textarea
+            style={{
+              flex: 1, minHeight: 60, background: "rgba(8,12,22,0.7)", color: "var(--text)",
+              border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px",
+              fontFamily: "inherit", fontSize: 12,
+            }}
+            value={draftApi.apiKeys ?? ""}
+            onChange={(e) => updateApi({ apiKeys: e.target.value })}
+            placeholder={"sk-...\nsk-..."}
+          />
+        </label>
+        <label className="row">
+          <span>SenseNova 预置</span>
+          <button
+            className="ghost sm"
+            onClick={() =>
+              updateApi({
+                enabled: true,
+                baseUrl: SENSENOVA_PRESET.baseUrl,
+                apiKey: SENSENOVA_PRESET.keys[0],
+                apiKeys: SENSENOVA_PRESET.keys.join("\n"),
+                model: "deepseek-v4-flash",
+                judgeModel: "glm-5.2",
+                altModel: "deepseek-v4-pro",
+              })
+            }
+            title="内置 SenseNova 网关常驻通道（2026-09-01 实测可用）：deepseek-v4-flash 主力 + glm-5.2 交叉评判 + 3 Key 自动轮换"
+          >
+            填入 SenseNova 常驻通道
+          </button>
         </label>
         <label className="row">
           <span>模型</span>
@@ -248,6 +300,35 @@ export function SettingsModal({
           />
         </label>
 
+        <div className="modal-divider">本地引擎（离线，零成本）</div>
+        <p className="modal-tip">
+          多候选择优：本地引擎一次跑多个随机种子各出一稿，按「高危指纹 &lt; 本地 AI 味分」挑最优，
+          候选先过硬门槛（忠实度不过 / 长度比跑偏 0.6~1.4 之外直接淘汰）。只作用于本地引擎路径（含
+          API 失败回退）。
+        </p>
+        <label className="row">
+          <span>多候选择优</span>
+          <input
+            type="checkbox"
+            checked={draftLocal.bestOf}
+            onChange={(e) => setDraftLocal({ ...draftLocal, bestOf: e.target.checked })}
+          />
+        </label>
+        <label className="row">
+          <span>候选数（1~30）</span>
+          <input
+            type="number"
+            min={1}
+            max={30}
+            step={1}
+            value={draftLocal.candidates}
+            onChange={(e) => {
+              const v = parseInt(e.target.value, 10);
+              setDraftLocal({ ...draftLocal, candidates: Number.isFinite(v) ? Math.max(1, Math.min(30, v)) : 8 });
+            }}
+          />
+        </label>
+
         <div className="modal-divider">对标检测器（可选 · 如朱雀）</div>
         <p className="modal-tip">
           把 {`{text}`} POST 到你的检测器接口，从返回 JSON
@@ -321,7 +402,7 @@ export function SettingsModal({
         <div className="modal-actions">
           <button
             className="primary"
-            onClick={() => onSave(draftApi, draftDetector, draftZhuque, draftPpl)}
+            onClick={() => onSave(draftApi, draftDetector, draftZhuque, draftPpl, draftLocal)}
           >
             保存
           </button>
