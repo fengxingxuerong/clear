@@ -85,6 +85,8 @@ import {
 
 // P7 引擎级体裁联动：自动体裁识别 + 每体裁参数旋钮
 import { classifyGenre, AutoGenre } from "./classify-genre.ts";
+// v0.8.6 术语保护：受保护术语位置禁止替换/拆句
+import { isProtectedTerm } from "./term-protect.ts";
 
 // 公开 API 面：这些符号从本文件被 App.tsx / llm.ts / 测试文件导入
 export {
@@ -233,6 +235,8 @@ function replaceVocab(text: string, rng: () => number, intensity: number): strin
       // 与原实现一致：每个命中位置无条件消耗一次 rng
       if (
         rng() < p &&
+        // v0.8.6 术语保护：命中位置落在受保护术语内则跳过（不影响 rng 消耗节奏）
+        !isProtectedTerm(base, idx, end) &&
         !guardBlocks(
           from,
           base.slice(end, end + 8),
