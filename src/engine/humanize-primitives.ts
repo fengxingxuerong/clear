@@ -79,13 +79,24 @@ export function sentenceStats(text: string): SentenceStats {
 }
 
 /** 在句中找可安全劈开的位置：30%~70% 区间内的逗号，且后半句能独立成句（fragmentCanStand）。
+ *  括号内的逗号不作为切点（v0.8.6 括号守卫：防止「（如中芯国际）」被拆成残段）。
  *  minLen 为最短句长门槛；找不到返回 -1。 */
 export function findSplitPoint(s: string, minLen: number): number {
   if (s.length < minLen) return -1;
+  // 括号深度表：切点 depth>0 一律否决
+  const depth = new Array<number>(s.length).fill(0);
+  {
+    let d = 0;
+    for (let k = 0; k < s.length; k++) {
+      if ("（（《【「".includes(s[k])) d++;
+      depth[k] = d;
+      if ("））》】」".includes(s[k])) d = Math.max(0, d - 1);
+    }
+  }
   const commas: number[] = [];
   let ci = s.indexOf("，");
   while (ci !== -1) {
-    commas.push(ci);
+    if (depth[ci] === 0) commas.push(ci);
     ci = s.indexOf("，", ci + 1);
   }
   const mid = commas.find((c) => c > s.length * 0.3 && c < s.length * 0.7);

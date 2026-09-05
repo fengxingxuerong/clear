@@ -1040,8 +1040,21 @@ function clampAvgSentencesInBlock(text: string, targetAvg: number, maxCuts: numb
     for (let k = 0; k < t.s.length - 1; k++) {
       if ("，；：、".includes(t.s[k])) allCuts.push(k);
     }
+    // 括号深度表（v0.8.6 括号守卫）：括号内的切点会把「（如中芯国际）」拆成
+    // 「（如中芯国际。」+「）」残段——CLI 实测 0.9+朱雀档的高强度切句踩到
+    const depth = new Array<number>(t.s.length).fill(0);
+    {
+      let d = 0;
+      for (let k = 0; k < t.s.length; k++) {
+        if ("（（《【「".includes(t.s[k])) d++;
+        depth[k] = d;
+        if ("））》】」".includes(t.s[k])) d = Math.max(0, d - 1);
+      }
+    }
+    const inBracket = (k: number) => depth[k] > 0;
     allCuts.sort((a, b) => Math.abs(a - mid) - Math.abs(b - mid));
     const isCutOK = (k: number) =>
+      !inBracket(k) && // 括号内不切
       !/^[让使帮叫]/.test(t.s.slice(k + 1).replace(/[。！？!?…]$/, "").trim());
     const cutIdx = allCuts.find(isCutOK) ?? -1;
     if (cutIdx < 0) break;

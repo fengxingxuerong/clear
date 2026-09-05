@@ -188,3 +188,31 @@ describe("E. 多段样本自动体裁识别稳定", () => {
     expect(classifyGenre(DIALOG_MULTI).genre).toBe("dialogue");
   });
 });
+
+describe("括号守卫（v0.8.6：切句不在括号内切）", () => {
+  const SEMI =
+    "中国大陆晶圆代工厂（如中芯国际、华虹半导体）近年来在成熟制程领域持续扩张，产能规模已位居全球前列。值得注意的是，根据行业研究机构的数据，2025年全球晶圆代工市场规模将达到1500亿美元，其中成熟制程占比约为35%。与此同时，政策扶持力度不断加大，国产化率稳步提升，因此资本市场对半导体板块的关注度持续升温，产业链协同效应也日益显现出来。";
+
+  it("高强度朱雀档 30 种子：括号不被句号拆断、数量配对", () => {
+    for (let seed = 0; seed < 30; seed++) {
+      const out = humanize(SEMI, { intensity: 0.9, zhuqueMode: true, seed });
+      // 每个句子内括号数量自配对（拆断会在某句内出现孤括号）
+      for (const seg of out.split(/(?<=[。！？])/)) {
+        const o = (seg.match(/（/g) || []).length;
+        const c = (seg.match(/）/g) || []).length;
+        if (o !== c) {
+          throw new Error(`seed=${seed} 括号被切句拆断：${seg.slice(0, 40)}`);
+        }
+      }
+      expect((out.match(/（/g) || []).length).toBe((out.match(/）/g) || []).length);
+    }
+  });
+
+  it("中文术语与专名在括号内原样保留", () => {
+    for (let seed = 0; seed < 10; seed++) {
+      const out = humanize(SEMI, { intensity: 0.9, zhuqueMode: true, seed });
+      expect(out).toContain("中芯国际");
+      expect(out).toContain("华虹半导体");
+    }
+  });
+});

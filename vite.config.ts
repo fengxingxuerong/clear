@@ -40,7 +40,7 @@ export default defineConfig({
   worker: { format: "es" },
   // Vitest 配置
   test: {
-    include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    include: ["src/**/*.test.ts", "src/**/*.test.tsx", "scripts/**/*.test.ts"],
     exclude: ["node_modules"],
   },
 });

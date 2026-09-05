@@ -59,13 +59,17 @@ export async function humanizeViaApiDeep(
   target = DEEP_TARGET_SCORE,
   maxRounds = DEEP_MAX_ROUNDS,
   intensity = 0.6,
+  /** v0.8.6 分块场景：调用预算跨块共享。true 时不清零计数器，
+   *  由调用方（llm.ts 分块循环）在整篇开始前 reset 一次，maxApiCalls 对整篇生效
+   *  而非按块重置。单篇独立调用保持默认 false，行为不变。 */
+  budgetShared = false,
 ): Promise<DeepResult> {
   const startTime = Date.now();
   // 用户设的最长等待时间（秒）：0 = 不限制
   const maxWaitSec = cfg.maxWaitSeconds || 0;
   // v0.8.5 调用预算（次）：0 = 不限制。轮间检查，轮内不中断。
   const maxCalls = cfg.maxApiCalls || 0;
-  resetApiCallCount(); // 闭环从零计数（历史调用不占本次预算）
+  if (!budgetShared) resetApiCallCount(); // 闭环从零计数（历史调用不占本次预算）；分块共享预算时由外层统一 reset
   const isOverBudget = () =>
     (maxWaitSec > 0 && (Date.now() - startTime) / 1000 > maxWaitSec) ||
     (maxCalls > 0 && getApiCallCount() >= maxCalls);
@@ -90,6 +94,13 @@ export async function humanizeViaApiDeep(
   if (alt && alt !== cfg.model) {
     const contestInfo: string[] = [];
     for (const m of [cfg.model, alt]) {
+      // v0.8.6 竞争段接入调用预算：每个竞争者开跑前检查（与主循环"轮间检查"同语义），
+      // 超预算不再发起竞争调用——此前竞争段计入计数却不受约束，极小预算配置下
+      // 会先烧穿 maxApiCalls 才轮到主循环首次检查
+      if (isOverBudget()) {
+        contestInfo.push(`${m}:预算已耗尽跳过`);
+        continue;
+      }
       try {
         const r = await chat(
           cfg,

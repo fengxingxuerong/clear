@@ -1,6 +1,6 @@
 {
   "name": "qu-ai-wei",
-  "version": "0.8.2",
+  "version": "0.8.6",
   "description": "趣AI味 · 离线 AI 文本去味工具（Electron 桌面版）",
   "main": "main.js",
   "author": "飞行雪绒",

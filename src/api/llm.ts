@@ -20,6 +20,7 @@ import { humanizeBestOf } from "../engine/humanize-bestof";
 import { ApiConfig, DEEP_MAX_ROUNDS, DEEP_TARGET_SCORE, effectiveKeys } from "./llm-config";
 import { CHUNK_THRESHOLD, splitIntoChunks } from "./llm-chunk";
 import { humanizeViaApi, humanizeViaApiDeep } from "./llm-humanize";
+import { resetApiCallCount } from "./llm-chat";
 import { errMsg } from "./llm-judge";
 
 export interface RunResult {
@@ -84,22 +85,34 @@ export async function runHumanize(
         const allScores: number[] = [];
         const allQc: boolean[] = [];
         let anyIssue = false;
+        // v0.8.6 调用预算跨块共享：整篇 reset 一次，各块累计计数，
+        // maxApiCalls 语义从"每块一次"修正为"整篇一次"
+        resetApiCallCount();
         for (let i = 0; i < chunks.length; i++) {
           const stage = `块 ${i + 1}/${chunks.length} `;
           if (cfg.deepMode) {
-            // 每块深度闭环但轮数收敛到 2（块多时控制总时长）
-            const deep = await humanizeViaApiDeep(
-              chunks[i],
-              cfg,
-              (r, sc) => onProgress?.(r, sc, stage),
-              DEEP_TARGET_SCORE,
-              2,
-              intensity,
-            );
-            parts.push(deep.text);
-            allScores.push(...deep.roundScores);
-            allQc.push(...deep.qcPassed);
-            if (deep.qcIssues.length) anyIssue = true;
+            // 每块深度闭环但轮数收敛到 2（块多时控制总时长）；
+            // budgetShared=true：不清零计数，块间继承已消耗预算
+            try {
+              const deep = await humanizeViaApiDeep(
+                chunks[i],
+                cfg,
+                (r, sc) => onProgress?.(r, sc, stage),
+                DEEP_TARGET_SCORE,
+                2,
+                intensity,
+                true,
+              );
+              parts.push(deep.text);
+              allScores.push(...deep.roundScores);
+              allQc.push(...deep.qcPassed);
+              if (deep.qcIssues.length) anyIssue = true;
+            } catch {
+              // 单块失败（如预算耗尽且该块零产出/各轮质检全挂）只回退该块本地引擎，
+              // 不再让整篇抛错丢弃已完成块的 API 成果（v0.8.6 行为修正）
+              parts.push(humanize(chunks[i], { intensity }));
+              anyIssue = true;
+            }
           } else {
             parts.push(await humanizeViaApi(chunks[i], cfg, intensity));
           }

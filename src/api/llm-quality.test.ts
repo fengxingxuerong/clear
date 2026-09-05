@@ -161,3 +161,19 @@ describe("processCandidate（硬门槛打回路径）", () => {
     expect(calls.filter((s) => s.includes("改写专家")).length).toBeGreaterThan(0);
   });
 });
+describe("质检通道异常可见化（v0.8.6）", () => {
+  const cfg = { ...DEFAULT_API, enabled: true, apiKey: "k" };
+
+  it("质检 API 整体挂掉时放行，但 issues 留痕", async () => {
+    // 404 不触发换 Key / 退避，llm-chat 直接抛错——processCandidate 质检通道进 catch
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("not found", { status: 404 })),
+    );
+    const r = await processCandidate("原文：营收增长23%。", "改写稿：营收增长23%。", cfg, 0.6);
+    expect(r.qc.pass).toBe(true); // 防停摆：放行
+    expect(r.qc.issues.join("")).toContain("质检通道异常"); // 可见化：留痕
+    // 评分阶段同样失败：score 为 null 但不抛错（调用方兜底已有测试覆盖）
+    expect(r.score).toBeNull();
+  });
+});
