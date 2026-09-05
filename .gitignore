@@ -20,3 +20,5 @@ Thumbs.db
 
 # API Key（本地非托管，v0.8.6 安全改造）
 scripts/.sensenova-keys
+# 校准点回填数据（个人实测真值，按需决定是否入库）
+scripts/calib-lab-points.jsonl
