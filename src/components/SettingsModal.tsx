@@ -128,16 +128,21 @@ export function SettingsModal({
               updateApi({
                 enabled: true,
                 baseUrl: SENSENOVA_PRESET.baseUrl,
-                apiKey: SENSENOVA_PRESET.keys[0],
+                apiKey: SENSENOVA_PRESET.keys[0] ?? "",
                 apiKeys: SENSENOVA_PRESET.keys.join("\n"),
                 model: "deepseek-v4-flash",
                 judgeModel: "glm-5.2",
                 altModel: "deepseek-v4-pro",
               })
             }
-            title="内置 SenseNova 网关常驻通道（2026-09-01 实测可用）：deepseek-v4-flash 主力 + glm-5.2 交叉评判 + 3 Key 自动轮换"
+            disabled={SENSENOVA_PRESET.keys.length === 0}
+            title={
+              SENSENOVA_PRESET.keys.length === 0
+                ? "未检测到本地 Key（环境变量 SENSENOVA_KEYS 或 scripts/.sensenova-keys），请手动填入或参考 README 配置"
+                : "内置 SenseNova 网关常驻通道（2026-09-01 实测可用）：deepseek-v4-flash 主力 + glm-5.2 交叉评判 + " + SENSENOVA_PRESET.keys.length + " Key 自动轮换"
+            }
           >
-            填入 SenseNova 常驻通道
+            填入 SenseNova 常驻通道{SENSENOVA_PRESET.keys.length === 0 ? "（未配置 Key）" : ""}
           </button>
         </label>
         <label className="row">

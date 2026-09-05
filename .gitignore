@@ -17,3 +17,6 @@ electron-dist/
 *.log
 .DS_Store
 Thumbs.db
+
+# API Key（本地非托管，v0.8.6 安全改造）
+scripts/.sensenova-keys

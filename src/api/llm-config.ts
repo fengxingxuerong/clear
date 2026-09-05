@@ -47,14 +47,53 @@ export interface ApiConfig {
  * baseUrl 用同源相对路径 /sensenova/v1：dev 由 vite 代理转发、桌面版由 Electron
  * main.js 内置代理转发（网关 OPTIONS 预检 404，浏览器直连必挂）。静态托管 dist
  * 的用户需自备反代或改填 CORS 放行的服务商。
+ *
+ * v0.8.6 安全改造：Key 不再硬编码。读取优先级：
+ *   1) 环境变量 SENSENOVA_KEYS（换行/逗号分隔多个）
+ *   2) 开发者本地 scripts/.sensenova-keys（gitignore，格式同上）
+ *   3) 都没有 → keys 为空数组，UI「填入 SenseNova 常驻通道」仍可用（用户自己填）
+ * 注意：若你从旧版本升级，旧 Key 已随 git 历史泄露，请到商汤后台轮换。
  */
+function loadPresetKeys(): string[] {
+  const out: string[] = [];
+  const push = (raw: string | undefined) => {
+    if (!raw) return;
+    for (const k of raw.split(/[\n,;，；]+/)) {
+      const t = k.trim();
+      if (t && !out.includes(t)) out.push(t);
+    }
+  };
+  // 1) 环境变量（优先，适合 CI / 一次性运行）
+  push(typeof process !== "undefined" ? process.env?.SENSENOVA_KEYS : undefined);
+  // 2) 本地非托管文件（适合日常开发；.gitignore 已忽略）
+  try {
+    // Node 环境（tsx 脚本 / Electron 主进程）才读文件；浏览器构建时 fs 不存在
+    if (typeof process !== "undefined" && process.versions?.node) {
+      // 用 new Function 避开 rollup 对 node:module 的静态分析（浏览器构建不会走到这里）
+      const nodeRequire = new Function("return require") as () => NodeRequire;
+      const req = nodeRequire();
+      const fs = req("node:fs") as typeof import("node:fs");
+      const path = req("node:path") as typeof import("node:path");
+      const candidates = [
+        path.resolve(process.cwd(), "scripts/.sensenova-keys"),
+        path.resolve(process.cwd(), "../scripts/.sensenova-keys"),
+      ];
+      for (const p of candidates) {
+        if (fs.existsSync(p)) {
+          push(fs.readFileSync(p, "utf-8"));
+          break;
+        }
+      }
+    }
+  } catch {
+    // 浏览器/无文件系统环境静默降级
+  }
+  return out;
+}
+
 export const SENSENOVA_PRESET = {
   baseUrl: "/sensenova/v1",
-  keys: [
-    "***REMOVED***",
-    "***REMOVED***",
-    "***REMOVED***",
-  ],
+  keys: loadPresetKeys(),
   models: ["deepseek-v4-flash", "deepseek-v4-pro", "glm-5.2", "sensenova-6.8-flash-lite", "kimi-k3"],
 };
 
