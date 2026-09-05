@@ -105,3 +105,74 @@ describe("Key 池轮换（429/401 → 换下一个 Key 立即重试）", () => {
     expect(n).toBe(2);
   });
 });
+
+describe("重试耗尽与失效 Key 跳过（v0.8.7）", () => {
+  it("429 重试彻底耗尽：最终抛错且错误信息含限流提示", async () => {
+    vi.useFakeTimers();
+    let n = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        n++;
+        return resp(429);
+      }),
+    );
+    const pending = chat(cfg, [{ role: "user", content: "原文" }], {
+      temperature: 0.9,
+      maxTokens: 100,
+    });
+    // 先挂上 rejects 断言（避免 unhandled rejection），再推进定时器消费退避序列
+    const assertion = pending.catch((e: unknown) => {
+      expect((e as Error).message).toMatch(/网关限流/);
+      // 流程：3 Key 轮换（3 次）→ 退避 → 从头 3 Key（3 次）→ 退避 → …，
+      // attempt 耗尽时共 6 次请求（attempt 0/1/2 三轮退避前各 3 次中前两轮）
+      expect(n).toBeGreaterThanOrEqual(6);
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    await assertion;
+  });
+
+  it("401 鉴权失效的 Key 退避后不再使用（429 的仍可用）", async () => {
+    vi.useFakeTimers();
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        const auth = authOf(init);
+        calls.push(auth);
+        // k1、k2 都 401（鉴权死），k3 正常
+        if (auth === "Bearer k3") return resp(200);
+        return resp(401);
+      }),
+    );
+    const pending = chat(cfg, [{ role: "user", content: "原文" }], {
+      temperature: 0.9,
+      maxTokens: 100,
+    });
+    const assertion = pending.then(
+      (r) => {
+        expect(r.content).toContain("改写");
+        // k1、k2 各试一次后标记失效，退避后永远跳过，只用 k3
+        expect(calls.filter((a) => a === "Bearer k1").length).toBe(1);
+        expect(calls.filter((a) => a === "Bearer k2").length).toBe(1);
+        expect(calls[calls.length - 1]).toBe("Bearer k3");
+      },
+      (e: unknown) => {
+        throw e;
+      },
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+    await assertion;
+  });
+
+  it("全部 Key 401：轮换耗尽即抛错（含失效统计，不浪费退避重试）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => resp(401)),
+    );
+    // 401 依次轮换 k1→k2→k3 后池尽，authDead 记满 3 个，401 无退避直接抛
+    await expect(
+      chat(cfg, [{ role: "user", content: "原文" }], { temperature: 0.9, maxTokens: 100 }),
+    ).rejects.toThrow(/401（失效 Key 3\/3 个已跳过重试）/);
+  });
+});

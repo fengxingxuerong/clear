@@ -38,12 +38,27 @@ export async function chat(
   apiCallCount++;
   let keyIdx = 0;
   const backoffs = [2000, 5000, 12000];
+  // v0.8.7 鉴权失效记忆：401/403 表示 Key 本身无效（配额封禁/被删），重试无意义——
+  // 退避后不再使用；429 是限流，窗口恢复后 Key 仍可用，保持从首个 Key 重来
+  const authDead = new Set<number>();
+  /** 是否刚发生过退避等待：退避后下一轮重选 Key（跳过失效 Key）。
+   *  注意换 Key（keyIdx++ continue）不算退避，attempt 计数不变语义即"立即重试"。 */
+  let afterBackoff = false;
   // OpenRouter 网关推荐带上 HTTP-Referer 和 X-Title（用于排名，不带也能用但更稳）
   const isOpenRouter = /openrouter\.ai/i.test(cfg.baseUrl);
   const model = opts.model || cfg.model;
   // kimi-k3 网关限制 temperature 只能为 1（实测 400 报错）
   const temperature = /kimi/i.test(model) ? 1 : opts.temperature;
   for (let attempt = 0; ; attempt++) {
+    // 仅退避后重选 Key：跳过已鉴权失效的（401/403），首个可用 Key 优先。
+    // 不能按 attempt>0 判断——换 Key 立即重试也是新 attempt，会覆盖 keyIdx++ 轮换。
+    if (afterBackoff) {
+      afterBackoff = false;
+      keyIdx = keys.findIndex((_, i) => !authDead.has(i));
+      if (keyIdx < 0) {
+        throw new Error(`API 返回 401/403：Key 池 ${keys.length} 个全部鉴权失效，请检查 Key 有效性`);
+      }
+    }
     let resp: Response;
     try {
       resp = await fetch(url, {
@@ -69,24 +84,30 @@ export async function chat(
     } catch (e: unknown) {
       // 网络瞬断也走退避重试
       if (attempt < backoffs.length) {
+        afterBackoff = true;
         await new Promise((r) => setTimeout(r, backoffs[attempt]));
         continue;
       }
       throw e;
     }
     // 限流/鉴权失败：优先换 Key（立即，不等待）；池耗尽再退避等待，
-    // 退避后从第一个 Key 重新试（限流窗口恢复后第一个 Key 往往最有效）
+    // 退避后从第一个未失效的 Key 重新试（限流窗口恢复后第一个 Key 往往最有效；
+    // 401/403 鉴权已死的 Key 跳过，不浪费调用）
     if ((resp.status === 429 || resp.status === 401 || resp.status === 403) && keyIdx < keys.length - 1) {
+      if (resp.status !== 429) authDead.add(keyIdx);
       keyIdx++;
       continue;
     }
     if ((resp.status === 429 || resp.status >= 500) && attempt < backoffs.length) {
       keyIdx = 0;
+      afterBackoff = true;
       await new Promise((r) => setTimeout(r, backoffs[attempt]));
       continue;
     }
+    if (resp.status !== 429 && (resp.status === 401 || resp.status === 403)) authDead.add(keyIdx);
     if (!resp.ok) {
-      throw new Error(`API 返回 ${resp.status}${resp.status === 429 ? "（网关限流，已轮换 Key 并退避重试仍失败，稍后再试或回退本地引擎）" : ""}`);
+      const dead = authDead.size ? `（失效 Key ${authDead.size}/${keys.length} 个已跳过重试）` : "";
+      throw new Error(`API 返回 ${resp.status}${resp.status === 429 ? "（网关限流，已轮换 Key 并退避重试仍失败，稍后再试或回退本地引擎）" : ""}${dead}`);
     }
     const data = await resp.json();
     const msg = data?.choices?.[0]?.message ?? {};
