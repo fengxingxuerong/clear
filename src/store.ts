@@ -78,6 +78,7 @@ export function loadApi(): ApiConfig {
       ? (o.reasoningEffort as ApiConfig["reasoningEffort"])
       : undefined,
     maxWaitSeconds: typeof o.maxWaitSeconds === "number" && o.maxWaitSeconds >= 0 ? o.maxWaitSeconds : 0,
+    maxApiCalls: typeof o.maxApiCalls === "number" && o.maxApiCalls >= 0 ? o.maxApiCalls : 0,
   };
 }
 

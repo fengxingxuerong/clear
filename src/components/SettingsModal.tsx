@@ -270,6 +270,19 @@ export function SettingsModal({
             <option value={600}>10 分钟</option>
           </select>
         </label>
+        <label className="row">
+          <span>调用上限</span>
+          <select
+            value={draftApi.maxApiCalls || 0}
+            onChange={(e) => updateApi({ maxApiCalls: Number(e.target.value) })}
+          >
+            <option value={0}>不限制</option>
+            <option value={10}>10 次</option>
+            <option value={20}>20 次</option>
+            <option value={40}>40 次</option>
+            <option value={80}>80 次</option>
+          </select>
+        </label>
 
         <div className="modal-divider">朱雀增强（可选 · 反检测特征）</div>
         <p className="modal-tip">

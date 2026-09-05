@@ -17,8 +17,12 @@
 
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 import { aiScore } from "../src/engine/humanize-metrics";
 import { humanize } from "../src/engine/humanize";
+
+// ESM 下没有 __dirname（package.json "type": "module"），从 import.meta.url 推导
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const V2_JSON_PATH = path.join(__dirname, "calibration-data-v2-genres.json");
 const EXPO_O1_RAW = `在今天这个快速发展的时代背景下，数字化转型已经成为了各行各业不可逆转的必然趋势。根据国家统计局最新发布的《2025 年数字经济发展白皮书》显示，我国数字经济规模在去年已经突破了 56.7 万亿元人民币，占 GDP 的比重达到了 41.8%，较上一年度同比提升了 2.3 个百分点。值得注意的是，这一增长速度已经连续八年保持在 15% 以上，充分体现了数字经济作为国民经济核心增长引擎的强大动力与韧性。

@@ -29,8 +29,10 @@ jobs:
       - name: Unit tests (vitest)
         run: npx vitest run
 
-      - name: Engine regression (scan-bugs)
+      - name: Engine regression (scan-bugs, fast)
         run: npx tsx scripts/scan-bugs.ts
+        env:
+          SCAN_TIER: fast
 
       - name: 12-sample metric regression
         run: npx tsx scripts/regression-12samples.ts

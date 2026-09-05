@@ -30,6 +30,10 @@ export interface ApiConfig {
   /** 深度模式最长等待时间（秒）：0 = 不限制，超过后带当前最优结果收场。
    *  推理模型（Ox Alpha max 档约 50s/轮）跑 4 轮可能 3-4 分钟，用户可设 60/120/300 控制耐心。 */
   maxWaitSeconds?: number;
+  /** 深度模式最大 LLM 调用次数（0 = 不限制，v0.8.5）：时间预算之外再给次数预算——
+   *  计费类网关按调用计费，一篇深度闭环约消耗 4~6 次（改写+质检+评判），竞争模式首轮翻倍。
+   *  粒度说明：轮间检查，轮内不中断，超预算后带当前最优结果收场。 */
+  maxApiCalls?: number;
 }
 
 /* ---------------------- SenseNova 常驻预置 ----------------------
@@ -66,6 +70,7 @@ export const DEFAULT_API: ApiConfig = {
   style: "casual",
   reasoningEffort: undefined,
   maxWaitSeconds: 0,
+  maxApiCalls: 0,
 };
 
 /** 解析 Key 池：apiKey 与 apiKeys 合并去重（换行/逗号/分号分隔均可） */

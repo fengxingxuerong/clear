@@ -1,0 +1,12 @@
+# group: v6.0
+# signature: 贴着主题
+# total_count: 9
+# intensity: 0.6
+# seed: 0
+# pattern: (贴着主题|卡着主题|钉在主题|揪着主题)
+
+## INPUT
+我们要锚定目标、紧扣主题，下好先手棋。
+
+## OUTPUT
+卡着主题/卡着主题 | 我们要盯准目标、卡着主题，抢先一步嗨。呵。嗯。

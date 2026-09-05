@@ -11,6 +11,20 @@ interface ChatMessage {
   content: string;
 }
 
+/* ----------------------------- 调用计数（v0.8.5 预算） -----------------------------
+ * 深度闭环一篇最多能烧 15+ 次调用（竞争/改写/质检/修复/评判），maxWaitSeconds 只限
+ * 时间不限次数——计费类网关还需要次数预算。粒度说明：按逻辑调用计（重试/换 Key 不
+ * 重复计），深度闭环在轮间检查预算，轮内不中断，超了带当前最优结果收场。 */
+let apiCallCount = 0;
+
+export function resetApiCallCount(): void {
+  apiCallCount = 0;
+}
+
+export function getApiCallCount(): number {
+  return apiCallCount;
+}
+
 export async function chat(
   cfg: ApiConfig,
   messages: ChatMessage[],
@@ -21,6 +35,7 @@ export async function chat(
   // 再走指数退避（深度模式一轮发多次请求，网关限流常见）
   const keys = effectiveKeys(cfg);
   if (keys.length === 0) throw new Error("未配置 API Key");
+  apiCallCount++;
   let keyIdx = 0;
   const backoffs = [2000, 5000, 12000];
   // OpenRouter 网关推荐带上 HTTP-Referer 和 X-Title（用于排名，不带也能用但更稳）

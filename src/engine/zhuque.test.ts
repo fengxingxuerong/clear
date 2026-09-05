@@ -62,6 +62,17 @@ describe("detectZhuque（朱雀口径本地近似）", () => {
     expect(r.warnings[0]).toContain("350");
   });
 
+  it("句长标准差落入 AI 特征带时句长节奏维度上抬（v0.8.3 官方口径）", () => {
+    // 6 句、句长 12/16/20/24/28/32 → 样本标准差 ≈6.9 落入 4.5~8.5 官方特征带
+    const sent = (n: number) => "字".repeat(n - 1) + "。";
+    const text = [12, 16, 20, 24, 28, 32].map(sent).join("");
+    const r = detectZhuque(text);
+    const f = r.features.find((x) => x.name === "句法结构·句长节奏")!;
+    expect(f.value).toBeGreaterThanOrEqual(0.75);
+    expect(f.hint).toContain("标准差");
+    expect(f.hint).toContain("AI 特征带");
+  });
+
   it("校准点 ≥4 时给出官方分估计，否则为 null", () => {
     const pts: CalibPoint[] = [
       { local: 10, official: 8, ts: 0 },
@@ -201,6 +212,33 @@ describe("zhuque-calib（v3 四体裁 18 点 OLS 体裁线）", () => {
     expect(trackForGenre("dialogue")).toBe("dialogue");
     expect(trackForGenre("humanHand")).toBe("human");
     expect(trackForGenre(null)).toBe("main");
+  });
+
+  it("校准锚点完整性：9 个官方真值点的预测误差 ≤ 8pp（引擎词表改动导致 x 漂移时此处亮红，须同步重拟合体裁线）", () => {
+    // 锚点来自 docs/fingerprint-and-zhuque-calibration.md §3.2 的 v2 12 点
+    // （D2/D3 的 x 为 2026-09-05 漂移体检后的当前引擎重算值，见 scripts/recheck-calib.ts）。
+    // y = 官方朱雀% 是文本真值，不受引擎改动影响；x 漂移 = 校准线过期信号。
+    const anchors: Array<{ id: string; x: number; y: number; track: "main" | "narrative" | "dialogue" | "human" }> = [
+      { id: "O1", x: 33, y: 85, track: "main" },
+      { id: "O2", x: 10, y: 45, track: "main" },
+      { id: "O3", x: 8, y: 30, track: "main" },
+      { id: "N1", x: 47, y: 99, track: "narrative" },
+      { id: "N2", x: 0, y: 22, track: "narrative" },
+      { id: "N3", x: 0, y: 18, track: "narrative" },
+      { id: "D1", x: 81, y: 98, track: "dialogue" },
+      { id: "D2", x: 0, y: 28, track: "dialogue" },
+      { id: "D3", x: 0, y: 25, track: "dialogue" },
+      { id: "H0", x: 10, y: 15, track: "human" },
+      { id: "H1", x: 0, y: 19, track: "human" },
+      { id: "H2", x: 0, y: 17, track: "human" },
+    ];
+    const failures: string[] = [];
+    for (const a of anchors) {
+      const pred = predictOfficialPct(a.x, a.track);
+      const err = Math.abs(pred - a.y);
+      if (err > 8) failures.push(`${a.id}: 官方=${a.y}% 预测=${pred.toFixed(1)}% 误差=${err.toFixed(1)}pp`);
+    }
+    expect(failures).toEqual([]);
   });
 });
 

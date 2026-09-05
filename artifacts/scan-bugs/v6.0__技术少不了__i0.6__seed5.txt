@@ -1,0 +1,12 @@
+# group: v6.0
+# signature: 技术少不了
+# total_count: 14
+# intensity: 0.6
+# seed: 5
+# pattern: (技术少不了|技术离不了)
+
+## INPUT
+人工智能技术至关重要，它极大地提升了效率。
+
+## OUTPUT
+技术少不了/技术少不了 | 人工智能技术少不了，它特别拔高了效率。行。诶。

@@ -129,7 +129,8 @@ export function fingerprintCheck(text: string): FingerprintReport {
   const FP_EXTRA_HARD = [
     "展望未来", "面向未来", "按下了快进键", "迈上了新的台阶",
     "交出了一份满意的答卷", "具有里程碑意义",
-    "关键在于", "核心在于", "本质在于", "根本在于",
+    // v0.8.5: 关键在于/核心在于/本质在于/根本在于 已是 VOCAB 源词（概率式替换），
+    // 列入硬签名会导致"概率跳过替换"与"探针零残留"自相矛盾——移除，计分走 FORMULAIC
   ];
   for (const w of FP_EXTRA_HARD) {
     if (text.includes(w) && !ALL_FORMULAIC_FP.includes(w)) formulaic++;

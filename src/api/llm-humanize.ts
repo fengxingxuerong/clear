@@ -4,7 +4,7 @@
 
 import { ApiConfig, DEEP_MAX_ROUNDS, DEEP_TARGET_SCORE } from "./llm-config";
 import { SYSTEM_PROMPT, buildRevisionPrompt, intensityDirective, styleDirective } from "./llm-prompts";
-import { chat } from "./llm-chat";
+import { chat, resetApiCallCount, getApiCallCount } from "./llm-chat";
 import { processCandidate } from "./llm-quality";
 import { errMsg } from "./llm-judge";
 
@@ -63,7 +63,16 @@ export async function humanizeViaApiDeep(
   const startTime = Date.now();
   // 用户设的最长等待时间（秒）：0 = 不限制
   const maxWaitSec = cfg.maxWaitSeconds || 0;
-  const isOverBudget = () => maxWaitSec > 0 && (Date.now() - startTime) / 1000 > maxWaitSec;
+  // v0.8.5 调用预算（次）：0 = 不限制。轮间检查，轮内不中断。
+  const maxCalls = cfg.maxApiCalls || 0;
+  resetApiCallCount(); // 闭环从零计数（历史调用不占本次预算）
+  const isOverBudget = () =>
+    (maxWaitSec > 0 && (Date.now() - startTime) / 1000 > maxWaitSec) ||
+    (maxCalls > 0 && getApiCallCount() >= maxCalls);
+  const budgetReason = () =>
+    maxCalls > 0 && getApiCallCount() >= maxCalls
+      ? `已达调用上限 ${maxCalls} 次（实际 ${getApiCallCount()} 次）`
+      : `已达最长等待 ${maxWaitSec}s`;
   const roundScores: number[] = [];
   const qcPassed: boolean[] = [];
   let bestText = "";
@@ -123,12 +132,12 @@ export async function humanizeViaApiDeep(
 
   const startRound = bestText ? 2 : 1;
   for (let round = startRound; round <= maxRounds; round++) {
-    // 预算控制：超过用户设置的最长等待时间，带当前最优结果收场
+    // 预算控制：超时或超调用次数，带当前最优结果收场
     if (isOverBudget()) {
       if (bestText) {
-        note = `已达最长等待 ${maxWaitSec}s，返回第 ${round - 1} 轮最优结果`;
+        note = `${budgetReason()}，返回第 ${round - 1} 轮最优结果`;
       } else {
-        note = `已达最长等待 ${maxWaitSec}s，无可用结果`;
+        note = `${budgetReason()}，无可用结果`;
       }
       break;
     }

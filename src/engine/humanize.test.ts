@@ -22,13 +22,15 @@ describe("humanize 引擎", () => {
     expect(out.length).toBeGreaterThan(0);
   });
 
-  it("强度 0 不做词汇替换（替身词不出现在输出）", () => {
+  it("强度 0 保持原文不变（v0.8.6 语义：intensity<=0 严格短路）", () => {
     const sample = "值得注意的是，在当今社会，随着人工智能技术的快速发展，AI 写作工具应运而生。";
     const out = humanize(sample, { intensity: 0, seed: 42 });
-    // p=0 时 replaceVocab 不替换；替身词如 说起来/有意思的是 不应混入
+    // v0.8.6 之前，强度 0 会漏掉 stripCJKEdgeSpaces 等确定性清理（中英文间空格被清掉、
+    // 连接词被 stripLeadingConnectivesHard 删掉）——语义与"强度 0 = 保持原文"不符。
+    // 现在入口直接短路：所有 pass 都不运行，包括确定性清理。
+    expect(out).toBe(sample);
+    // 替身词不出现在输出
     expect(out).not.toMatch(/说起来|有意思的是|要我说/);
-    // stripCJKEdgeSpaces 是确定性清理（不受强度门控）：中英文间空格会被清掉
-    expect(out).toContain("AI写作工具");
   });
 
   it("强度提升后套话命中不增（去味后 aiScore ≤ 原文）", () => {

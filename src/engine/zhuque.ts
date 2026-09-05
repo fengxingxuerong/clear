@@ -24,6 +24,8 @@ import {
   PPL_MIN_CHARS,
   PPL_MIN_WINDOWS,
 } from "./humanize-metrics";
+// v0.8.5：四套词表收拢到 zhuque-lexicon.ts 共享（与 detector.ts 同一把词汇尺，防漂移）
+import { FORMULAIC, OFFICIAL, SKELETON, CONNECTIVES } from "./zhuque-lexicon";
 
 /* ----------------------------- 类型 ----------------------------- */
 
@@ -131,34 +133,9 @@ export const ZHUQUE_URL = "https://matrix.tencent.com/ai-detect/";
 const TH_AI = 62;
 const TH_SUSPECTED = 38;
 
-/* ----------------------------- 词表 ----------------------------- */
-
-const FORMULAIC = [
-  "值得注意的是", "值得一提", "毋庸置疑", "不可否认", "众所周知", "归根结底", "归根到底",
-  "综上所述", "总而言之", "总的说来", "总的来说", "简而言之", "一言以蔽之", "由此可见",
-  "在当今社会", "随着.{0,6}的发展", "具有重要.{0,6}意义", "发挥着.{0,6}作用", "至关重要", "不可或缺",
-  "应运而生", "大势所趋", "势在必行", "任重道远", "日益凸显", "与日俱增", "方兴未艾",
-  "不仅.{0,4}而且", "一方面.{0,8}另一方面", "赋能", "抓手", "闭环", "颗粒度", "打法", "组合拳",
-];
-
-const OFFICIAL = [
-  "高位推动", "顶层设计", "压茬推进", "挂图作战", "攻坚克难", "久久为功",
-  "锚定", "紧扣", "牛鼻子", "先手棋", "最后一公里",
-  "夯实", "筑牢", "厚植", "盘活", "补齐", "锻造", "擦亮", "织密",
-  "注入新动能", "激发新活力", "凝聚共识", "形成合力", "拓宽渠道", "搭建平台",
-  "新台阶", "新征程", "擘画", "护城河", "飞轮", "效能", "举措",
-];
-
-const SKELETON = [
-  "首先", "其次", "再次", "其一", "其二", "其三",
-  "一方面", "另一方面", "总之", "综上", "总的来说", "简而言之",
-  "第[一二三四五六七八九十]+[章节部点条]",
-];
-
-const CONNECTIVES = [
-  "然而", "因此", "此外", "与此同时", "更重要的是", "不仅如此", "换言之",
-  "事实上", "实际上", "从而", "进而", "反之", "尽管如此", "这意味着",
-];
+/* ----------------------------- 词表 -----------------------------
+ * 已收拢至 ./zhuque-lexicon.ts（FORMULAIC/OFFICIAL/SKELETON/CONNECTIVES 共享）。
+ */
 
 // 泛指主语（AI 爱写"我们/人们/大家"，真人常写"我/你+具体情境"）
 const VAGUE_SUBJECT = /(我们每个人|我们应当|我们要|人们|大家|每个人|一个人|任何人都|双方均|各方应)/g;
@@ -298,8 +275,16 @@ function featureList(text: string, sents: Sent[], chars: number): ZhuqueFeature[
     `每百字 ${per(countHits(text, FORMULAIC)).toFixed(2)} 处（值得注意的是/综上所述/赋能）`);
   push("词汇分布·公文黑话", norm(per(countHits(text, OFFICIAL)), 0, 2.0),
     `每百字 ${per(countHits(text, OFFICIAL)).toFixed(2)} 处（顶层设计/抓手/护城河）`);
-  push("句法结构·句长节奏", norm(cvOf(sents.map((s) => visibleLen(s.text))), 0.28, 0.62, true),
-    `句长 CV ${cvOf(sents.map((s) => visibleLen(s.text))).toFixed(2)}（真人随笔常 0.35~0.7）`);
+  // 句长节奏（v0.8.3 双判据）：CV 相对判据 + 句长标准差绝对判据（朱雀官方口径：
+  // 实测 AI 文本句长标准差多落在 5~8 区间，humanize-metrics.fingerprintCheck 同款阈值）。
+  // std 命中特征带时即使 CV 达标也按疑似 AI 计——CV 低≠安全，句长集中才是本质。
+  const lens = sents.map((s) => visibleLen(s.text));
+  const std = stdOf(lens);
+  const cvVal = norm(cvOf(lens), 0.28, 0.62, true);
+  const stdInBand = sents.length >= 6 && std >= 4.5 && std <= 8.5;
+  push("句法结构·句长节奏", stdInBand ? Math.max(cvVal, 0.75) : cvVal,
+    `句长 CV ${cvOf(lens).toFixed(2)}（真人随笔常 0.35~0.7）` +
+    (sents.length >= 6 ? `，标准差 ${std.toFixed(1)}${stdInBand ? "（落入 AI 特征带 4.5~8.5）" : ""}` : ""));
   push("句法结构·长句占比",
     norm(sents.length ? sents.filter((s) => visibleLen(s.text) >= 38).length / sents.length : 0, 0.05, 0.45),
     `${sents.filter((s) => visibleLen(s.text) >= 38).length}/${sents.length} 句超 38 字`);
@@ -324,11 +309,17 @@ function featureList(text: string, sents: Sent[], chars: number): ZhuqueFeature[
 }
 
 function cvOf(nums: number[]): number {
+  const m = nums.reduce((a, b) => a + b, 0);
+  if (m === 0 || nums.length < 2) return 0;
+  return stdOf(nums) / (m / nums.length);
+}
+
+/** 样本标准差（朱雀官方句长标准差口径用；单句/空数组返回 0） */
+function stdOf(nums: number[]): number {
   if (nums.length < 2) return 0;
   const m = nums.reduce((a, b) => a + b, 0) / nums.length;
-  if (m === 0) return 0;
-  const varr = nums.reduce((a, b) => a + (b - m) ** 2, 0) / nums.length;
-  return Math.sqrt(varr) / m;
+  const varr = nums.reduce((a, b) => a + (b - m) ** 2, 0) / (nums.length - 1);
+  return Math.sqrt(varr);
 }
 
 function nominalCount(text: string): number {

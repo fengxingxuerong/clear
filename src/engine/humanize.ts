@@ -332,17 +332,17 @@ function dropLeadingConnectives(text: string, rng: () => number, intensity: numb
 /** 处理带"……"通配的套话模板 */
 function replaceTemplates(text: string, rng: () => number, intensity: number): string {
   const rules: { re: RegExp; tos: string[] }[] = [
-    { re: /以([\s\S]{1,12}?)为抓手/g, tos: ["拿$1当发力点", "靠$1发力", "用$1当突破口"] },
-    { re: /在([\s\S]{1,12}?)的(背景|大环境)下/g, tos: ["借着$1的风", "在$1当口", "赶上$1这波"] },
+    { re: /以([\u4e00-\u9fa5A-Za-z0-9]{1,12}?)为抓手/g, tos: ["拿$1当发力点", "靠$1发力", "用$1当突破口"] },
+    { re: /在([\u4e00-\u9fa5A-Za-z0-9]{1,12}?)的(背景|大环境)下/g, tos: ["借着$1的风", "在$1当口", "赶上$1这波"] },
     {
-      re: /为([\s\S]{1,12}?)注入(新)?(动能|活力|动力)/g,
+      re: /为([\u4e00-\u9fa5A-Za-z0-9]{1,12}?)注入(新)?(动能|活力|动力)/g,
       tos: ["给$1添了把劲", "让$1更有劲", "给$1加了把火"],
     },
     {
-      re: /为([\s\S]{1,12}?)提供了(有力|坚实|重要)?(支撑|保障)/g,
+      re: /为([\u4e00-\u9fa5A-Za-z0-9]{1,12}?)提供了(有力|坚实|重要)?(支撑|保障)/g,
       tos: ["给$1撑了腰", "为$1兜了底"],
     },
-    { re: /成为([\s\S]{1,12}?)的重要组成部分/g, tos: ["成了$1里重要的一块", "变$1里少不了的部分"] },
+    { re: /成为([\u4e00-\u9fa5A-Za-z0-9]{1,12}?)的重要组成部分/g, tos: ["成了$1里重要的一块", "变$1里少不了的部分"] },
     { re: /以([\s\S]{1,12}?)为契机/g, tos: ["借着$1的机会", "趁$1"] },
     { re: /([\s\S]{1,14}?)发挥着([\s\S]{1,8}?)作用/g, tos: ["$1很重要", "$1顶用", "$1是关键"] },
     {
@@ -428,6 +428,13 @@ function replaceTemplates(text: string, rng: () => number, intensity: number): s
 /** 入口：按段落拆分逐段处理、保留原文分段 */
 export function humanize(text: string, opts: HumanizeOptions = {}): string {
   if (!text || !text.trim()) return "";
+  // v0.8.6：强度=0 必须严格返回原文。之前所有 pass 都按概率 0 跳过，
+  // 但最后几道确定性兜底（stripAICliches / stripLeadingConnectivesHard /
+  // clampAvgSentenceLenUnder25 / replaceGuardedFormulaicDerivs 等）不关心强度，
+  // 会删掉"值得注意的是/然而/因此"这类连接词、切长句、替换"有效性→实际效果"，
+  // 导致用户选 0 时原文仍被改写。在入口直接短路，语义最直观。
+  const rawIntensity = opts.intensity ?? 0.6;
+  if (rawIntensity <= 0) return text;
   // P7-A：体裁判定——显式 opts.genre 优先，否则自动识别（纯人写不自动判，必须用户显式传 humanHand）
   const effectiveGenre: EffectiveGenre = opts.genre ?? classifyGenre(text).genre;
   const knobs = getGenreKnobs(effectiveGenre);
@@ -616,9 +623,13 @@ function humanizeSingle(text: string, opts: HumanizeOptions = {}): string {
     if (s.length > SPLIT_SENTENCE_THRESHOLD && rng() < SPLIT_SENTENCE_RATE * intensity) {
       const mid = findSplitPoint(s, SPLIT_SENTENCE_THRESHOLD + 1);
       if (mid !== -1) {
-        out.push(s.slice(0, mid).trim() + "。");
-        out.push(s.slice(mid + 1).trim());
-        continue;
+        const tail = s.slice(mid + 1).trim();
+        // v0.8.5：劈出的后半句必须能独立成句（使役"让/使/帮/叫"承接前句宾语时不能切）
+        if (fragmentCanStand(tail)) {
+          out.push(s.slice(0, mid).trim() + "。");
+          out.push(tail);
+          continue;
+        }
       }
     }
 
@@ -643,11 +654,18 @@ function humanizeSingle(text: string, opts: HumanizeOptions = {}): string {
       !/(性|化|所以|以及|亦|之所|不光|不仅|不但|与|互为|予以)/.test(s) &&
       isCJK(s.charAt(s.length - 2))
     ) {
+      // v0.8.5 语体守卫：句尾落在书面抽象名词上时不加尾助词——
+      // 「教育的本质呀。」「技术发展趋势嘛。」是书面语体 + 口语气词的错位组合，
+      // 既是 scan-bugs 探针签名，也是真人一眼能读出的机器感。
+      const stripped = s.replace(/[。！？!?]+$/, "");
+      const formalityGuard = /[\u4e00-\u9fa5]{0,4}(行业|趋势|教育|技术|发展|本质|方案|融合|转型|体系|机制|模式|能力|水平|质量|效率|价值|意义|作用|目标|战略|格局|态势)$/.test(stripped);
       const r = rng();
-      if (r < SOFT_ENDING_PROB * intensity && isCasual) {
-        s = s.replace(/[。！？!?]+$/, "") + pick(rng, SOFT_TAIL_VARIANTS);
-      } else if (r < SOFT_ENDING_PROB * intensity + SOFT_TAIL_PROB * intensity) {
-        s = s.replace(/[。！？!?]+$/, "") + pick(rng, SOFT_ENDINGS) + "。";
+      if (!formalityGuard) {
+        if (r < SOFT_ENDING_PROB * intensity && isCasual) {
+          s = s.replace(/[。！？!?]+$/, "") + pick(rng, SOFT_TAIL_VARIANTS);
+        } else if (r < SOFT_ENDING_PROB * intensity + SOFT_TAIL_PROB * intensity) {
+          s = s.replace(/[。！？!?]+$/, "") + pick(rng, SOFT_ENDINGS) + "。";
+        }
       }
     }
 
@@ -757,12 +775,22 @@ function injectFragments(text: string, rng: () => number, p: number): string {
   const paras = text.split(/\n\n+/);
   if (paras.length < 2) return text;
   const out: string[] = [];
+  // v0.8.4：碎片全文去重 + 总量封顶（约每 3 段最多 1 条）——原实现可同碎片复读、
+  // 多段连塞，碎片复读与语气词复读一样是可被统计抓到的机器指纹
+  const used = new Set<string>();
+  let injected = 0;
+  const cap = Math.max(1, Math.ceil(paras.length / 3));
   for (const para of paras) {
     let ptext = para.trim();
     if (!ptext) continue;
-    if (rng() < p) {
-      const frag = pick(rng, SENTENCE_FRAGMENTS);
-      ptext += "\n\n" + frag;
+    if (injected < cap && rng() < p) {
+      const fresh = SENTENCE_FRAGMENTS.filter((f) => !used.has(f));
+      if (fresh.length) {
+        const frag = pick(rng, fresh);
+        used.add(frag);
+        ptext += "\n\n" + frag;
+        injected++;
+      }
     }
     out.push(ptext);
   }

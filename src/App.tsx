@@ -531,8 +531,11 @@ export default function App({
   const inputHasText = useMemo(() => input.trim().length > 0, [input]);
   const outputHasText = useMemo(() => output.trim().length > 0, [output]);
 
-  // 朱雀面板的体裁线预测：v3 18 点 OLS（与对标评分面板共用 engine/zhuque-calib 同一把尺子）
-  const zqGenreEstimate = (() => {
+  // 朱雀面板的体裁线预测：v3 18 点 OLS（与对标评分面板共用 engine/zhuque-calib 同一把尺子）。
+  // aiScore + classifyGenre 都是全文扫描，用 useMemo 缓存——面板未开（zq 为 null）时直接跳过，
+  // 开着时也只随检测文本/体裁覆盖变化重算，不跟着每次输入键入白跑。
+  const zqGenreEstimate = useMemo(() => {
+    if (!zq) return null;
     const t = zqText || (output.trim() ? output : input).trim();
     if (!t) return null;
     const g = genreOverride ?? classifyGenre(t).genre;
@@ -541,7 +544,7 @@ export default function App({
       pct: Math.round(predictOfficialPct(aiScore(t).score, track) * 10) / 10,
       tag: CALIB[track].x40Tag,
     };
-  })();
+  }, [zq, zqText, input, output, genreOverride]);
 
   // ---- 稳定回调（供 memo 化的 TextPane 使用，避免右侧面板随左侧输入重渲） ----
   const hotkeyRef = useRef<() => void>(() => {});

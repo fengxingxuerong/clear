@@ -15,9 +15,8 @@ export * from "./llm-quality";
 export * from "./llm-humanize";
 export * from "./llm-judge";
 
-import { humanize, aiScore, checkFidelityLocal, applyZhuqueFeatures, crossChunkCleanup } from "../engine/humanize";
+import { humanize, aiScore, checkFidelityLocal, crossChunkCleanup } from "../engine/humanize";
 import { humanizeBestOf } from "../engine/humanize-bestof";
-import { classifyGenre } from "../engine/classify-genre";
 import { ApiConfig, DEEP_MAX_ROUNDS, DEEP_TARGET_SCORE, effectiveKeys } from "./llm-config";
 import { CHUNK_THRESHOLD, splitIntoChunks } from "./llm-chunk";
 import { humanizeViaApi, humanizeViaApiDeep } from "./llm-humanize";
@@ -119,11 +118,8 @@ export async function runHumanize(
           (allQc.length ? ` · 质检 ${allQc.filter(Boolean).length}/${allQc.length} 通过` : "") +
           (fid.pass ? "" : ` · ⚠️忠实度：${fid.problems[0]}`) +
           (anyIssue ? " · 部分块有未修复质检问题" : "");
-        // 朱雀增强：对 API 输出叠加本地反检测特征（不跑本地引擎，避免二次改写）
-        if (zhuqueMode && intensity >= 0.35) {
-          outText = applyZhuqueFeatures(outText, intensity, undefined, cfg.style, { skipSceneInject: (genre ?? classifyGenre(outText).genre) === "dialogue" });
-          note += " · 朱雀增强已叠加";
-        }
+        // v0.8.6 LLM 主导：API 输出即最终稿，不再叠加本地朱雀特征（方言/自问自答/错别字
+        // 注入会污染 LLM 的语义级改写）。反检测特征由提示词 19 条战术原生产出。
         return {
           text: outText,
           before,
@@ -176,11 +172,9 @@ export async function runHumanize(
     bestOf = r.bestOf;
   }
 
-  // 朱雀增强：对 API 输出叠加反检测特征（不跑本地引擎，避免二次改写）
-  if (zhuqueMode && intensity >= 0.35 && usedApi) {
-    outText = applyZhuqueFeatures(outText, intensity, undefined, cfg.style, { skipSceneInject: (genre ?? classifyGenre(outText).genre) === "dialogue" });
-    note += (note ? " · " : "") + "朱雀增强已叠加";
-  }
+  // v0.8.6 LLM 主导：API 输出即最终稿，不再叠加本地朱雀特征（方言/自问自答/错别字注入
+  // 会污染 LLM 的语义级改写并制造新指纹）——反检测特征由提示词 19 条战术原生产出；
+  // 朱雀增强（zhuqueMode）仅作用于本地引擎路径（runLocal 内部处理）。
 
   const after = aiScore(outText);
   return { text: outText, before, after, usedApi, note, roundScores, bestOf };

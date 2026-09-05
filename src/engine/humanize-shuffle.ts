@@ -58,7 +58,7 @@ function relaxDunhao(text: string, rng: () => number, p: number): string {
     const hasConj = /[与和及]/.test(run);
     const verbish = /[推干办做化走抓建拉提打治整修铺]/.test(run);
     const last = run.lastIndexOf("、");
-    const joint = hasConj || verbish ? "，" : pick(rng, ["以及", "跟", "和", "，"]);
+    const joint = hasConj || verbish ? "，" : pick(rng, ["以及", "和", "，"]);  // v0.8.5 去掉"跟"：「X拓宽跟搭台子」式连读拗口且命中接跟探针
     return run.slice(0, last) + joint + run.slice(last + 1);
   });
 }
@@ -1031,18 +1031,19 @@ function clampAvgSentencesInBlock(text: string, targetAvg: number, maxCuts: numb
     }).filter(x => x.hasCut && x.L > targetAvg + 2).sort((a, b) => b.L - a.L);
     if (rank.length === 0) break;
     const t = rank[0];
-    // 在 s 中间位置的第一个「，；：」切段：前半 + "。"(变成独立句) + 后半（保留原句尾标点）
+    // 在 s 中间位置的「，；：」切段：前半 + "。"(变成独立句) + 后半（保留原句尾标点）
+    // v0.8.5 使役守卫：切出的后半若以「让/使/帮/叫」开头（承接前半宾语作主语，
+    // 如「降低阅读门槛，让更多人…」），切断即产生无主句病句——收集全部候选切点，
+    // 按 |k - mid| 排序取最近的可用点；无可切点则放弃。
     const mid = Math.floor(t.s.length / 2);
-    // 找 mid 附近最近的「，；：」（先扫 mid→后，再扫 mid→前）
-    let cutIdx = -1;
-    for (let k = mid; k < t.s.length - 1; k++) {
-      if ("，；：、".includes(t.s[k])) { cutIdx = k; break; }
+    const allCuts: number[] = [];
+    for (let k = 0; k < t.s.length - 1; k++) {
+      if ("，；：、".includes(t.s[k])) allCuts.push(k);
     }
-    if (cutIdx < 0) {
-      for (let k = mid - 1; k >= 0; k--) {
-        if ("，；：、".includes(t.s[k])) { cutIdx = k; break; }
-      }
-    }
+    allCuts.sort((a, b) => Math.abs(a - mid) - Math.abs(b - mid));
+    const isCutOK = (k: number) =>
+      !/^[让使帮叫]/.test(t.s.slice(k + 1).replace(/[。！？!?…]$/, "").trim());
+    const cutIdx = allCuts.find(isCutOK) ?? -1;
     if (cutIdx < 0) break;
     const front = t.s.slice(0, cutIdx);   // 例如"根据报告显示，今年增长明显"
     const rest  = t.s.slice(cutIdx + 1);  // "今年增长明显。"
@@ -1088,11 +1089,16 @@ export function ensureEmDashCountHardCap(text: string, cap = 1): string {
 
 export function boostBurstinessIfLow(text: string, rng: () => number, targetCv = MIN_BURSTINESS_CV, maxCuts = 12): string {
   // P7-F 段落感知：同 clampAvgSentenceLenUnder25，避免 splitSentences→join 合并段落
-  if (!text.includes("\n\n")) return boostBurstinessInBlock(text, rng, targetCv, maxCuts);
-  return text
-    .split(/\n\n+/)
-    .map((p) => boostBurstinessInBlock(p, rng, targetCv, maxCuts))
-    .join("\n\n");
+  const result = !text.includes("\n\n")
+    ? boostBurstinessInBlock(text, rng, targetCv, maxCuts)
+    : text
+        .split(/\n\n+/)
+        .map((p) => boostBurstinessInBlock(p, rng, targetCv, maxCuts))
+        .join("\n\n");
+  // v0.8.4 兜底清扫：管线里 IfLow 会被多次调用（朱雀增强 + P5 清尾），跨调用仍可能
+  // 拼出「哦。哦。」「是啊。是啊。」式相邻极短句复读——复读本身就是机器指纹
+  // （fingerprintCheck 垫词复读同类项），逐字符统计类特征一抓一个准。相邻同串只留一个。
+  return result.replace(/([\u4e00-\u9fa5]{1,4}[。！？])(?:\s*)\1+/g, "$1");
 }
 
 function boostBurstinessInBlock(text: string, rng: () => number, targetCv: number, maxCuts: number): string {
@@ -1103,14 +1109,24 @@ function boostBurstinessInBlock(text: string, rng: () => number, targetCv: numbe
     "对哦。", "嗯。", "嗨。", "好吧。", "行。", "是啊。", "诶。", "咳。",
     "哦。", "啊。", "呵。", "啧。", "呣。",
   ];
-  for (let attempt = 0; attempt < maxCuts; attempt++) {
+  // v0.8.4 反堆叠：同一句只塞一次锚、锚点同块去重、总量封顶。
+  // 依据（multi-case 实测病句）：CV 追不上目标时循环对同一句反复塞锚，
+  // 拼出「数字化转型行对哦诶啊嗯呵呣啧」这类粒子串、句尾挂出「是啊。是啊。」——
+  // 语气词复读本身就是新的机器指纹（fingerprintCheck 的垫词复读同类项），
+  // 比低 CV 危害更大：宁可少塞锚没达标，也不产出可被统计抓到的复读串。
+  const ANCHOR_TAIL_RE = /(?:对哦|是啊|好吧|[嗯嗨诶咳呵啧呣哦啊行])[。！？!?…]*$/;
+  const ANCHOR_CAP = Math.min(4, Math.max(2, Math.ceil(maxCuts / 3)));
+  const usedAnchors = new Set<string>();
+  const endsWithParticle = (s: string) => ANCHOR_TAIL_RE.test(s.trim());
+  let injected = 0;
+  for (let attempt = 0; attempt < maxCuts && injected < ANCHOR_CAP; attempt++) {
     const cur = sentenceStats(working);
     if (cur.cv >= targetCv) break;
     const sents = splitSentences(working);
     // P5-B 放宽切句门槛 L≥10（原为 14），D2 对话体有更多中等句可供"塞极短锚"
     const withIdx = sents
       .map((s, i) => ({ s, i, L: s.replace(/[\s。！？!?…—\-，、；：""''「」（）《》【】]/g, "").length }))
-      .filter(x => x.L >= 10);
+      .filter((x) => x.L >= 10 && !endsWithParticle(x.s));
     if (withIdx.length < 1) break;
     withIdx.sort((a, b) => b.L - a.L);
     // 优先切第 2/3 长句，避免同一句反复切
@@ -1118,31 +1134,61 @@ function boostBurstinessInBlock(text: string, rng: () => number, targetCv: numbe
       ? withIdx[Math.floor(rng() * 3)]
       : (withIdx.length >= 2 ? (rng() < 0.5 ? withIdx[0] : withIdx[1]) : withIdx[0]);
     const target = choice;
-    const anchor = ULTRA_SHORT_ANCHORS[Math.floor(rng() * ULTRA_SHORT_ANCHORS.length)];
+    const fresh = ULTRA_SHORT_ANCHORS.filter((a) => !usedAnchors.has(a));
+    if (!fresh.length) break;
+    const anchorFull = fresh[Math.floor(rng() * fresh.length)];
+    usedAnchors.add(anchorFull);
     const raw = target.s;
     let insertAt = raw.length;
+    let anchor = anchorFull;
     const lastCh = raw[raw.length - 1] || "";
-    if ("。！？!?".includes(lastCh)) insertAt = raw.length - 1;
-    else if (lastCh === "…") insertAt = raw.length - 1;
+    // v0.8.5 语体守卫：插入点前若是书面抽象名词或"的"字结构，
+    // 语气词缀在名词后形成「行业呀。」「本质嗯。」「本质行。」式语体错位
+    //（书面语体 + 口语语气词相接，探针与真人阅读都可感知）——跳过此句。
+    // 对有/无句末标点两种情况都生效：剥句号内插与整锚拼接效果等同。
+    const before = raw.slice(0, insertAt).replace(/[。！？!?…]$/, "");
+    if (/[\u4e00-\u9fa5]{0,3}(行业|趋势|教育|技术|发展|本质|方案|融合|转型|体系|机制|模式|能力|水平|质量|效率|价值|意义|作用|目标|战略|格局|态势)$/.test(before) || /的$/.test(before)) {
+      continue;
+    }
+    if ("。！？!?…".includes(lastCh)) {
+      // 插在句末标点之前时必须去掉锚点自带的句号，否则拼出"。。"
+      //（multi-case 实测病句：「挑战哈对哦。啊。。就这样。」）
+      insertAt = raw.length - 1;
+      anchor = anchorFull.replace(/。$/, "");
+    }
     const newStr = raw.slice(0, insertAt) + anchor + raw.slice(insertAt);
     sents[target.i] = newStr;
     working = sents.join("");
+    injected++;
   }
   // P5-B 兜底：循环塞完仍 < targetCv → 在文本末尾硬挂 1~2 条独立极短句（暴力双峰：正常20字 vs 1字）
   //        仅用于 D2 这类"中等句多、CV 天生稳"的体裁
   const tailCheck = sentenceStats(working);
-  if (tailCheck.cv < targetCv) {
+  if (tailCheck.cv < targetCv && injected < ANCHOR_CAP + 1) {
     const needMore = targetCv - tailCheck.cv;
     const tails = needMore > 0.04 ? 2 : 1;
     let extra = "";
     for (let i = 0; i < tails; i++) {
-      const a = ULTRA_SHORT_ANCHORS[Math.floor(rng() * ULTRA_SHORT_ANCHORS.length)];
-      extra += (extra.endsWith("。") ? "" : "") + a;
+      // 同块去重：老实现两次随机可抽中同一锚，挂出「是啊。是啊。」复读串
+      const fresh = ULTRA_SHORT_ANCHORS.filter((a) => !usedAnchors.has(a));
+      if (!fresh.length) break;
+      const a = fresh[Math.floor(rng() * fresh.length)];
+      usedAnchors.add(a);
+      // 跨调用防复读：IfLow 在管线里会被调用多次（朱雀增强 + P5 清尾），每次调用
+      // 的 usedAnchors 都是新建的——上一调用可能已在本块尾挂过同一锚。不依赖
+      // 调用内状态，直接实测文本尾：尾端已有同核锚点就跳过这个候选。
+      const core = a.replace(/。$/, "");
+      if (new RegExp(core + "[。！？!?…]\\s*$").test(working.replace(/\s+$/, ""))) continue;
+      extra += a;
     }
-    // 末尾是标点就直接挂，否则补个句号后挂
-    const trimmed = working.replace(/\s+$/, "");
-    if (/[。！？!?…]$/.test(trimmed) || trimmed.length === 0) working = trimmed + extra;
-    else working = trimmed + "。" + extra;
+    if (extra) {
+      // 末尾是句末标点就直接挂；弱标点（逗号/顿号等）先升级成句号再挂，
+      // 否则拼出"，。"（multi-case 实测病句：「拉动可持续发展，。说到底」）
+      const trimmed = working.replace(/\s+$/, "");
+      if (/[。！？!?…]$/.test(trimmed) || trimmed.length === 0) working = trimmed + extra;
+      else if (/[，、；：,]$/.test(trimmed)) working = trimmed.replace(/[，、；：,]$/, "。") + extra;
+      else working = trimmed + "。" + extra;
+    }
   }
   return working;
 }
@@ -1166,7 +1212,7 @@ export function injectFirstPersonAnchorPoints(
     "我自己在项目里也碰到过差不多的情况，落地起来确实没纸面那么顺。",
     "说起来，我之前做过类似的测算，这个数字的区间其实还能再放宽一丢丢。",
     "我去年在老东家的时候还跟运营的同学聊过这个话题，大家反馈也差不多。",
-    "哦对，我身边有个朋友就在做这块的产品，他们实际跑下来跟这个数据差不了太多。",
+    "哦对，这块我自己之前也上手试过，实际跑下来跟纸面数据差不了太多。",
     "我之前查过一份内部的行业纪要，大概也是这个结论，偏差很小。",
     "我自己之前写过同主题的报告，印象最深的就是这块的数据差特别容易放大。",
   ];

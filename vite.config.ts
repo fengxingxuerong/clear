@@ -6,6 +6,14 @@ import react from "@vitejs/plugin-react";
 // 这里按项目实际路径动态决定，两种场景都拿到最优配置。
 const needsPolling = /[^\x00-\x7f]/.test(process.cwd());
 
+// Vitest 会继承外部 NODE_ENV：若机器全局设了 NODE_ENV=production（环境污染很常见），
+// React 会被解析成生产构建，@testing-library 的 act() 直接报错。
+// 在配置加载期（早于测试模块解析）强制 NODE_ENV=test，npm script / CI / 直接
+// npx vitest 三种入口都能覆盖，且不影响正常 vite build（Vite 自己会重设 NODE_ENV）。
+if (process.env.VITEST || process.argv.some((a) => a.includes("vitest"))) {
+  process.env.NODE_ENV = "test";
+}
+
 export default defineConfig({
   plugins: [react()],
   server: {

@@ -56,6 +56,7 @@ export function ZhuquePanel({
   /** v3 四体裁 18 点 OLS 体裁线预测（与对标评分面板同一把尺子；无文本时 null） */
   genreEstimate?: { pct: number; tag: string } | null;
   onPaste: (v: string) => void;
+  /** v0.8.6 LLM 主导：记录口径跟随当前展示口径——有语义层时传融合分，否则传表层综合分 */
   onSaveCalib: () => void;
   onClearCalib: () => void;
   onCopySubmit: () => void;
