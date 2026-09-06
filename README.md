@@ -9,6 +9,26 @@
 > 真正的结构级去味须走 LLM 深度模式（打散总分总/句序重排/段落重切）。
 > 内置评分（本地代理分与 LLM 评判）均为代理指标，与朱雀官方分无标定关系，请以真实检测器结果为准。
 
+## v0.8.7 更新（测试补盲区收口 + DX 增强 + vite 6）
+
+工程与测试四轮迭代（224→323 例，+99），高/中风险盲区全部清零：
+
+- **测试补盲（四轮）**：
+  - `store` 15 例（逐字段清洗/secureStore 桥接三态）+ `store-history` 8 例（去重/上限/配额降级）；
+  - 组件全量：ScoreBadge/TextPane/DiffView/HistoryPanel/ErrorBoundary/FingerprintPanel 21 例、
+    SettingsModal 9 例（草稿-提交/温度归一化/预设）、BenchmarkPanel 11 例（v3 体裁轨道联动）、
+    CalibLabModal 启用态 5 例、ppl-client 集成 7 例、App 整树冒烟 9 例——11 个 UI 组件全覆盖；
+  - scripts 渐进：词表卫生规则固化为断言、humanize-cli 纯逻辑（esbuild 转译 + vm 沙箱，
+    零改动 CLI 行为）。
+- **Bug 修复**：`store.ts` loadApi 漏读 `apiKeys`——用户保存的 Key 池刷新后静默丢失（测试驱动发现）。
+- **DX 增强**：`llm-chat` 错误透传网关响应体（error/message/detail，截 200 字符），
+  404/402 等错误能直接看到「模型不存在/配额用尽」等真实原因；一键启动 .bat 加 Node ≥18 门槛。
+- **依赖升级**：vite 5.4→6.4.3（@vitejs/plugin-react 4.7→5.2），配置零改动兼容，主包 331KB。
+- **P1 预置**：注入密度 A/B 实验材料（同原文同种子，0.9 档 vs 0.45 档两版送检稿），
+  待朱雀送检解锁后两轮即可回填校准点并触发 main 线重拟合。
+- 诚实标注暂缓：Word/公式格式保留、知网/维普多平台分策略（需产品决策）；朱雀真实送检
+  受匿名验证链阻塞（连解多轮验证码仍 Invalid request，需登录态）。
+
 ## v0.8.6 更新（竞品对标：术语保护 + 批量 CLI + 语义层反指纹维度）
 
 对照 2026 年竞品格局（言笔/笔灵/SpeedAI 等主打"术语零改动"，嘎嘎降AI/零感AI 标配批量处理，
