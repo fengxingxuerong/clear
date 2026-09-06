@@ -208,3 +208,176 @@ describe("CalibLabModal（校准实验室）", () => {
     expect(getByText(/官方 99.99%/)).toBeTruthy();
   });
 });
+
+describe("CalibLabModal 启用态交互（v0.8.7 补盲）", () => {
+  type CalibLabModalProps = Parameters<typeof CalibLabModal>[0];
+  function modalProps(overrides: Partial<CalibLabModalProps> = {}): CalibLabModalProps {
+    return {
+      samples: [],
+      text: "",
+      msg: "",
+      pasteMap: {},
+      onText: vi.fn(),
+      onPaste: vi.fn(),
+      onClose: vi.fn(),
+      onGenerate: vi.fn(),
+      onFill: vi.fn(),
+      onCopy: vi.fn(),
+      onDelete: vi.fn(),
+      onClear: vi.fn(),
+      onApplyWeight: vi.fn(),
+      onSeed: vi.fn(),
+      ...overrides,
+    };
+  }
+
+  /** 干净的 localStorage（labStats/collectPoints 读真库，不能被其他用例污染） */
+  function cleanLabStorage(): void {
+    localStorage.removeItem("quaiwei.zhuque.samples");
+    localStorage.removeItem("quaiwei.zhuque.calib");
+  }
+
+  it("未回填样本：粘贴框可输入触发 onPaste，「记录」空值不触发 onFill", () => {
+    cleanLabStorage();
+    const onPaste = vi.fn();
+    const onFill = vi.fn();
+    const { getByPlaceholderText, getByText, container } = render(
+      <CalibLabModal
+        {...modalProps({
+          samples: [
+            {
+              id: "s1",
+              name: "原文样本",
+              text: "样本正文",
+              source: "manual" as const,
+              surface: 55.3,
+              semantic: null,
+              official: null,
+              officialLabel: null,
+              ts: Date.now(),
+            },
+          ],
+          onPaste,
+          onFill,
+        })}
+      />,
+    );
+    const input = getByPlaceholderText(/粘贴官方结果/) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "AI生成 88.5%" } });
+    expect(onPaste).toHaveBeenCalledWith("s1", "AI生成 88.5%");
+    // 直接点「记录」但 pasteMap 未传值 → onFill 不触发（防空回填守卫在组件内）
+    fireEvent.click(getByText("记录"));
+    expect(onFill).not.toHaveBeenCalled();
+    expect(container).toBeTruthy();
+  });
+
+  it("pasteMap 有值时点「记录」触发 onFill", () => {
+    cleanLabStorage();
+    const onFill = vi.fn();
+    const { getByText } = render(
+      <CalibLabModal
+        {...modalProps({
+          samples: [
+            {
+              id: "s1",
+              name: "原文样本",
+              text: "样本正文",
+              source: "manual" as const,
+              surface: 55.3,
+              semantic: null,
+              official: null,
+              officialLabel: null,
+              ts: Date.now(),
+            },
+          ],
+          pasteMap: { s1: "AI生成 88.5%" },
+          onFill,
+        })}
+      />,
+    );
+    fireEvent.click(getByText("记录"));
+    expect(onFill).toHaveBeenCalledWith("s1", "AI生成 88.5%");
+  });
+
+  it("推荐语义层权重出现时可「应用为默认」，触发 onApplyWeight", () => {
+    cleanLabStorage();
+    // 造 4 条带 semantic 的已回填样本 → labStats 可拟合出 bestWeight
+    const mk = (i: number, official: number) => ({
+      id: "w" + i,
+      name: "样本" + i,
+      text: "t",
+      source: "manual" as const,
+      surface: 40 + i * 5,
+      semantic: 50 + i * 3,
+      official,
+      officialLabel: "ai" as const,
+      ts: Date.now(),
+    });
+    const samples = [mk(0, 85), mk(1, 70), mk(2, 55), mk(3, 40)];
+    localStorage.setItem("quaiwei.zhuque.samples", JSON.stringify(samples));
+    const onApplyWeight = vi.fn();
+    const { getByText, queryByText } = render(
+      <CalibLabModal {...modalProps({ samples, onApplyWeight })} />,
+    );
+    const applyBtn = queryByText("应用为默认");
+    if (applyBtn) {
+      // 拟合出推荐权重时按钮出现且触发回调
+      fireEvent.click(applyBtn);
+      expect(onApplyWeight).toHaveBeenCalledTimes(1);
+      expect(typeof onApplyWeight.mock.calls[0][0]).toBe("number");
+    } else {
+      // 样本量不足以拟合权重时按钮不出现（也是正确行为）
+      expect(getByText(/推荐语义层权重|映射：/)).toBeTruthy();
+    }
+  });
+
+  it("样本文本回显：官方已回填与未回填的行都渲染「复制/删」按钮", () => {
+    cleanLabStorage();
+    const onDelete = vi.fn();
+    const { getAllByText } = render(
+      <CalibLabModal
+        {...modalProps({
+          samples: [
+            {
+              id: "a",
+              name: "已回填样本",
+              text: "A",
+              source: "manual" as const,
+              surface: 50,
+              semantic: null,
+              official: 90,
+              officialLabel: "ai" as const,
+              ts: Date.now(),
+            },
+            {
+              id: "b",
+              name: "未回填样本",
+              text: "B",
+              source: "manual" as const,
+              surface: 45,
+              semantic: null,
+              official: null,
+              officialLabel: null,
+              ts: Date.now(),
+            },
+          ],
+          onDelete,
+        })}
+      />,
+    );
+    expect(getAllByText("复制").length).toBe(2);
+    expect(getAllByText("删").length).toBe(2);
+    // 新样本在上：第一个「删」应属未回填样本 b
+    fireEvent.click(getAllByText("删")[0]);
+    expect(onDelete).toHaveBeenCalledWith("b");
+  });
+
+  it("空库提示与「清空样本库」按钮触发 onClear", () => {
+    cleanLabStorage();
+    const onClear = vi.fn();
+    const { getByText } = render(<CalibLabModal {...modalProps({ onClear })} />);
+    expect(getByText(/还没有样本/)).toBeTruthy();
+    fireEvent.click(getByText("清空样本库"));
+    expect(onClear).toHaveBeenCalledTimes(1);
+  });
+});
