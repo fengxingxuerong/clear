@@ -30,6 +30,18 @@ if errorlevel 1 (
     exit /b 1
 )
 for /f "tokens=*" %%i in ('node -v') do set "NODEV=%%i"
+rem ---- 1.5 版本门槛校验（项目要求 Node 18+，Vite 6 最低 Node 18）----
+set "NODE_MAJOR=%NODEV:v=%"
+for /f "tokens=1 delims=." %%a in ("%NODE_MAJOR%") do set "NODE_MAJOR=%%a"
+if %NODE_MAJOR% LSS 18 (
+    echo [错误] 当前 Node.js 版本为 %NODEV%，低于项目要求的 Node 18。
+    echo.
+    echo Vite 6 构建链需要 Node 18 及以上，请到 https://nodejs.org/ 下载 LTS 版升级。
+    echo 安装完成后再次双击本文件即可。
+    echo.
+    pause
+    exit /b 1
+)
 echo [1/3] Node.js 已就绪：%NODEV%。
 
 rem ---- 2. 安装依赖 ----

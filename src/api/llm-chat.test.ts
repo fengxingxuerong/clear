@@ -176,3 +176,50 @@ describe("重试耗尽与失效 Key 跳过（v0.8.7）", () => {
     ).rejects.toThrow(/401（失效 Key 3\/3 个已跳过重试）/);
   });
 });
+
+describe("错误详情透传（v0.8.7：网关响应体里的具体原因）", () => {
+  it("OpenAI 风格 error 对象：404 带上「模型不存在」详情", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({ error: { message: "The model `xxx` does not exist" } }),
+          { status: 404, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    await expect(
+      chat({ ...cfg, apiKey: "k1", apiKeys: undefined }, [{ role: "user", content: "原文" }], {
+        temperature: 0.9,
+        maxTokens: 100,
+      }),
+    ).rejects.toThrow(/404.*The model `xxx` does not exist/);
+  });
+
+  it("顶层 message / detail 字段与字符串 error 同样可提取；超长截断到 200 字符", async () => {
+    const long = "配额".repeat(150);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ detail: long }), { status: 402 })),
+    );
+    const err = (await chat({ ...cfg, apiKey: "k1", apiKeys: undefined }, [{ role: "user", content: "原文" }], {
+      temperature: 0.9,
+      maxTokens: 100,
+    }).catch((e: unknown) => e)) as Error;
+    expect(err.message).toContain(long.slice(0, 200));
+    expect(err.message).not.toContain(long.slice(0, 201));
+  });
+
+  it("响应体非 JSON（网关 HTML 错误页）：错误信息保持干净不含垃圾正文", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("<html>Bad Gateway</html>", { status: 404 })),
+    );
+    await expect(
+      chat({ ...cfg, apiKey: "k1", apiKeys: undefined }, [{ role: "user", content: "原文" }], {
+        temperature: 0.9,
+        maxTokens: 100,
+      }),
+    ).rejects.toThrow(/^API 返回 404$/);
+  });
+});

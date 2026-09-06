@@ -106,8 +106,24 @@ export async function chat(
     }
     if (resp.status !== 429 && (resp.status === 401 || resp.status === 403)) authDead.add(keyIdx);
     if (!resp.ok) {
+      // 吸取网关响应体里的具体错误原因（如「模型不存在」「配额用尽」），
+      // 截断到 200 字符防超长/敏感堆栈刷屏；解析失败静默忽略不影响主错误信息
+      let detail = "";
+      try {
+        const body: unknown = await resp.json();
+        const raw =
+          typeof body === "object" && body !== null
+            ? (body as Record<string, unknown>).error ??
+              (body as Record<string, unknown>).message ??
+              (body as Record<string, unknown>).detail
+            : body;
+        const text = typeof raw === "string" ? raw : raw != null ? JSON.stringify(raw) : "";
+        if (text) detail = `：${text.slice(0, 200)}`;
+      } catch {
+        // 响应体非 JSON（如网关 HTML 错误页）→ 不附加
+      }
       const dead = authDead.size ? `（失效 Key ${authDead.size}/${keys.length} 个已跳过重试）` : "";
-      throw new Error(`API 返回 ${resp.status}${resp.status === 429 ? "（网关限流，已轮换 Key 并退避重试仍失败，稍后再试或回退本地引擎）" : ""}${dead}`);
+      throw new Error(`API 返回 ${resp.status}${resp.status === 429 ? "（网关限流，已轮换 Key 并退避重试仍失败，稍后再试或回退本地引擎）" : ""}${dead}${detail}`);
     }
     const data = await resp.json();
     const msg = data?.choices?.[0]?.message ?? {};
