@@ -79,6 +79,8 @@ export function loadApi(): ApiConfig {
       : undefined,
     maxWaitSeconds: typeof o.maxWaitSeconds === "number" && o.maxWaitSeconds >= 0 ? o.maxWaitSeconds : 0,
     maxApiCalls: typeof o.maxApiCalls === "number" && o.maxApiCalls >= 0 ? o.maxApiCalls : 0,
+    // Key 池透传（v0.8.7 修复：此前 loadApi 漏读该字段，刷新页面后 Key 池丢失）
+    ...(typeof o.apiKeys === "string" && o.apiKeys ? { apiKeys: o.apiKeys } : {}),
   };
 }
 
