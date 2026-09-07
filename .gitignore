@@ -22,3 +22,8 @@ Thumbs.db
 scripts/.sensenova-keys
 # 校准点回填数据（个人实测真值，按需决定是否入库）
 scripts/calib-lab-points.jsonl
+# 调试/评测产物（可再生成，不入库）
+_scan_out.txt
+artifacts/
+.tmp-p1/
+.tmp-submit/

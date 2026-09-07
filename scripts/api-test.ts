@@ -5,7 +5,7 @@
  * 前置：$env:HUMANIZER_API_KEY = "sk-xxx"
  */
 declare const process: { env: Record<string, string | undefined>; exit(code?: number): never };
-import { loadNodePresetKeys } from "../src/api/node-keys.ts";
+import { loadPresetKeys } from "../src/api/llm-config.ts";
 import {
   humanizeViaApi,
   humanizeViaApiDeep,
@@ -19,7 +19,7 @@ import { aiScore, fingerprintCheck, checkFidelityLocal, crossChunkCleanup } from
 
 // —— API 配置（从环境变量读取，不硬编码到代码） ——
 // 运行前设置：$env:HUMANIZER_API_KEY = "sk-xxx"
-const API_KEY = process.env.HUMANIZER_API_KEY || process.env.SHANGTANG_API_KEY || loadNodePresetKeys()[0] || "";
+const API_KEY = process.env.HUMANIZER_API_KEY || process.env.SHANGTANG_API_KEY || loadPresetKeys()[0] || "";
 if (!API_KEY) {
   console.error("❌ 未找到 API Key（需要 HUMANIZER_API_KEY 环境变量）");
   console.error("   PowerShell: $env:HUMANIZER_API_KEY = 'sk-xxx'");

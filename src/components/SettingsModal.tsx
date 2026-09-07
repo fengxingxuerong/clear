@@ -90,6 +90,13 @@ export function SettingsModal({
             placeholder={DEFAULT_API.baseUrl}
           />
         </label>
+        {draftApi.baseUrl.trim().startsWith("/") && (
+          <p className="modal-tip" style={{ marginTop: -6 }}>
+            ⚠️ 以 / 开头的相对路径只在 <b>dev（vite 代理转发）</b>或 <b>Electron 桌面版</b>
+            下可用。把 dist/ 托管到静态空间的用户需自备反向代理，或改填 CORS 放行的服务商
+            （如 https://api.openai.com/v1）。
+          </p>
+        )}
         <label className="row">
           <span>API Key</span>
           <input
@@ -259,8 +266,9 @@ export function SettingsModal({
           />
         </label>
         <p className="modal-tip" style={{ marginTop: -6 }}>
-          深度模式：改写 → LLM 评分 → 未达标（&gt;{DEEP_TARGET_SCORE} 分）带分数反馈自动再改写，最多{" "}
-          {DEEP_MAX_ROUNDS} 轮。单次更慢但去味更彻底。
+          深度模式：改写 → LLM 评分 → 未达标带分数反馈自动再改写，最多 {DEEP_MAX_ROUNDS}{" "}
+          轮。达标线默认 {DEEP_TARGET_SCORE} 分，评判员首轮打分偏高（严评）时自动按首轮分锚定放宽。
+          单次更慢但去味更彻底。
         </p>
         <label className="row">
           <span>最长等待</span>

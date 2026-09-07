@@ -66,6 +66,7 @@ import {
   // v3 P4+P5 最终清尾（humanize() return 前最后一步调用）
   ensureEmDashCountHardCap,
   boostBurstinessIfLow,
+  capParticleSentenceDensity,
   replaceGuardedFormulaicDerivs,
   clampAvgSentenceLenUnder25,
 } from "./humanize-shuffle.ts";
@@ -515,6 +516,13 @@ export function humanize(text: string, opts: HumanizeOptions = {}): string {
   result = ensureEmDashCountHardCap(result, 1);
   result = limitPunctuation(result, "……", 1, "。");
   result = limitPunctuation(result, "——", 1, "，");
+  // v0.8.8：独立极短语气句密度收口（每段 ≤2）——只在高强度档（≥0.75）启用。
+  // 低强度档里这些极短句是句长 burstiness 的主要来源，砍掉会把节奏压平
+  // （外部回归实测：0.6 档触发"指纹-句长节奏过平"4 次）；而"呣。哦。咳。"
+  // 三连密簇只在 0.9 档的注入叠加下出现，收这里正合适。
+  if (intensity >= 0.75) {
+    result = capParticleSentenceDensity(result);
+  }
 
   return result;
 }

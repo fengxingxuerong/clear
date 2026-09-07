@@ -54,7 +54,8 @@ export interface ApiConfig {
  *   3) 都没有 → keys 为空数组，UI「填入 SenseNova 常驻通道」仍可用（用户自己填）
  * 注意：若你从旧版本升级，旧 Key 已随 git 历史泄露，请到商汤后台轮换。
  */
-function loadPresetKeys(): string[] {
+/** v0.8.7 修复后导出：供测试锁死「ESM 下 Key 池不得静默丢失」回归 */
+export function loadPresetKeys(): string[] {
   const out: string[] = [];
   const push = (raw: string | undefined) => {
     if (!raw) return;
@@ -69,19 +70,40 @@ function loadPresetKeys(): string[] {
   try {
     // Node 环境（tsx 脚本 / Electron 主进程）才读文件；浏览器构建时 fs 不存在
     if (typeof process !== "undefined" && process.versions?.node) {
-      // 用 new Function 避开 rollup 对 node:module 的静态分析（浏览器构建不会走到这里）
-      const nodeRequire = new Function("return require") as () => NodeRequire;
-      const req = nodeRequire();
-      const fs = req("node:fs") as typeof import("node:fs");
-      const path = req("node:path") as typeof import("node:path");
-      const candidates = [
-        path.resolve(process.cwd(), "scripts/.sensenova-keys"),
-        path.resolve(process.cwd(), "../scripts/.sensenova-keys"),
-      ];
-      for (const p of candidates) {
-        if (fs.existsSync(p)) {
-          push(fs.readFileSync(p, "utf-8"));
-          break;
+      // 取 node:fs / node:path 必须避开静态 import（浏览器构建会被 rollup 解析报错）。
+      // 历史教训：此前用 new Function("return require") 在 ESM 下必挂——本项目
+      // "type": "module"，脚本全走 ESM，require 未定义被 catch 吞掉后 keys 恒为空，
+      // Node 侧 LLM 通道静默失效（v0.8.7 实测发现并修复）。
+      // 现按优先级：process.getBuiltinModule（Node ≥22.3，同步且对打包器不可见）
+      // → new Function require（CJS 场景如 Electron main 的旧路径兜底）→ 静默降级。
+      type FsLike = { existsSync(p: string): boolean; readFileSync(p: string, enc: string): string };
+      type PathLike = { resolve(...parts: string[]): string };
+      let fs: FsLike | undefined;
+      let path: PathLike | undefined;
+      const proc = process as NodeJS.Process;
+      if (typeof proc.getBuiltinModule === "function") {
+        fs = proc.getBuiltinModule("node:fs") as unknown as FsLike;
+        path = proc.getBuiltinModule("node:path") as unknown as PathLike;
+      } else {
+        try {
+          const nodeRequire = new Function("return require") as () => (m: string) => unknown;
+          const req = nodeRequire();
+          fs = req("node:fs") as FsLike;
+          path = req("node:path") as PathLike;
+        } catch {
+          // ESM 且无 getBuiltinModule 的老 Node：放弃文件读取（env 变量路径仍可用）
+        }
+      }
+      if (fs && path) {
+        const candidates = [
+          path.resolve(process.cwd(), "scripts/.sensenova-keys"),
+          path.resolve(process.cwd(), "../scripts/.sensenova-keys"),
+        ];
+        for (const p of candidates) {
+          if (fs.existsSync(p)) {
+            push(fs.readFileSync(p, "utf-8"));
+            break;
+          }
         }
       }
     }

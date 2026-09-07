@@ -10,6 +10,14 @@ import { errMsg } from "./llm-judge";
 
 /* ----------------------------- 去味 ----------------------------- */
 
+/** v0.8.8 评判员宽严自适应：动态达标线 = max(绝对目标, 首轮分 × 此比例)。
+ *  依据：2026-09-07 真实实测，glm-5.2 交叉评判对双模型竞争胜出稿仍打 86/91——
+ *  绝对目标 10（按宽评评判员标定）在严评下永不达标，只能靠预算白烧收场。
+ *  以首轮正分为宽严锚点后：严评（首轮 86）→ 目标 ≤31；宽评（首轮 45）→ ≤16；
+ *  首轮已很低（≤28）→ 维持绝对目标不变。0.35 对两种宽严都落在
+ *  "改写稿显著优于底稿"的语义带内，且不需要按模型硬编码宽严表。 */
+const RELATIVE_TARGET_RATIO = 0.35;
+
 /** 组装改写用的 system 提示词（基础战术 + 文风预设 + 强度档位） */
 export function buildSystemPrompt(cfg: ApiConfig, intensity: number): string {
   return SYSTEM_PROMPT + styleDirective(cfg.style) + intensityDirective(intensity);
@@ -40,6 +48,8 @@ export interface DeepResult {
   text: string;
   /** 每轮改写后的 LLM 评分（中位数），如 [45, 18, 7] */
   roundScores: number[];
+  /** v0.8.8：本次闭环实际使用的达标分（评判锚点放宽后可能高于绝对目标） */
+  targetUsed: number;
   /** 达标（≤target）提前收手时为 true */
   hitTarget: boolean;
   /** 中途收场原因（如第 N 轮限流），无则空串 */
@@ -86,6 +96,11 @@ export async function humanizeViaApiDeep(
   let qcIssues: string[] = [];
   let note = "";
   let writerModel: string | undefined; // 竞争胜者覆盖后续修订轮的改写模型
+  // v0.8.8 评判锚点：以首个有效正分为宽严锚点（全程只锚一次，后续轮不再抬锚，
+  // 避免"越改越宽"），有效目标 = max(绝对目标, 首轮分 × RELATIVE_TARGET_RATIO)
+  let anchorScore: number | null = null;
+  const effTarget = () =>
+    anchorScore === null ? target : Math.max(target, Math.round(anchorScore * RELATIVE_TARGET_RATIO));
 
   // v0.5.1 双改写器竞争：主模型与备选模型各写一版第一稿，交叉评分择优当底稿。
   // 依据 A/B 实测：glm-5.2 改写被 deepseek 判 35，deepseek 改写被 glm 判 75（两样本一致）——
@@ -122,6 +137,7 @@ export async function humanizeViaApiDeep(
           continue;
         }
         roundScores.push(cand.score ?? -1);
+        if (cand.score !== null && cand.score >= 0 && anchorScore === null) anchorScore = cand.score;
         contestInfo.push(`${m}:${cand.score ?? "?"}`);
         const sc = cand.score ?? 999;
         if (sc < bestScore) {
@@ -136,8 +152,8 @@ export async function humanizeViaApiDeep(
       }
     }
     note = `双模型竞争（${contestInfo.join("，")}）`;
-    if (bestText && bestScore <= target) {
-      return { text: bestText, roundScores, hitTarget: true, note, qcPassed, qcIssues };
+    if (bestText && bestScore <= effTarget()) {
+      return { text: bestText, roundScores, hitTarget: true, note, qcPassed, qcIssues, targetUsed: effTarget() };
     }
   }
 
@@ -159,7 +175,7 @@ export async function humanizeViaApiDeep(
         ? buildRevisionPrompt(
             bestText,
             bestScore > 100 ? 50 : bestScore, // 无分底稿（999）按 50 计；失败标记/-1 不进提示词
-            target,
+            effTarget(),
             lastCritique,
           )
         : text; // 没有可用底稿（如前轮质检全挂）就重新改写原文
@@ -207,6 +223,7 @@ export async function humanizeViaApiDeep(
 
     const score = cand.score;
     if (score !== null && score >= 0) {
+      if (anchorScore === null) anchorScore = score;
       roundScores.push(score);
       lastCritique = cand.critique;
     } else {
@@ -219,7 +236,7 @@ export async function humanizeViaApiDeep(
         bestScore = score;
         bestText = cand.shuffled;
       }
-      if (score <= target) {
+      if (score <= effTarget()) {
         hitTarget = true;
         break;
       }
@@ -237,5 +254,10 @@ export async function humanizeViaApiDeep(
     throw new Error((note || "深度去味未获得任何可用结果") + "，已回退本地引擎");
   }
 
-  return { text: bestText, roundScores, hitTarget, note, qcPassed, qcIssues };
+  // v0.8.8 评判锚点可见化：达标线被放宽时写进 note，用户知道为什么"分高也算达标"
+  const targetUsed = effTarget();
+  if (anchorScore !== null && targetUsed > target) {
+    note = (note ? `${note}；` : "") + `评判锚点：首轮 ${anchorScore} 分 → 达标线放宽至 ≤${targetUsed}`;
+  }
+  return { text: bestText, roundScores, hitTarget, note, qcPassed, qcIssues, targetUsed };
 }

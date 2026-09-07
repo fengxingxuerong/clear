@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { humanizeViaApi, humanizeViaApiDeep } from "./llm-humanize.ts";
 import { DEFAULT_API } from "./llm-config.ts";
-
 /** 构造 OpenAI 兼容 200 响应 */
 function okJson(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -115,5 +114,65 @@ describe("调用预算跨块共享（v0.8.6 修复）", () => {
     expect(count()).toBeGreaterThanOrEqual(2);
     expect(deep.roundScores.length).toBeGreaterThan(0);
     expect(deep.text).toBe(GOOD_REWRITE);
+  });
+});
+
+describe("评判锚点：达标线宽严自适应（v0.8.8）", () => {
+  const cfg = { ...DEFAULT_API, enabled: true, apiKey: "test-key" };
+  /** 改写稿假人：需通过 localHardGate（指纹/忠实度/连贯性），且不能像原文 */
+  const GOOD_REWRITE =
+    "时间往前倒几年，这类工具还没几个人用，现在情况已经完全不一样了，值得慢慢琢磨。";
+
+  /** 按评判调用序次返回预设分数序列（无交叉评判 → 同模型 3 样本取中位数，
+   *  即每轮候选消耗 3 次评判调用） */
+  function judgeSeqFetch(scores: number[]): ReturnType<typeof vi.fn> {
+    let judgeCalls = 0;
+    return vi.fn(async (_url: string, init?: { body?: string }) => {
+      const body = JSON.parse(init?.body ?? "{}") as {
+        messages: { role: string; content: string }[];
+      };
+      const sys = body.messages?.[0]?.content ?? "";
+      if (sys.includes("质检员")) {
+        return okJson({ choices: [{ message: { content: "PASS" } }] });
+      }
+      if (sys.includes("改写专家")) {
+        return okJson({ choices: [{ message: { content: GOOD_REWRITE } }] });
+      }
+      const s = scores[Math.min(Math.floor(judgeCalls / 3), scores.length - 1)];
+      judgeCalls++;
+      return okJson({ choices: [{ message: { content: `句长过于均匀\n${s}` } }] });
+    });
+  }
+
+  it("严评评判员（首轮 86）：目标放宽到 ≤30，30 分即达标提前收手", async () => {
+    vi.stubGlobal("fetch", judgeSeqFetch([86, 30]));
+    const deep = await humanizeViaApiDeep(
+      "值得注意的是，人工智能很重要。",
+      cfg,
+      undefined,
+      10, // 绝对目标：严评下永不达标（这正是被修掉的问题）
+      4,
+      0.6,
+    );
+    expect(deep.targetUsed).toBe(Math.max(10, Math.round(86 * 0.35))); // 86×0.35=30.1→30
+    expect(deep.roundScores).toEqual([86, 30]); // 第 2 轮 30 ≤ 30 → 提前收手，不白烧 3/4 轮
+    expect(deep.hitTarget).toBe(true);
+    expect(deep.note).toContain("评判锚点");
+  });
+
+  it("首轮已很低（8 分）：维持绝对目标 10 不放宽，立即达标", async () => {
+    vi.stubGlobal("fetch", judgeSeqFetch([8]));
+    const deep = await humanizeViaApiDeep(
+      "值得注意的是，人工智能很重要。",
+      cfg,
+      undefined,
+      10,
+      4,
+      0.6,
+    );
+    expect(deep.targetUsed).toBe(10);
+    expect(deep.roundScores).toEqual([8]);
+    expect(deep.hitTarget).toBe(true);
+    expect(deep.note).not.toContain("评判锚点");
   });
 });

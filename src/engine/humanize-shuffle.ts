@@ -1100,6 +1100,50 @@ export function ensureEmDashCountHardCap(text: string, cap = 1): string {
   return out;
 }
 
+/**
+ * v0.8.8 语气词极短句密度上限：管线里多个注入器（boostBurstiness / IfLow 尾挂 /
+ * 自问自答等）叠加后，同段可累积出「呣。哦。咳。」三连独立极短句——单个都在
+ * 守卫限额内，叠起来仍是"过度人味"的机器指纹（v0.8.6 质检提示词已把它列为
+ * FAIL 项，引擎侧也要自守同一条纪律）。确定性收口：每段独立极短语气句 ≤ 2 条，
+ * 超出的直接删（它们是独立句，删除不伤语法、不伤语义）。零随机、幂等。
+ */
+const PARTICLE_SENT_RE = /^(?:对哦|是啊|好吧|[嗯嗨诶咳呵啧呣哦啊行]){1,4}$/;
+/** 句尾挂语气词（"好评哦。""韧性好吧。"）：锚点注入器惯用手法——插在句末标点前 */
+const PARTICLE_SUFFIX_RE = /(?:对哦|是啊|好吧|[嗯嗨诶咳呵啧呣哦啊行])$/;
+
+export function capParticleSentenceDensity(text: string, maxPerPara = 2): string {
+  return text
+    .split(/\n\n+/)
+    .map((para) => {
+      const sents = splitSentences(para);
+      const out: string[] = [];
+      let kept = 0;
+      for (const s of sents) {
+        const bare = s.replace(/[\s。！？!?…，、；：]/g, "");
+        const isStandalone = bare.length > 0 && bare.length <= 4 && PARTICLE_SENT_RE.test(bare);
+        // 句尾挂词：只认长句（core>6 字），短句本身就是独立语气句走 isStandalone 分支
+        const trimmed = s.trimEnd();
+        const core = trimmed.replace(/[。！？!?…]+$/, "");
+        const hasSuffix = core.length > 6 && PARTICLE_SUFFIX_RE.test(core);
+        if (kept >= maxPerPara) {
+          if (isStandalone) continue; // 超额独立语气句：整句丢弃
+          if (hasSuffix) {
+            // 超额句尾挂词：剥语气词本体、保句子（"好评哦。"→"好评。"）
+            const stripped = core.replace(PARTICLE_SUFFIX_RE, "").replace(/[，、；：,]$/, "。");
+            out.push(stripped + trimmed.slice(core.length));
+            continue;
+          }
+          out.push(s);
+          continue;
+        }
+        if (isStandalone || hasSuffix) kept++;
+        out.push(s);
+      }
+      return out.join("");
+    })
+    .join("\n\n");
+}
+
 export function boostBurstinessIfLow(text: string, rng: () => number, targetCv = MIN_BURSTINESS_CV, maxCuts = 12): string {
   // P7-F 段落感知：同 clampAvgSentenceLenUnder25，避免 splitSentences→join 合并段落
   const result = !text.includes("\n\n")

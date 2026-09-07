@@ -164,7 +164,7 @@ export async function runHumanize(
             ? `深度去味达标：各轮评分 ${shown}`
             : deep.note
               ? `${deep.note}：各轮评分 ${shown}`
-              : `深度去味完成（未压到 ${DEEP_TARGET_SCORE} 以下）：各轮评分 ${shown}`) + qcSummary;
+              : `深度去味完成（未压到 ${deep.targetUsed} 以下）：各轮评分 ${shown}`) + qcSummary;
       } else {
         outText = await humanizeViaApi(text, cfg, intensity);
         // 单轮 LLM 输出同样过反指纹清理（垫词去重/破折号限额/套话清除/空格清理），

@@ -60,6 +60,15 @@ describe("本地引擎输出质量（v0.8.4 反指纹回归）", () => {
     expect(replaced).toBeGreaterThan(0);
   });
 
+  it("「取得了」不再产出「得了了」病句（替身+尾随了撞车回归）", () => {
+    const src = "本季度各项工作取得了显著成效，同时取得了新的突破，团队也取得了成长。";
+    for (let seed = 0; seed < 20; seed++) {
+      const out = humanize(src, { intensity: 0.9, seed, zhuqueMode: seed % 2 === 0 });
+      expect(out, `seed=${seed}：${out}`).not.toContain("了了");
+      expect(out, `seed=${seed}：${out}`).not.toContain("得了");
+    }
+  });
+
   it("经验锚点不再编造「朋友」轶事（与 LLM 提示词铁律对齐）", () => {
     const long = "报告显示占比达到40%，同比提升明显。数据背后是行业的真实变化。".repeat(12);
     for (let seed = 0; seed < 10; seed++) {
