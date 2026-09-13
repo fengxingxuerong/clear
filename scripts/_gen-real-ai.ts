@@ -28,7 +28,9 @@ async function main() {
     process.exit(1);
   }
   const prompt =
+    process.env.GEN_PROMPT ||
     "写一篇约 450 字的议论文，题目：数字化转型是企业发展的必由之路。要求：结构完整、论述清晰，符合常规公众号文章水准。只输出正文。";
+  const outName = process.env.GEN_OUT || "s1-real-ai.txt";
   const r = await chat(
     cfg,
     [
@@ -38,7 +40,7 @@ async function main() {
     { temperature: 0.7, maxTokens: 4000 },
   );
   const text = r.content.trim();
-  fs.writeFileSync(path.join(OUT, "s1-real-ai.txt"), text, "utf-8");
+  fs.writeFileSync(path.join(OUT, outName), text, "utf-8");
   console.log(`生成完成：${text.replace(/\s/g, "").length} 字`);
   console.log(text.slice(0, 120) + "…");
 }
