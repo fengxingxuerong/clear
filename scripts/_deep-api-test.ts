@@ -29,14 +29,16 @@ const cfg = {
   apiKey: "",
   apiKeys: loadPresetKeys().join("\n"),
   model: process.env.DEEP_TEST_MODEL || "deepseek-v4-flash",
-  altModel: process.env.DEEP_TEST_ALT || "deepseek-v4-pro",
+  // "none" 哨兵关闭备选（空串会因 falsy 回退默认值，v0.9.5 实测踩坑）
+  altModel:
+    process.env.DEEP_TEST_ALT === "none" ? "" : process.env.DEEP_TEST_ALT || "deepseek-v4-pro",
   judgeModel: "glm-5.2",
   deepMode: true,
   temperature: 0.9,
   style: "casual" as const,
   maxWaitSeconds: 300,
   maxApiCalls: 24,
-  contestSamples: 1,
+  contestSamples: Number(process.env.DEEP_TEST_CONTEST) || 1,
   strictFidelity: true,
 };
 
