@@ -176,3 +176,15 @@ export function effectiveKeys(cfg: ApiConfig): string[] {
 export const DEEP_TARGET_SCORE = 10;
 /** 深度去味最大轮数：UI 提示、分块收敛与主循环统一引用，避免文案与逻辑脱节 */
 export const DEEP_MAX_ROUNDS = 4;
+
+/**
+ * v0.9.5 竞争段自适应阈值：可见字符数超过此值的文本，竞争段自动降级为
+ * 「仅主力模型首稿」，不再双模型/多采样赛马。
+ *
+ * 实测依据（2026-09-12）：1200 字文本双模型竞争在 420s 预算内零产出
+ * （deepseek-v4-pro 对长文极慢，整篇回退本地）；而短文竞争有真实收益
+ * （s6 小说 pro 14 分 vs flash 39 分，pro 大幅胜出）。阈值取 600：
+ * 覆盖 CHUNK_SIZE=1000 的分块场景（分块后单块 ≤1000 字，仍可赛马），
+ * 同时把实测必超时的单篇长文挡在赛马之外。
+ */
+export const ADAPTIVE_CONTEST_CHARS = 600;

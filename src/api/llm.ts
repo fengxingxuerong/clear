@@ -190,8 +190,10 @@ export async function runHumanize(
         usedApi = true;
         const shown = deep.roundScores.map((s) => (s < 0 ? "失败" : s)).join(" → ");
         const qcOk = deep.qcPassed.filter(Boolean).length;
+        // v0.9.5：qcIssues 现在只记录"最后一轮被弃用候选"的问题——交付稿必然
+        // 通过全部检查（质检+硬门槛+编造复核），文案同步修正避免误导
         const qcSummary = deep.qcPassed.length
-          ? ` · 质检 ${qcOk}/${deep.qcPassed.length} 轮通过${deep.qcIssues.length ? "（最终稿有未修复问题：" + deep.qcIssues[0] + "…）" : ""}`
+          ? ` · 质检 ${qcOk}/${deep.qcPassed.length} 轮通过${deep.qcIssues.length ? "（最后一轮候选被弃用：" + deep.qcIssues[0] + "…，交付稿为通过全部检查的最优稿）" : ""}`
           : "";
         // v0.9.4 P2：压缩超 20% 时显式告知（LLM 改写系统性缩水，用户需知情）
         const shrinkNote =

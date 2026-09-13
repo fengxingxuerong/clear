@@ -333,6 +333,15 @@ export async function processCandidate(
       const gate = localHardGate(original, draft);
       if (gate.length) qc = { pass: false, issues: gate.slice(0, 6) };
     }
+    // v0.9.5 P1 编造复核前移：strictFidelity 时每候选过完硬门槛就做独立事实核查——
+    // 编造稿不进评分环节（旧方案只在收稿前终审，审出编造再修复再复审 = 3 次调用
+    // 且修复链脱离既有质检管线）。审出走下方既有修复链，修复稿同样再过复核。
+    if (qc.pass && cfg.strictFidelity) {
+      const fabs = await fabricationReview(original, draft, cfg);
+      if (fabs.length) {
+        qc = { pass: false, issues: fabs.map((f) => `编造复核：${f}`).slice(0, 6) };
+      }
+    }
     if (!qc.pass) {
       const rep = await chat(
         cfg,
@@ -347,6 +356,13 @@ export async function processCandidate(
         if (qc.pass) {
           const gate = localHardGate(original, rep.content);
           if (gate.length) qc = { pass: false, issues: gate.slice(0, 6) };
+        }
+        // v0.9.5 P1：修复稿同样过编造复核（编造项已喂给修复 prompt，此处确认修掉）
+        if (qc.pass && cfg.strictFidelity) {
+          const fabs2 = await fabricationReview(original, rep.content, cfg);
+          if (fabs2.length) {
+            qc = { pass: false, issues: fabs2.map((f) => `编造复核：${f}`).slice(0, 6) };
+          }
         }
       }
     }

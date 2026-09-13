@@ -2,7 +2,7 @@
  * 趣AI味 · LLM 去味流程：单轮改写 与 深度多轮闭环（质检+交叉评判+定向修订）
  */
 
-import { ApiConfig, DEEP_MAX_ROUNDS, DEEP_TARGET_SCORE } from "./llm-config";
+import { ApiConfig, ADAPTIVE_CONTEST_CHARS, DEEP_MAX_ROUNDS, DEEP_TARGET_SCORE } from "./llm-config";
 import {
   SYSTEM_PROMPT,
   buildRevisionPrompt,
@@ -10,7 +10,7 @@ import {
   styleDirective,
 } from "./llm-prompts";
 import { chat, resetApiCallCount, getApiCallCount } from "./llm-chat";
-import { processCandidate, fabricationReview } from "./llm-quality";
+import { processCandidate } from "./llm-quality";
 import { restoreMixedSpacing } from "../engine/humanize-shuffle.ts";
 import { errMsg } from "./llm-judge";
 
@@ -170,13 +170,23 @@ export async function humanizeViaApiDeep(
   // 而评判尺子极稳（同文本重复评判极差 2）——瓶颈是改写采样的运气，多采几稿取最优最直接。
   const alt = cfg.altModel.trim();
   const contestants: string[] = [];
-  if (alt && alt !== cfg.model) {
+  // v0.9.5 竞争段自适应：长文赛马实测必超时（1200 字 420s 零产出），自动降级
+  // 为仅主力模型首稿；短文保持赛马（pro 在小说等体裁有真收益，s6: 14 vs 39）
+  const longText = text.replace(/\s+/g, "").length > ADAPTIVE_CONTEST_CHARS;
+  if (alt && alt !== cfg.model && !longText) {
     contestants.push(cfg.model, alt);
-  } else {
+  } else if (!longText) {
     const n = Math.max(1, Math.min(5, Math.floor(cfg.contestSamples ?? 1)));
     for (let i = 0; i < n; i++) contestants.push(cfg.model);
+  } else {
+    contestants.push(cfg.model);
   }
   const multiContest = contestants.length > 1;
+  // v0.9.5：长文单候选路径的可见化说明（竞争段块内不会执行，在此预置 note，
+  // 后续主循环的锚点/预算 note 均为追加式，不会被覆盖丢失）
+  if (!multiContest && longText) {
+    note = `长文自适应（>${ADAPTIVE_CONTEST_CHARS} 字）：跳过多模型赛马，仅主力模型改写`;
+  }
   if (multiContest) {
     const contestInfo: string[] = [];
     for (let ci = 0; ci < contestants.length; ci++) {
@@ -364,7 +374,10 @@ export async function humanizeViaApiDeep(
       // 于是出现"竞争稿 70、修订稿 89"仍继续跑下一轮的情况。改用 bestScore 作基线：
       // 初值 999（哨兵）保证首轮必然优于它，不会误停。
       if (score >= bestScore) {
-        note = `第 ${round} 轮未优于当前最优（${bestScore} → ${score}），修订无收益，停止后续轮次`;
+        // v0.9.5：追加式而非覆盖——保留竞争段的"长文自适应"等前置说明
+        note =
+          (note ? `${note}；` : "") +
+          `第 ${round} 轮未优于当前最优（${bestScore} → ${score}），修订无收益，停止后续轮次`;
         break;
       }
       bestScore = score;
@@ -383,101 +396,9 @@ export async function humanizeViaApiDeep(
     throw new Error((note || "深度去味未获得任何可用结果") + "，已回退本地引擎");
   }
 
-  // v0.9.4 P1 严格保真补偿轮：深度闭环超时/未达标收场时，最后一轮未修复的
-  // 质检项（编造/忠实度类）会随最优稿交付——事实敏感场景不能带病交付。
-  // 预算外补一轮定向修订（只修事实错误、不追分数）：修好替换底稿，
-  // 修不掉保留原稿并把警告写进 note。不受 isOverBudget 约束（只此一轮）。
-  if (cfg.strictFidelity && qcIssues.length > 0 && bestText) {
-    try {
-      const rep = await chatNonEmpty(
-        cfg,
-        [
-          { role: "system", content: buildSystemPrompt(cfg, intensity) },
-          {
-            role: "user",
-            content: buildRevisionPrompt(
-              bestText,
-              bestScore > 100 ? 50 : bestScore,
-              effTarget(),
-              qcIssues,
-            ),
-          },
-        ],
-        { temperature: 0.4, maxTokens: 8000, model: writerModel },
-        alt,
-        () => false,
-      );
-      if (rep.content) {
-        const cand = await processCandidate(text, rep.content, cfg, intensity);
-        qcPassed.push(cand.qc.pass);
-        if (cand.qc.pass) {
-          if (cand.score !== null && cand.score >= 0) roundScores.push(cand.score);
-          bestText = cand.shuffled;
-          qcIssues = [];
-          note = (note ? `${note}；` : "") + "严格保真补偿轮修复通过";
-          onProgress?.(roundScores.length, cand.score, "严格保真补偿 ");
-        } else {
-          qcIssues = cand.qc.issues;
-          note =
-            (note ? `${note}；` : "") +
-            "严格保真补偿轮未能消除风险项（编造/忠实度），建议人工复核";
-        }
-      }
-    } catch {
-      note = (note ? `${note}；` : "") + "严格保真补偿轮调用失败，保留原最优稿";
-    }
-  }
-
-  // v0.9.4 P1.5 编造专项复核：补偿轮只管"已报出的未修复项"，抓不住"最后一轮
-  // LLM 质检漏判"的编造（实测 s5 分块输出 7 处第一人称编造全部漏网交付）。
-  // strictFidelity 时对最终稿整体过一遍独立事实核查（交叉评判模型）：审出编造
-  // → 定向修复 → 复审；修不掉保留原稿并显式警告。复核通道异常不阻断交付。
-  if (cfg.strictFidelity) {
-    try {
-      const fabs = await fabricationReview(text, bestText, cfg);
-      if (fabs.length) {
-        let fixed = false;
-        const rep = await chatNonEmpty(
-          cfg,
-          [
-            { role: "system", content: buildSystemPrompt(cfg, intensity) },
-            {
-              role: "user",
-              content: buildRevisionPrompt(
-                bestText,
-                bestScore > 100 ? 50 : bestScore,
-                effTarget(),
-                fabs,
-              ),
-            },
-          ],
-          { temperature: 0.4, maxTokens: 8000, model: writerModel },
-          alt,
-          () => false,
-        );
-        if (rep.content) {
-          const cand = await processCandidate(text, rep.content, cfg, intensity);
-          if (cand.qc.pass) {
-            const fabs2 = await fabricationReview(text, cand.shuffled, cfg);
-            if (!fabs2.length) {
-              if (cand.score !== null && cand.score >= 0) roundScores.push(cand.score);
-              qcPassed.push(true);
-              bestText = cand.shuffled;
-              fixed = true;
-              onProgress?.(roundScores.length, cand.score, "编造复核修复 ");
-            }
-          }
-        }
-        note =
-          (note ? `${note}；` : "") +
-          (fixed
-            ? `编造复核：发现 ${fabs.length} 项事实性新增，定向修复后复审通过`
-            : `编造复核：发现 ${fabs.length} 项事实性新增未能消除，建议人工核对（如「${fabs[0].slice(0, 30)}」）`);
-      }
-    } catch {
-      note = (note ? `${note}；` : "") + "编造复核通道异常，本轮跳过（不影响交付）";
-    }
-  }
+  // v0.9.5 P1：严格保真补偿轮与收稿终审已移除——编造复核前移至 processCandidate
+  // （每候选质检后即审，走既有修复链），所有产出路径的候选均已被复核覆盖；
+  // 补偿轮「拿弃用候选的问题清单修最优稿」的语义错位随之消除。
 
   // v0.8.8 评判锚点可见化：达标线被放宽时写进 note，用户知道为什么"分高也算达标"
   const targetUsed = effTarget();

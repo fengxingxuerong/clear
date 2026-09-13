@@ -15,8 +15,12 @@ import { DEFAULT_API, loadPresetKeys, effectiveKeys } from "../src/api/llm-confi
 import { detectAI } from "../src/engine/detector";
 import { resetApiCallCount, getApiCallCount } from "../src/api/llm-chat";
 
-const SAMPLES = "C:/Users/Admin（无密码）/Documents/Loomy Workspace/QuAiWei去AI味测试/samples";
-const OUT = "C:/Users/Admin（无密码）/Documents/Loomy Workspace/QuAiWei去AI味测试/out-deep";
+const SAMPLES =
+  process.env.DEEP_TEST_SAMPLES ||
+  "C:/Users/Admin（无密码）/Documents/Loomy Workspace/QuAiWei去AI味测试/samples";
+const OUT =
+  process.env.DEEP_TEST_OUT ||
+  "C:/Users/Admin（无密码）/Documents/Loomy Workspace/QuAiWei去AI味测试/out-deep";
 
 const cfg = {
   ...DEFAULT_API,
