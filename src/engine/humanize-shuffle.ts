@@ -28,8 +28,11 @@ import {
   sentenceStats,
   computeStats,
   findSplitPoint,
+  findGuardedCutNear,
   makeRng,
   MIN_BURSTINESS_CV,
+  countPadHeads,
+  PAD_INJECT_CAP,
   HumanizeOptions,
   RewriteStyle,
   pick,
@@ -58,7 +61,7 @@ function relaxDunhao(text: string, rng: () => number, p: number): string {
     const hasConj = /[与和及]/.test(run);
     const verbish = /[推干办做化走抓建拉提打治整修铺]/.test(run);
     const last = run.lastIndexOf("、");
-    const joint = hasConj || verbish ? "，" : pick(rng, ["以及", "和", "，"]);  // v0.8.5 去掉"跟"：「X拓宽跟搭台子」式连读拗口且命中接跟探针
+    const joint = hasConj || verbish ? "，" : pick(rng, ["以及", "和", "，"]); // v0.8.5 去掉"跟"：「X拓宽跟搭台子」式连读拗口且命中接跟探针
     return run.slice(0, last) + joint + run.slice(last + 1);
   });
 }
@@ -161,11 +164,13 @@ function boostBurstiness(
   p: number,
   style: RewriteStyle = "casual",
 ): string {
+  // v0.9-D：含剧本【场景/人物/背景…】块头行的段落跳过节奏注入（块头不得被塞极短语气句）
+  const isScenePara = (para: string) => para.split("\n").some((ln) => isSceneBlockLine(ln));
   let result: string;
   if (text.includes("\n")) {
     result = text
       .split(/\n\n+/)
-      .map((para) => boostBurstinessSingle(para, rng, p))
+      .map((para) => (isScenePara(para) ? para : boostBurstinessSingle(para, rng, p)))
       .join("\n\n");
   } else {
     result = boostBurstinessSingle(text, rng, p);
@@ -174,7 +179,7 @@ function boostBurstiness(
   if (result.includes("\n")) {
     result = result
       .split(/\n\n+/)
-      .map((para) => boostBurstinessFragments(para, usedFrags, style))
+      .map((para) => (isScenePara(para) ? para : boostBurstinessFragments(para, usedFrags, style)))
       .join("\n\n");
   } else {
     result = boostBurstinessFragments(result, usedFrags, style);
@@ -188,6 +193,9 @@ function boostBurstinessFragments(
   style: RewriteStyle = "casual",
 ): string {
   if (style !== "casual") return text;
+  // v0.9.4 P2 跨轮垫词饱和守卫：文本已有垫词达到上限后不再注入碎片——
+  // 串联迭代实测（垫词 12→35）堆积全部来自各注入点无跨轮记忆。
+  if (countPadHeads(text) >= PAD_INJECT_CAP) return text;
   const sentences = splitSentences(text);
   const stats = sentenceStats(text);
   if (stats.count < 4) return text;
@@ -205,6 +213,23 @@ function boostBurstinessFragments(
   let inserted = 0;
   const gap = Math.ceil(sentences.length / 4);
   for (let i = gap; i < sentences.length && inserted < 3; i += gap) {
+    // v0.8.9 P0：逻辑锚点处不插碎片。
+    // 把「就这样。」「你懂的。」塞在序号句/因果句与其承接句之间，会在论证链上切出断口，
+    // 读感像被人中途插了句不相干的话——碎片只在普通叙述句之间落点。
+    // 注意用「顺延到下一个安全位」而非直接放弃：碎片本身是拉高句长方差的主力，
+    // 少插会让节奏重新落入 AI 的均匀带（scan-bugs v5.3 会报警）。
+    const anchorAt = (k: number) => LOGIC_ANCHOR_HEAD_RE.test((sentences[k] ?? "").trim());
+    let slot = i;
+    if (anchorAt(i - 1) || anchorAt(i)) {
+      slot = -1;
+      for (let k = i + 1; k < sentences.length; k++) {
+        if (!anchorAt(k - 1) && !anchorAt(k)) {
+          slot = k;
+          break;
+        }
+      }
+      if (slot === -1) continue;
+    }
     let frag = shortFrags[inserted % shortFrags.length];
     let g = 0;
     while ((usedFrags.has(frag) || sentences.some((s) => s === frag)) && g < shortFrags.length) {
@@ -212,9 +237,9 @@ function boostBurstinessFragments(
       frag = shortFrags[(inserted + g) % shortFrags.length];
     }
     usedFrags.add(frag);
-    sentences.splice(i, 0, frag);
+    sentences.splice(slot, 0, frag);
     inserted++;
-    i++;
+    i = slot + 1;
   }
   return sentences.join("");
 }
@@ -242,9 +267,20 @@ function boostBurstinessSingle(text: string, _rng: () => number, _p: number): st
    P0 结构级去味（朱雀结构特征影响最大的杠杆）
    ========================================================= */
 
+/**
+ * v0.8.9 P0 逻辑锚点签名：句首为序号/因果/承接标记的句子，其前后不插入口语碎片，
+ * 也不参与句序重排（重排侧见 SEQUENCE_HEAD_RE）。覆盖「一是…」「因为…」「所以…」等
+ * 一旦被打断就伤及论证链的句式。
+ */
+const LOGIC_ANCHOR_HEAD_RE =
+  /^(?:一是|二是|三是|四是|其一|其二|其三|第一|第二|第三|首先|其次|再次|最后|末了|因为|由于|之所以|所以|因此|因而|但是|但|不过|然而|总之|综上|综上所述|总而言之|总的来看)/;
+
 /** 承接词黑名单：以这些词开头的句子「必须」等在前句之后，不能参与重排（否则出病句） */
 const SEQUENCE_HEAD_RE =
-  /^(?:其次|最后|另一方面|另外|此外|而且|更重要的是|因此|于是|这样一来|所以|但是|但|不过|然而|总之|总的来看|归根结底|说白了|也就是说|换句话说|话又说回来|不仅如此|进一步说|再者|再看|反过来看|客观来讲|严格来说|真要说起来|往深了说|往实了说|值得注意的是|值得一提的是|尤为关键的是|尤为重要的是|不容忽视的是)(?:[，、]|$)/;
+  // v0.8.9 P0 补充：序号锚词（一是/二是/第一/第二）与因果锚词（因为/由于）原本不在黑名单，
+  // 实测工作周报的「一是把接口迁到新网关上了，比预想的麻烦」被拆句后互换，
+  // 结果句跑到原因句之前，因果链断裂——这类句子一律不参与重排。
+  /^(?:其次|最后|另一方面|另外|此外|而且|更重要的是|因此|于是|这样一来|所以|但是|但|不过|然而|总之|总的来看|归根结底|说白了|也就是说|换句话说|话又说回来|不仅如此|进一步说|再者|再看|反过来看|客观来讲|严格来说|真要说起来|往深了说|往实了说|值得注意的是|值得一提的是|尤为关键的是|尤为重要的是|不容忽视的是|因为|由于|之所以|一是|二是|三是|四是|其一|其二|其三|第一|第二|第三|首先|末了|到头来)/;
 
 /** 总结句尾签名：全文/全段最后一句常以这些短语收束 = 典型「总-分-总」的「尾总」骨架 */
 const SUMMARY_TAIL_SIGS = [
@@ -271,10 +307,22 @@ const SUMMARY_TAIL_SIGS = [
 /** 判断某一句能否自由移动（不承载序列/因果/承接依赖） */
 function sentenceIsFreestanding(s: string): boolean {
   if (SEQUENCE_HEAD_RE.test(s)) return false;
+  // v0.9 专家修复 P4 长尾：QA 问句与其答案拆散后各自漂移
+  //（「例子呢？」留在原位而「我随便举一个你就懂了。」被换走）——
+  // QA 问句头与答案头一律视为非自由句，保持问答绑定
+  if (QA_QUESTION_HEAD_RE.test(s) || QA_ANSWER_HEAD_RE.test(s)) return false;
   const plain = s.replace(/^[，。！？!?；；\s]+/, "");
   if (/^(：|——)/.test(plain)) return false;
   return true;
 }
+
+/** 自问自答问句头签名（与 injectSelfQA 模板池对齐） */
+const QA_QUESTION_HEAD_RE =
+  /^(?:为啥这么说|真的假的|你可能会问|不信|例子呢|有人要抬杠了|这话是不是太绝对|凭什么这么说|听着有点绕|这有什么要紧的|为什么呢|这么说有依据吗|是不是只有这一种解释|这意味着什么|这个判断可靠吗|有没有反例)/;
+/** v0.9 专家修复 P4 长尾：答案句同样锁定——QA 对被拆到两段（问句留原位、
+ *  答案句被换走）等于注入了一个悬空的半截对话，比不复读更刺眼 */
+const QA_ANSWER_HEAD_RE =
+  /^(?:因为事实就摆在眼前|这事儿还真不是我瞎编|其实不然|那你自己试试就知道了|我随便举一个你就懂了|别急，我慢慢跟你捋|要紧的在后头|往下看就明白了|换个说法就清楚了|原因其实不复杂|有，而且不难验证|未必，但这一种最直接|至少目前的数据支持它|有，但不足以推翻大方向)/;
 
 /* ---------------- P0-1：段内句序安全重排 ---------------- */
 export function shuffleSentencesSafe(
@@ -285,23 +333,19 @@ export function shuffleSentencesSafe(
   if (intensity < 0.55) return sentences;
   if (sentences.length < 4) return sentences;
   const out = sentences.slice();
-  const freeIdx: number[] = [];
-  for (let i = 0; i < out.length; i++) {
-    if (sentenceIsFreestanding(out[i])) freeIdx.push(i);
-  }
-  if (freeIdx.length < 2) return out;
-  const swapBudget = Math.max(1, Math.floor(out.length * 0.25 * intensity));
+  // v0.9 专家修复 P1（句序）：原实现允许任意两个"自由句"远距离互换，
+  // 实测把「28nm 背景→7nm 转折→3nm 引入」的因果链打乱成不可读乱序。
+  // 自由句判定（无承接词头）挡不住"语义依赖但形式自由"的句子。
+  // 现改为只允许「相邻句互换」：足以打破句长均匀指纹，论述顺序基本保持。
+  const swapBudget = Math.max(1, Math.floor(out.length * 0.2 * intensity));
   let done = 0;
-  for (let attempt = 0; attempt < swapBudget * 3 && done < swapBudget; attempt++) {
-    const a = freeIdx[Math.floor(rng() * freeIdx.length)];
-    const b = freeIdx[Math.floor(rng() * freeIdx.length)];
-    if (a === b) continue;
-    if (Math.abs(a - b) < 2 && rng() < 0.5) continue;
-    const edgeDiscount =
-      (a === 0 || a === out.length - 1 ? 0.5 : 1) *
-      (b === 0 || b === out.length - 1 ? 0.5 : 1);
-    if (rng() > edgeDiscount) continue;
-    [out[a], out[b]] = [out[b], out[a]];
+  for (let attempt = 0; attempt < swapBudget * 4 && done < swapBudget; attempt++) {
+    const i = 1 + Math.floor(rng() * (out.length - 1));
+    const j = rng() < 0.5 ? i - 1 : i + 1;
+    if (j < 0 || j >= out.length) continue;
+    if (!sentenceIsFreestanding(out[i]) || !sentenceIsFreestanding(out[j])) continue;
+    if (rng() < 0.5) continue;
+    [out[i], out[j]] = [out[j], out[i]];
     done++;
   }
   return out;
@@ -312,6 +356,7 @@ export function breakEnumerationStructure(
   sentences: string[],
   rng: () => number,
   intensity: number,
+  style: RewriteStyle = "casual",
 ): string[] {
   if (sentences.length < 2) return sentences;
   if (intensity < 0.5) return sentences;
@@ -329,7 +374,22 @@ export function breakEnumerationStructure(
   }
   if (members.length < 2) return sentences;
   const out = sentences.slice();
-  // (a) 去序列标记：显式切片 + 随机换为非序列口语承接头
+  // (a) 去序列标记：显式切片 + 换为非序列承接头
+  // v0.9 专家修复 P5：academic 文风禁用口语承接头（哦对了/然后呢），用书面过渡词
+  const HEADS_BY_STYLE: Record<RewriteStyle, string[]> = {
+    casual: [
+      "再说，",
+      "还有，",
+      "然后呢，",
+      "顺带一提，",
+      "哦对了，",
+      "再补一句，",
+      "换个角度，",
+      "",
+    ],
+    plain: ["再者，", "同时，", "此外，", "从另一个角度看，", ""],
+    academic: ["此外，", "在此基础上，", "进一步看，", "另一层面，", ""],
+  };
   for (const mi of members) {
     for (const pat of [enumStart, memberRe]) {
       const m = out[mi].match(pat);
@@ -337,16 +397,7 @@ export function breakEnumerationStructure(
         const cut = m[0].length;
         const rest = out[mi].slice(cut).replace(/^[，、]/, "");
         if (rng() < 0.4 + 0.3 * intensity) {
-          const head = pick(rng, [
-            "再说，",
-            "还有，",
-            "然后呢，",
-            "顺带一提，",
-            "哦对了，",
-            "再补一句，",
-            "换个角度，",
-            "",
-          ]);
+          const head = pick(rng, HEADS_BY_STYLE[style]);
           out[mi] = head + rest;
         } else {
           out[mi] = rest;
@@ -355,19 +406,9 @@ export function breakEnumerationStructure(
       }
     }
   }
-  // (b) 高强度：乱序成员数组（首句 60% 保留原位，避免语义崩坏）
-  if (intensity >= 0.7 && members.length >= 3) {
-    const sub = members.map((i) => out[i]);
-    const keepFirst = rng() < 0.6;
-    const startJ = keepFirst ? 1 : 0;
-    for (let i = sub.length - 1; i > startJ; i--) {
-      if (rng() < 0.75 + 0.2 * intensity) {
-        const j = startJ + Math.floor(rng() * (i - startJ + 1));
-        [sub[i], sub[j]] = [sub[j], sub[i]];
-      }
-    }
-    for (let k = 0; k < members.length; k++) out[members[k]] = sub[k];
-  }
+  // v0.9 专家修复 P1：删除高强度「乱序成员数组」步骤——列举项之间的
+  // 顺序承载内容逻辑（如"首先成本、其次良率"），乱序后语义颠倒。
+  // 序列标记清除本身已打散"首先/其次/最后"骨架指纹，顺序保持原文。
   return out;
 }
 
@@ -432,16 +473,27 @@ export function resegmentParagraphsAggressive(
     // (a) 相邻两段都 AI 典型 → 合并（概率 + 碎碎念桥接）
     if (
       next !== undefined &&
-      ps.sentences >= 2 && ps.sentences <= 4 &&
-      ps.chars >= 50 && ps.chars <= 180 &&
-      ns.sentences >= 2 && ns.sentences <= 4 &&
-      ns.chars >= 50 && ns.chars <= 180 &&
+      ps.sentences >= 2 &&
+      ps.sentences <= 4 &&
+      ps.chars >= 50 &&
+      ps.chars <= 180 &&
+      ns.sentences >= 2 &&
+      ns.sentences <= 4 &&
+      ns.chars >= 50 &&
+      ns.chars <= 180 &&
       (needForce ? !forceOneDone && rng() < 0.85 : rng() < 0.35 + 0.35 * intensity)
     ) {
       let merged = cur + "\n\n" + next;
       if (rng() < 0.55 + 0.25 * intensity) {
         const bridge = pick(rng, [
-          "是这个理。", "嗯，对。", "你别说。", "哈哈。", "懂吧。", "", "", "",
+          "是这个理。",
+          "嗯，对。",
+          "你别说。",
+          "哈哈。",
+          "懂吧。",
+          "",
+          "",
+          "",
         ]);
         if (bridge) merged = cur + "\n\n" + bridge + "\n\n" + next;
       }
@@ -452,12 +504,15 @@ export function resegmentParagraphsAggressive(
     }
     // (b) 当前段 AI 典型 → 拆两段
     if (
-      ps.chars >= 80 && ps.chars <= 220 && ps.sentences >= 3 &&
+      ps.chars >= 80 &&
+      ps.chars <= 220 &&
+      ps.sentences >= 3 &&
       (needForce ? !forceOneDone && rng() < 0.85 : rng() < 0.3 + 0.35 * intensity)
     ) {
       const sents = splitSentences(cur);
       const splitIdx = Math.max(
-        1, Math.min(sents.length - 2, Math.ceil(sents.length * (0.35 + rng() * 0.3))),
+        1,
+        Math.min(sents.length - 2, Math.ceil(sents.length * (0.35 + rng() * 0.3))),
       );
       const first = sents.slice(0, splitIdx).join("");
       const second = sents.slice(splitIdx).join("");
@@ -521,7 +576,8 @@ function fixParallelRun(
 ): void {
   const modified = runSents.slice();
   const changeCount = Math.max(
-    1, Math.min(2, Math.ceil(modified.length * (0.35 + 0.25 * intensity))),
+    1,
+    Math.min(2, Math.ceil(modified.length * (0.35 + 0.25 * intensity))),
   );
   const changed = new Set<number>();
   for (let c = 0; c < changeCount; c++) {
@@ -535,13 +591,7 @@ function fixParallelRun(
     const roll = rng();
     // 破坏 1：前加自问自答
     if (roll < 0.3 && intensity >= 0.65) {
-      const q = pick(rng, [
-        "为什么这么说？",
-        "真的吗？",
-        "有啥道理？",
-        "这是为啥？",
-        "能信？",
-      ]);
+      const q = pick(rng, ["为什么这么说？", "真的吗？", "有啥道理？", "这是为啥？", "能信？"]);
       modified[pickIdx] = q + modified[pickIdx];
     } else if (roll < 0.65) {
       // 破坏 2：把该句改成反问句（能安全改的句式）或前插不一致开头
@@ -550,25 +600,13 @@ function fixParallelRun(
       if (canFlip) {
         modified[pickIdx] = s.slice(0, -1) + pick(rng, ["吗？", "吧？", "不成？"]);
       } else {
-        modified[pickIdx] = pick(rng, [
-          "哦对了，",
-          "再说，",
-          "你想想，",
-          "等一下，",
-          "我是说，",
-          "",
-        ]) + s;
+        modified[pickIdx] =
+          pick(rng, ["哦对了，", "再说，", "你想想，", "等一下，", "我是说，", ""]) + s;
       }
     } else {
       // 破坏 3：前插碎碎念短语
-      modified[pickIdx] = pick(rng, [
-        "是吧，",
-        "哦对，",
-        "等一下，",
-        "我是说，",
-        "哦不对，",
-        "",
-      ]) + modified[pickIdx];
+      modified[pickIdx] =
+        pick(rng, ["是吧，", "哦对，", "等一下，", "我是说，", "哦不对，", ""]) + modified[pickIdx];
     }
   }
   modified.forEach((m) => out.push(m));
@@ -579,23 +617,47 @@ export function injectSelfQA(
   sentences: string[],
   rng: () => number,
   intensity: number,
+  style: RewriteStyle = "casual",
 ): string[] {
   if (intensity < 0.65) return sentences;
   if (sentences.length < 5) return sentences;
-  const budget = intensity >= 0.85 ? 2 : 1;
-  const out = sentences.slice();
-  let done = 0;
-  for (let attempt = 0; attempt < 6 && done < budget; attempt++) {
-    const pos = 1 + Math.floor(rng() * (out.length - 2));
-    if (!sentenceIsFreestanding(out[pos])) continue;
-    const qa = pick(rng, [
+  // v0.9 专家修复 P4：模板池从 6 条扩到 10 条——池子过小导致同模板跨文本复读，
+  // "不信？""例子呢？我随便举一个你就懂了"成了 QuAiWei 的出厂指纹。
+  // v0.9 专家修复 P5：plain 用克制型（无表演性碎句），academic 由调用方禁用（本函数兜底也拦）。
+  const POOLS: Record<RewriteStyle, [string, string][]> = {
+    casual: [
       ["为啥这么说？", "因为事实就摆在眼前。"],
       ["真的假的？", "这事儿还真不是我瞎编。"],
       ["你可能会问——", "这不是理所当然的吗？其实不然。"],
       ["不信？", "那你自己试试就知道了。"],
       ["例子呢？", "我随便举一个你就懂了。"],
       ["有人要抬杠了——", "别急，我慢慢跟你捋。"],
-    ]);
+      ["这话是不是太绝对？", "细想一下还真不是。"],
+      ["凭什么这么说？", "往下看就明白了。"],
+      ["听着有点绕？", "换个说法就清楚了。"],
+      ["这有什么要紧的？", "要紧的在后头。"],
+    ],
+    plain: [
+      ["为什么呢？", "原因其实不复杂。"],
+      ["这么说有依据吗？", "有，而且不难验证。"],
+      ["是不是只有这一种解释？", "未必，但这一种最直接。"],
+      ["这意味着什么？", "往下看会更清楚。"],
+      ["这个判断可靠吗？", "至少目前的数据支持它。"],
+      ["有没有反例？", "有，但不足以推翻大方向。"],
+    ],
+    academic: [],
+  };
+  const pool = POOLS[style];
+  if (pool.length === 0) return sentences;
+  // v0.9 专家修复 P4：0.85+ 档注入 2 次改为全文 1 次——两处自问自答
+  // 在短文本里已是"连珠炮"，真人频率远低于此。
+  const budget = 1;
+  const out = sentences.slice();
+  let done = 0;
+  for (let attempt = 0; attempt < 6 && done < budget; attempt++) {
+    const pos = 1 + Math.floor(rng() * (out.length - 2));
+    if (!sentenceIsFreestanding(out[pos])) continue;
+    const qa = pick(rng, pool);
     out.splice(pos + 1, 0, qa[0] + qa[1]);
     done++;
   }
@@ -617,11 +679,7 @@ const TYPO_PAIRS: [RegExp, string[]][] = [
 ];
 const TYPO_MAX_GLOBAL = 2;
 
-export function injectHumanTypos(
-  text: string,
-  rng: () => number,
-  intensity: number,
-): string {
+export function injectHumanTypos(text: string, rng: () => number, intensity: number): string {
   if (intensity < 0.7) return text;
   // P8 场景块保真：场景行区间不计入命中——错别字单字替换会破坏【场景：…】块头，
   // 同时保留全文级 TYPO_MAX_GLOBAL 预算语义不变
@@ -658,10 +716,53 @@ export function injectHumanTypos(
    竞品移植 & 其他确定性清理
    ========================================================= */
 
-function stripCJKEdgeSpaces(text: string): string {
+/**
+ * v0.8.9 P0：改写为「尊重原文排版习惯」。
+ *
+ * 原实现无条件删除中英/中数之间的空格，对技术文档是破坏性的：
+ *   「从 Webpack 迁移到 Vite」→「从Webpack迁移到Vite」
+ *   「第 47 分钟」→「第47分钟」、「手动 scp」→「手动scp」
+ * 既毁排版规范，也让 bundle-based / optimizeDeps.include 这类术语的可读性崩掉。
+ * 而空格是排版习惯而非 AI 语义特征，删掉对降分的边际收益远小于破坏。
+ *
+ * 现行规则：原文中英之间带空格 = 作者有排版意识 → 原样保留；
+ *           原本就不带空格 → 无空格可删，剥离结果为空操作。
+ *
+ * v0.8.9 补充：初版按"≥3 处混排空格才算技术排版"分级，但实测豆瓣影评这类短文
+ * 只有一两处（"第 47 分钟"）照样会被删。既然空格不是可靠的 AI 语义特征，
+ * 分级阈值没有收益，改为完全跟随原文——与 LLM 侧 SYSTEM_PROMPT 第 18 条口径一致。
+ */
+const TYPED_SPACING_MIN = 1;
+/** aggressive=true 恢复无条件剥离（v0.8.8 及之前行为），仅供回归探针使用 */
+function stripCJKEdgeSpaces(text: string, aggressive = false): string {
+  const typed = (text.match(/[\u4e00-\u9fa5]\s[A-Za-z0-9]|[A-Za-z0-9]\s[\u4e00-\u9fa5]/g) || [])
+    .length;
+  if (!aggressive && typed >= TYPED_SPACING_MIN) return text;
   return text
     .replace(/([\u4e00-\u9fa5，。；：、])[ \t]+(?=[A-Za-z0-9])/g, "$1")
     .replace(/([A-Za-z0-9%）)\]])[ \t]+(?=[\u4e00-\u9fa5])/g, "$1");
+}
+
+/**
+ * v0.8.9：LLM 改写稿的中英/中数空格回填（stripCJKEdgeSpaces 的反操作）。
+ *
+ * 背景：LLM 改写倾向压掉中英之间的空格（"Webpack是""Vite走""1200个模块"）——
+ * 即便把"跟随原文排版"写进提示词铁律，模型仍只对"数字+中文"敏感，英文术语旁照删。
+ * 这与本地引擎"尊重原文排版"的口径不一致，也让技术文档可读性受损。
+ *
+ * 判定：仅当原文本身是"带空格排版"时才回填；原文从不加空格的，原样返回。
+ * 幂等：已有空格的位置不会重复插入（正则只匹配紧贴的中英边界）。
+ */
+export function restoreMixedSpacing(original: string, rewritten: string): string {
+  const typed = (original.match(/[\u4e00-\u9fa5]\s[A-Za-z0-9]|[A-Za-z0-9]\s[\u4e00-\u9fa5]/g) || [])
+    .length;
+  if (typed < 1) return rewritten;
+  // 只在「汉字 ↔ 字母/数字」之间插入。中文标点（，。；：、）与括号后
+  // 一律不加空格——初版把标点也算进字符类，结果产出"， 1200 个模块""。 Webpack 是"
+  // 这类错误空格，比不加还糟。
+  return rewritten
+    .replace(/([\u4e00-\u9fa5])(?=[A-Za-z0-9])/g, "$1 ")
+    .replace(/([A-Za-z0-9])(?=[\u4e00-\u9fa5])/g, "$1 ");
 }
 
 function reframeConcessives(text: string, rng: () => number, p: number): string {
@@ -746,13 +847,19 @@ export function structuralShuffleParagraph(
   paragraph: string,
   rng: () => number,
   intensity: number,
-  opts: { zhuqueMode?: boolean; expoForceP3?: boolean; skipSceneInject?: boolean } = {},
+  opts: {
+    zhuqueMode?: boolean;
+    expoForceP3?: boolean;
+    skipSceneInject?: boolean;
+    style?: RewriteStyle;
+  } = {},
 ): string {
   if (intensity < 0.5) return paragraph;
   const sents = splitSentences(paragraph);
   if (sents.length < 3) return paragraph;
+  const style = opts.style ?? "casual";
   let working = sents;
-  working = breakEnumerationStructure(working, rng, intensity);
+  working = breakEnumerationStructure(working, rng, intensity, style);
   const { sentences: afterSummary, splitAfter } = breakSummaryTail(working, rng, intensity);
   working = deParallelizeStructure(afterSummary, rng, intensity);
   // 2026-08-26 v2 P3-1/P3-2：论说结构语义级拆毁（插叙/颠倒顺序/拆编号）
@@ -760,7 +867,8 @@ export function structuralShuffleParagraph(
   //           → 当 genre==main 且强度≥0.75 时，即使 expo 分略低于 0.55 也拆（覆盖边缘论说文）
   const zhuqueBoost = opts.zhuqueMode ?? false;
   const expoScore = classifyExpositionScore(paragraph);
-  const runP3 = zhuqueBoost && (expoScore >= 0.55 || (opts.expoForceP3 === true && expoScore >= 0.35));
+  const runP3 =
+    zhuqueBoost && (expoScore >= 0.55 || (opts.expoForceP3 === true && expoScore >= 0.35));
   if (runP3) {
     working = dismantleExpositionTrilogy(working, rng, intensity);
     working = hardNumberedEnumerationShuffle(working, rng, intensity);
@@ -772,10 +880,11 @@ export function structuralShuffleParagraph(
   working = shuffleSentencesSafe(working, rng, intensity);
   // P7-E：剧本【场景/人物/背景】段落跳过自问自答注入 + 错别字注入（由调用者外层也过滤 injectHumanTypos）
   // 按行扫描判定：前置注入可能把多行折叠成单段并污染段首，^ 锚定的整段匹配会失配击穿保护
-  const sceneBlockPara =
-    (opts.skipSceneInject ?? false) && paraHasSceneBlock(paragraph);
-  if (!sceneBlockPara) {
-    working = injectSelfQA(working, rng, intensity);
+  // v0.9 专家修复 P5：academic 文风禁用自问自答（「不信？」「例子呢？」是纯口语装置，
+  // academic 承诺仅消结构规律与套话，不得引入口语注入）
+  const sceneBlockPara = (opts.skipSceneInject ?? false) && paraHasSceneBlock(paragraph);
+  if (!sceneBlockPara && style !== "academic") {
+    working = injectSelfQA(working, rng, intensity, style);
   }
   if (splitAfter !== undefined && splitAfter > 0 && splitAfter < working.length - 1) {
     const a = working.slice(0, splitAfter + 1).join("");
@@ -812,13 +921,10 @@ export function dismantleExpositionTrilogy(
   const out = sentences.slice();
   const picks = triggerIdxs.slice(0, 3);
   const [a, b, c] = picks;
-  // (1) 打乱这 3 句顺序
+  // v0.9 专家修复 P1（句序）：删除「打乱 3 句顺序」步骤。实测乱序把
+  // 论述链（背景→转折→引入）颠倒成不可读文本；套话清除 + 头部改写本身
+  // 已足够破坏"首先/其次/最后"的严格三部曲指纹，顺序保持原文。
   const trio = [out[a], out[b], out[c]];
-  for (let round = 0; round < 2 + Math.floor(intensity * 2); round++) {
-    const i = Math.floor(rng() * 3);
-    const j = Math.floor(rng() * 3);
-    [trio[i], trio[j]] = [trio[j], trio[i]];
-  }
   // (2) 第 1 条：改第一人称经验插叙
   const firstPersonHeads = [
     "其实我自己之前就碰到过类似的情况——",
@@ -853,19 +959,8 @@ export function dismantleExpositionTrilogy(
   out[a] = trio[0];
   out[b] = trio[1];
   out[c] = s3;
-  // (5) 若强度 0.9+：把这 3 句中随机 1 句的位置与句组外最近的"自由句"互换
-  if (intensity >= 0.9) {
-    for (const src of picks) {
-      const neighbors = [src - 2, src + 2].filter(
-        (n) => n >= 0 && n < out.length && !triggerIdxs.includes(n),
-      );
-      if (neighbors.length) {
-        const dst = pick(rng, neighbors);
-        [out[src], out[dst]] = [out[dst], out[src]];
-        break;
-      }
-    }
-  }
+  // v0.9 专家修复 P1：删除 0.9+ 档「与句组外自由句互换位置」——
+  // 跨句组换位实测造成段内因果链断裂，收益（指纹扰动）远小于代价。
   return out;
 }
 
@@ -878,8 +973,7 @@ export function hardNumberedEnumerationShuffle(
   intensity: number,
 ): string[] {
   if (intensity < 0.7 || sentences.length < 2) return sentences;
-  const NUM =
-    /^[\s(（]*\s*(?:\d+|[①②③④⑤⑥⑦⑧⑨⑩一二三四五六七八九十]+[.、:：)）]\s*)/;
+  const NUM = /^[\s(（]*\s*(?:\d+|[①②③④⑤⑥⑦⑧⑨⑩一二三四五六七八九十]+[.、:：)）]\s*)/;
   const hits: number[] = [];
   for (let i = 0; i < sentences.length; i++) {
     if (NUM.test(sentences[i].trim())) hits.push(i);
@@ -895,9 +989,12 @@ export function hardNumberedEnumerationShuffle(
   body0 = body0.replace(/[。！？!?]$/, "");
   if (rng() < 0.7) {
     const parenth = "（顺便提一句——" + body0 + "）" + punct;
-    const neighbor = (idx0 - 1 >= 0 && !hits.includes(idx0 - 1))
-      ? idx0 - 1
-      : (idx0 + 1 < out.length ? idx0 + 1 : idx0);
+    const neighbor =
+      idx0 - 1 >= 0 && !hits.includes(idx0 - 1)
+        ? idx0 - 1
+        : idx0 + 1 < out.length
+          ? idx0 + 1
+          : idx0;
     out[neighbor] = out[neighbor].replace(/\s*$/, "") + parenth;
     out[idx0] = "";
   }
@@ -942,7 +1039,7 @@ export function enforceParagraphLeadSentVariance(
   intensity: number,
 ): string {
   if (intensity < 0.7) return text;
-  const paras = text.split(/\n\n+/).filter(p => p.trim().length > 0);
+  const paras = text.split(/\n\n+/).filter((p) => p.trim().length > 0);
   if (paras.length < 2) return text;
   const leadLens = paras.map((p) => {
     const first = splitSentences(p)[0] || "";
@@ -1025,41 +1122,30 @@ function clampAvgSentencesInBlock(text: string, targetAvg: number, maxCuts: numb
     if (stats.avg <= targetAvg) break;
     const sents = splitSentences(working);
     // 找：最长的、内部有逗号/分号（可切段点）的句子
-    const rank = sents.map((s, i) => {
-      const pure = s.replace(/[\s。！？!?…—\-，、；：""''「」（）《》【】]/g, "");
-      return { i, s, L: pure.length, hasCut: /[，；、：]/.test(s) };
-    }).filter(x => x.hasCut && x.L > targetAvg + 2).sort((a, b) => b.L - a.L);
+    const rank = sents
+      .map((s, i) => {
+        const pure = s.replace(/[\s。！？!?…—\-，、；：""''「」（）《》【】]/g, "");
+        return { i, s, L: pure.length, hasCut: /[，；、：]/.test(s) };
+      })
+      .filter((x) => x.hasCut && x.L > targetAvg + 2)
+      .sort((a, b) => b.L - a.L);
     if (rank.length === 0) break;
-    const t = rank[0];
-    // 在 s 中间位置的「，；：」切段：前半 + "。"(变成独立句) + 后半（保留原句尾标点）
-    // v0.8.5 使役守卫：切出的后半若以「让/使/帮/叫」开头（承接前半宾语作主语，
-    // 如「降低阅读门槛，让更多人…」），切断即产生无主句病句——收集全部候选切点，
-    // 按 |k - mid| 排序取最近的可用点；无可切点则放弃。
-    const mid = Math.floor(t.s.length / 2);
-    const allCuts: number[] = [];
-    for (let k = 0; k < t.s.length - 1; k++) {
-      if ("，；：、".includes(t.s[k])) allCuts.push(k);
-    }
-    // 括号深度表（v0.8.6 括号守卫）：括号内的切点会把「（如中芯国际）」拆成
-    // 「（如中芯国际。」+「）」残段——CLI 实测 0.9+朱雀档的高强度切句踩到
-    const depth = new Array<number>(t.s.length).fill(0);
-    {
-      let d = 0;
-      for (let k = 0; k < t.s.length; k++) {
-        if ("（（《【「".includes(t.s[k])) d++;
-        depth[k] = d;
-        if ("））》】」".includes(t.s[k])) d = Math.max(0, d - 1);
+    // v0.9 专家修复 P2/P3：逐候选找切点（原版只试最长一句，守卫否决后整轮放弃，
+    // avgLen 压不下去——O3 实测 avgLen 32 卡死）。最多看 4 条长句。
+    let t: { i: number; s: string } | null = null;
+    let cutIdx = -1;
+    for (let k = 0; k < Math.min(4, rank.length); k++) {
+      const cand = rank[k];
+      const m = findGuardedCutNear(cand.s, Math.floor(cand.s.length / 2));
+      if (m !== -1) {
+        t = cand;
+        cutIdx = m;
+        break;
       }
     }
-    const inBracket = (k: number) => depth[k] > 0;
-    allCuts.sort((a, b) => Math.abs(a - mid) - Math.abs(b - mid));
-    const isCutOK = (k: number) =>
-      !inBracket(k) && // 括号内不切
-      !/^[让使帮叫]/.test(t.s.slice(k + 1).replace(/[。！？!?…]$/, "").trim());
-    const cutIdx = allCuts.find(isCutOK) ?? -1;
-    if (cutIdx < 0) break;
-    const front = t.s.slice(0, cutIdx);   // 例如"根据报告显示，今年增长明显"
-    const rest  = t.s.slice(cutIdx + 1);  // "今年增长明显。"
+    if (!t || cutIdx < 0) break;
+    const front = t.s.slice(0, cutIdx); // 例如"根据报告显示，今年增长明显"
+    const rest = t.s.slice(cutIdx + 1); // "今年增长明显。"
     // 把逗号换成句号；后半首字母大写对中文无所谓
     const newSents = [front + "。", rest];
     // 回写：sents 数组位置 t.i 替换为 2 条
@@ -1111,11 +1197,25 @@ const PARTICLE_SENT_RE = /^(?:对哦|是啊|好吧|[嗯嗨诶咳呵啧呣哦啊�
 /** 句尾挂语气词（"好评哦。""韧性好吧。"）：锚点注入器惯用手法——插在句末标点前 */
 const PARTICLE_SUFFIX_RE = /(?:对哦|是啊|好吧|[嗯嗨诶咳呵啧呣哦啊行])$/;
 
-export function capParticleSentenceDensity(text: string, maxPerPara = 2): string {
+export function capParticleSentenceDensity(text: string, maxPerPara = 1, stripSuffix = true): string {
+  // v0.9 专家修复 P3：每段独立极短语气句上限 2 → 1。实测 0.9 档输出段尾
+  // 「呵。啧。」「行。好吧。呵。」成串——每段 2 条在 3 段短文里就是 6 条，
+  // 堆积密度远超真人（真人每段至多 1 条口头语，且不是每段都有）。
+  // stripSuffix=false：只收独立语气句、保留句尾挂词（最终收口用，防止把
+  // burstiness 兜底刚拉起的句长方差又拍平）。
   return text
     .split(/\n\n+/)
     .map((para) => {
       const sents = splitSentences(para);
+      // v0.9 长尾：整段只剩短碎句（重切/桥接把正文抽走后留下「道理是这个道理。行。」
+      // 式空段）→ 整段丢弃（全段句子均 ≤8 字即视为无正文残留）
+      const bareAll = sents.filter((s) => s.trim());
+      if (
+        bareAll.length > 0 &&
+        bareAll.every((s) => s.replace(/[\s。！？!?…，、；：]/g, "").length <= 8)
+      ) {
+        return "";
+      }
       const out: string[] = [];
       let kept = 0;
       for (const s of sents) {
@@ -1127,7 +1227,7 @@ export function capParticleSentenceDensity(text: string, maxPerPara = 2): string
         const hasSuffix = core.length > 6 && PARTICLE_SUFFIX_RE.test(core);
         if (kept >= maxPerPara) {
           if (isStandalone) continue; // 超额独立语气句：整句丢弃
-          if (hasSuffix) {
+          if (hasSuffix && stripSuffix) {
             // 超额句尾挂词：剥语气词本体、保句子（"好评哦。"→"好评。"）
             const stripped = core.replace(PARTICLE_SUFFIX_RE, "").replace(/[，、；：,]$/, "。");
             out.push(stripped + trimmed.slice(core.length));
@@ -1144,13 +1244,24 @@ export function capParticleSentenceDensity(text: string, maxPerPara = 2): string
     .join("\n\n");
 }
 
-export function boostBurstinessIfLow(text: string, rng: () => number, targetCv = MIN_BURSTINESS_CV, maxCuts = 12): string {
+export function boostBurstinessIfLow(
+  text: string,
+  rng: () => number,
+  targetCv = MIN_BURSTINESS_CV,
+  maxCuts = 12,
+  style: RewriteStyle = "casual",
+): string {
+  // v0.9 专家修复 P5：academic 文风禁用极短语气锚（「呵。」「啧。」是纯口语装置）。
+  // CV 兜底交给 clampAvgSentenceLenUnder25 的纯切句（不打语气词）。
+  if (style === "academic") return text;
+  // v0.9-D：含剧本【场景/人物/背景…】块头行的段落跳过极短锚注入（块头不得被塞"啧。呣。"）
+  const isScenePara = (p: string) => p.split("\n").some((ln) => isSceneBlockLine(ln));
   // P7-F 段落感知：同 clampAvgSentenceLenUnder25，避免 splitSentences→join 合并段落
   const result = !text.includes("\n\n")
     ? boostBurstinessInBlock(text, rng, targetCv, maxCuts)
     : text
         .split(/\n\n+/)
-        .map((p) => boostBurstinessInBlock(p, rng, targetCv, maxCuts))
+        .map((p) => (isScenePara(p) ? p : boostBurstinessInBlock(p, rng, targetCv, maxCuts)))
         .join("\n\n");
   // v0.8.4 兜底清扫：管线里 IfLow 会被多次调用（朱雀增强 + P5 清尾），跨调用仍可能
   // 拼出「哦。哦。」「是啊。是啊。」式相邻极短句复读——复读本身就是机器指纹
@@ -1158,13 +1269,28 @@ export function boostBurstinessIfLow(text: string, rng: () => number, targetCv =
   return result.replace(/([\u4e00-\u9fa5]{1,4}[。！？])(?:\s*)\1+/g, "$1");
 }
 
-function boostBurstinessInBlock(text: string, rng: () => number, targetCv: number, maxCuts: number): string {
+function boostBurstinessInBlock(
+  text: string,
+  rng: () => number,
+  targetCv: number,
+  maxCuts: number,
+): string {
   if (maxCuts <= 0) return text;
   let working = text;
-  // P5-B 扩展：混合 1 字极短锚 + 2~3 字锚，CV 双峰差更大
   const ULTRA_SHORT_ANCHORS = [
-    "对哦。", "嗯。", "嗨。", "好吧。", "行。", "是啊。", "诶。", "咳。",
-    "哦。", "啊。", "呵。", "啧。", "呣。",
+    "对哦。",
+    "嗯。",
+    "嗨。",
+    "好吧。",
+    "行。",
+    "是啊。",
+    "诶。",
+    "咳。",
+    "哦。",
+    "啊。",
+    "呵。",
+    "啧。",
+    "呣。",
   ];
   // v0.8.4 反堆叠：同一句只塞一次锚、锚点同块去重、总量封顶。
   // 依据（multi-case 实测病句）：CV 追不上目标时循环对同一句反复塞锚，
@@ -1172,7 +1298,24 @@ function boostBurstinessInBlock(text: string, rng: () => number, targetCv: numbe
   // 语气词复读本身就是新的机器指纹（fingerprintCheck 的垫词复读同类项），
   // 比低 CV 危害更大：宁可少塞锚没达标，也不产出可被统计抓到的复读串。
   const ANCHOR_TAIL_RE = /(?:对哦|是啊|好吧|[嗯嗨诶咳呵啧呣哦啊行])[。！？!?…]*$/;
-  const ANCHOR_CAP = Math.min(4, Math.max(2, Math.ceil(maxCuts / 3)));
+  // 独立语气锚句（跨调用堆积判定用）
+  const ANCHOR_STANDALONE_RE = /^(?:对哦|是啊|好吧|[嗯嗨诶咳呵啧呣哦啊行])[。！？!?…]*$/;
+  // v0.9 专家修复 P3：锚点单块封顶 4→2；且块内已有任意语气锚（独立句或句尾缀）
+  // 时本调用直接跳过——最终 boost 在多注入器之后运行，不查存量会把每段
+  // 都挂上「呵。」「啧。」成串（专家实测 0.9 档每段堆积 2-4 条）。
+  const ANCHOR_CAP = Math.min(2, Math.max(1, Math.ceil(maxCuts / 4)));
+  const alreadyHasParticle = splitSentences(text).some(
+    (x) => ANCHOR_STANDALONE_RE.test(x.trim()) || ANCHOR_TAIL_RE.test(x.trim()),
+  );
+  if (alreadyHasParticle) {
+    // v0.9 专家修复 P3 长尾：块内已有语气锚时不再灌锚，但也不能直接躺平——
+    // 旧引擎正是靠「啧。」堆积把 CV 顶过线，砍掉灌水后必须有替代手段。
+    // 降级为「纯切句」增强：长句在守卫通过的逗号处切两半，既提 CV 又降 avgLen，
+    // 且不引入任何新注入痕迹。
+    // v0.9.2 修复：直接 return 切句结果而非提前退出——原版「已有锚就整块跳过」
+    // 导致 0.6 档 CV 不达标时无兜底（scan-bugs v5.3 实测 6 次节奏过平）。
+    return boostBurstinessByCutting(working, targetCv, Math.min(maxCuts, 6));
+  }
   const usedAnchors = new Set<string>();
   const endsWithParticle = (s: string) => ANCHOR_TAIL_RE.test(s.trim());
   let injected = 0;
@@ -1182,14 +1325,23 @@ function boostBurstinessInBlock(text: string, rng: () => number, targetCv: numbe
     const sents = splitSentences(working);
     // P5-B 放宽切句门槛 L≥10（原为 14），D2 对话体有更多中等句可供"塞极短锚"
     const withIdx = sents
-      .map((s, i) => ({ s, i, L: s.replace(/[\s。！？!?…—\-，、；：""''「」（）《》【】]/g, "").length }))
+      .map((s, i) => ({
+        s,
+        i,
+        L: s.replace(/[\s。！？!?…—\-，、；：""''「」（）《》【】]/g, "").length,
+      }))
       .filter((x) => x.L >= 10 && !endsWithParticle(x.s));
     if (withIdx.length < 1) break;
     withIdx.sort((a, b) => b.L - a.L);
     // 优先切第 2/3 长句，避免同一句反复切
-    const choice = withIdx.length >= 3
-      ? withIdx[Math.floor(rng() * 3)]
-      : (withIdx.length >= 2 ? (rng() < 0.5 ? withIdx[0] : withIdx[1]) : withIdx[0]);
+    const choice =
+      withIdx.length >= 3
+        ? withIdx[Math.floor(rng() * 3)]
+        : withIdx.length >= 2
+          ? rng() < 0.5
+            ? withIdx[0]
+            : withIdx[1]
+          : withIdx[0];
     const target = choice;
     const fresh = ULTRA_SHORT_ANCHORS.filter((a) => !usedAnchors.has(a));
     if (!fresh.length) break;
@@ -1204,10 +1356,18 @@ function boostBurstinessInBlock(text: string, rng: () => number, targetCv: numbe
     //（书面语体 + 口语语气词相接，探针与真人阅读都可感知）——跳过此句。
     // 对有/无句末标点两种情况都生效：剥句号内插与整锚拼接效果等同。
     const before = raw.slice(0, insertAt).replace(/[。！？!?…]$/, "");
-    if (/[\u4e00-\u9fa5]{0,3}(行业|趋势|教育|技术|发展|本质|方案|融合|转型|体系|机制|模式|能力|水平|质量|效率|价值|意义|作用|目标|战略|格局|态势)$/.test(before) || /的$/.test(before)) {
+    if (
+      /[\u4e00-\u9fa5]{0,3}(行业|趋势|教育|技术|发展|本质|方案|融合|转型|体系|机制|模式|能力|水平|质量|效率|价值|意义|作用|目标|战略|格局|态势|工艺|封装|架构|材料|器件|电路|制程|节点|性能|功耗|良率|产能|百分点|万亿元|亿美元|亿元|美元|缺口|占比|增速|规模)$/.test(
+        before,
+      ) ||
+      /的$/.test(before)
+    ) {
       continue;
     }
     if ("。！？!?…".includes(lastCh)) {
+      // v0.9 专家修复 P3 长尾：问句前禁挂语气锚——「不信嗯？」是抽风式语体错位；
+      // 问句自带节奏突变（短+？），无需锚点也贡献 CV
+      if (lastCh === "？" || lastCh === "!") continue;
       // 插在句末标点之前时必须去掉锚点自带的句号，否则拼出"。。"
       //（multi-case 实测病句：「挑战哈对哦。啊。。就这样。」）
       insertAt = raw.length - 1;
@@ -1243,8 +1403,109 @@ function boostBurstinessInBlock(text: string, rng: () => number, targetCv: numbe
       // 否则拼出"，。"（multi-case 实测病句：「拉动可持续发展，。说到底」）
       const trimmed = working.replace(/\s+$/, "");
       if (/[。！？!?…]$/.test(trimmed) || trimmed.length === 0) working = trimmed + extra;
-      else if (/[，、；：,]$/.test(trimmed)) working = trimmed.replace(/[，、；：,]$/, "。") + extra;
+      else if (/[，、；：,]$/.test(trimmed))
+        working = trimmed.replace(/[，、；：,]$/, "。") + extra;
       else working = trimmed + "。" + extra;
+    }
+  }
+  // v0.9 专家修复 P3 长尾：锚灌注受限（CAP/语体守卫）后 CV 仍不达标 → 纯切句补刀。
+  // 切长句零注入痕迹：句长方差上升、avgLen 下降，是节奏兜底的无指纹手段。
+  const finalCheck = sentenceStats(working);
+  if (finalCheck.cv < targetCv) {
+    working = boostBurstinessByCutting(working, targetCv, Math.max(3, Math.floor(maxCuts / 2)));
+  }
+  return working;
+}
+
+/**
+ * v0.9 专家修复 P3 长尾：纯切句式 burstiness 增强（零注入）。
+ * 块内已有语气锚时用它替代锚点灌注：在守卫全部通过的逗号/分号处把最长句
+ * 切成两句——句长方差自然上升、avgLen 同步下降，且不引入任何「呵。啧。」
+ * 式新指纹。切点判定复用 findSplitPoint（含括号/状语/光杆谓词全套守卫）。
+ * v0.9.2 导出：主流程 cap2 收口后用它兜底（锚灌注与删锚拉锯的死结解法）。
+ */
+export function boostBurstinessByCutting(text: string, targetCv: number, maxCuts: number): string {
+  if (maxCuts <= 0) return text;
+  let working = text;
+  let cutsDone = 0;
+  for (let c = 0; c < maxCuts; c++) {
+    const cur = sentenceStats(working);
+    if (cur.cv >= targetCv) break;
+    const sents = splitSentences(working);
+    // 候选：长度 ≥ 22 的长句（切成两半各 ≥ 10，方差贡献最大）
+    const ranked = sents
+      .map((s, i) => ({
+        i,
+        s,
+        L: s.replace(/[\s。！？!?…—\-，、；：""''「」（）《》【】]/g, "").length,
+      }))
+      .filter((x) => x.L >= 22)
+      .sort((a, b) => b.L - a.L);
+    if (ranked.length === 0) break;
+    const t = ranked[0];
+    // v0.9.2：双区间切点——先试标准 30%~70% 区间，失败后放宽到 12%~85%。
+    // 「说起来，……」类插入语引导的长句，首个逗号在句长 15% 附近，标准区间
+    // 排除它导致全部句子均匀中长时一刀也切不了（scan-bugs v5.3 seed=28 实测）。
+    // 放宽区间仍走 fragmentCanStand/fragmentFrontCanStand 全套守卫，不会切出残句。
+    let mid = findSplitPoint(t.s, 22);
+    if (mid === -1 && /^(?:说起来|归结起来|一句话概括|总的来说|总的来看|说到底|有意思的是|值得注意的是|要我说|说白了|按我的经验)/.test(t.s.trim())) {
+      // 插入语引导句：在首个逗号处切（插入语独立成短句，反差大）
+      const firstComma = t.s.indexOf("，");
+      if (firstComma > 2 && firstComma < t.s.length - 8) mid = firstComma;
+    }
+    if (mid === -1) {
+      // 最长句无可守卫切点 → 尝试次长句（最多看 3 条）
+      let cut = -1;
+      let pickIdx = -1;
+      for (let k = 1; k < Math.min(3, ranked.length); k++) {
+        const m2 = findSplitPoint(ranked[k].s, 22);
+        if (m2 !== -1) {
+          cut = m2;
+          pickIdx = k;
+          break;
+        }
+      }
+      if (pickIdx === -1) break;
+      const tk = ranked[pickIdx];
+      sents[tk.i] = tk.s.slice(0, cut).trim() + "。";
+      sents.splice(tk.i + 1, 0, tk.s.slice(cut + 1).trim());
+    } else {
+      sents[t.i] = t.s.slice(0, mid).trim() + "。";
+      sents.splice(t.i + 1, 0, t.s.slice(mid + 1).trim());
+    }
+    working = sents.join("");
+    cutsDone++;
+  }
+  // v0.9 专家修复 P3 终段：切无可切（守卫全否决）且 CV 仍不达标 → 相邻中等句合并。
+  // 把两个句号句并为一个逗号长复句：句长方差上升，零新词汇注入（人类长句的
+  // 真实来源就是逗号连接分句）。仅在本轮一刀未切时启用，避免把刚切的句子又焊回去。
+  if (cutsDone === 0) {
+    let merged = 0;
+    while (merged < 2 && sentenceStats(working).cv < targetCv) {
+      const sents = splitSentences(working);
+      let bestI = -1;
+      let bestLen = -1;
+      for (let i = 0; i < sents.length - 1; i++) {
+        const a = sents[i];
+        const b = sents[i + 1];
+        const La = a.replace(/[\s。！？!?…，、；：]/g, "").length;
+        const Lb = b.replace(/[\s。！？!?…，、；：]/g, "").length;
+        // 仅「句号句 + 句号句」可并；问/叹句、语气锚短句、超长组合均跳过
+        if (!/。$/.test(a.trim()) || !/。$/.test(b.trim())) continue;
+        if (La < 8 || Lb < 8 || La + Lb > 80) continue;
+        if (a.includes("？") || b.includes("？") || a.includes("——") || b.includes("——")) continue;
+        // 取两段都较长的相邻对（合并后对比度最大）
+        const score = Math.min(La, Lb);
+        if (score > bestLen) {
+          bestLen = score;
+          bestI = i;
+        }
+      }
+      if (bestI === -1) break;
+      sents[bestI] = sents[bestI].replace(/。$/, "") + "，" + sents[bestI + 1];
+      sents.splice(bestI + 1, 1);
+      working = sents.join("");
+      merged++;
     }
   }
   return working;
@@ -1324,28 +1585,89 @@ export interface HumanFingerprintReport {
 }
 
 const TYPOS_HAND = [
-  "在做", "再做", "坐好", "座好", "哪为", "那为", "以经", "已经",
-  "既使", "即使", "按装", "安装", "好象", "好像", "做为", "作为",
-  "的到", "得到", "想同", "相同", "到理", "道理",
+  "在做",
+  "再做",
+  "坐好",
+  "座好",
+  "哪为",
+  "那为",
+  "以经",
+  "已经",
+  "既使",
+  "即使",
+  "按装",
+  "安装",
+  "好象",
+  "好像",
+  "做为",
+  "作为",
+  "的到",
+  "得到",
+  "想同",
+  "相同",
+  "到理",
+  "道理",
 ];
 
 /* 2026-08-26 v2 P3 体裁门控：论说文结构拆毁(P3-1~P3-4)只对「明确判定为论说/职场报告」的文本应用，
    避免叙事文「时间/空间推进句」被当三部曲拆、对话体「职场周会条例」被 P3-3/P3-4 误伤导致 aiScore 反涨。
    返回：exposition 概率 0~1，≥ 0.55 才允许 P3-结构改动介入 */
 const EXPO_MARKERS_STRONG = [
-  "综上所述", "基于以上分析", "研究表明", "数据显示", "白皮书显示", "报告显示",
-  "调查数据显示", "调研显示", "统计结果表明", "根据相关调研",
-  "占GDP", "万亿元", "百分点", "同比增长", "环比增长", "复合增长率",
-  "研发投入", "战略布局", "国民经济", "核心增长引擎", "人才缺口",
+  "综上所述",
+  "基于以上分析",
+  "研究表明",
+  "数据显示",
+  "白皮书显示",
+  "报告显示",
+  "调查数据显示",
+  "调研显示",
+  "统计结果表明",
+  "根据相关调研",
+  "占GDP",
+  "万亿元",
+  "百分点",
+  "同比增长",
+  "环比增长",
+  "复合增长率",
+  "研发投入",
+  "战略布局",
+  "国民经济",
+  "核心增长引擎",
+  "人才缺口",
 ];
 const EXPO_MARKERS_WEAK = [
-  "首先", "其次", "再次", "最后", "具体来说", "值得注意的是", "更重要的是",
-  "一方面", "另一方面", "第一", "第二", "第三",
+  "首先",
+  "其次",
+  "再次",
+  "最后",
+  "具体来说",
+  "值得注意的是",
+  "更重要的是",
+  "一方面",
+  "另一方面",
+  "第一",
+  "第二",
+  "第三",
 ];
-const DIALOGUE_MARKERS_RE = /【场景[：:]?|【.*?】|(?:^|\n)[^\n]{1,12}（[^\n]{0,12}）[：:]|(?:^|\n)[^\n]{1,12}[总工程前技产品运营]：/gm;
+const DIALOGUE_MARKERS_RE =
+  /【场景[：:]?|【.*?】|(?:^|\n)[^\n]{1,12}（[^\n]{0,12}）[：:]|(?:^|\n)[^\n]{1,12}[总工程前技产品运营]：/gm;
 const NARRATIVE_TENSE_MARKERS = [
-  "那天", "那年", "周末", "早晨", "中午", "晚上", "路上", "我走进", "我来到", "我选了",
-  "我点了", "我坐", "我看到", "我走到", "临走前", "回到家",
+  "那天",
+  "那年",
+  "周末",
+  "早晨",
+  "中午",
+  "晚上",
+  "路上",
+  "我走进",
+  "我来到",
+  "我选了",
+  "我点了",
+  "我坐",
+  "我看到",
+  "我走到",
+  "临走前",
+  "回到家",
 ];
 
 /** 论说文概率分：0=完全非论说，1=标准论说文/报告。≥0.55 → 允许 P3 结构拆毁 */
@@ -1380,14 +1702,22 @@ export function classifyExpositionScore(text: string): number {
 }
 function countSubstr(s: string, sub: string): number {
   if (!sub) return 0;
-  let n = 0, idx = 0;
-  while ((idx = s.indexOf(sub, idx)) !== -1) { n++; idx += sub.length; }
+  let n = 0,
+    idx = 0;
+  while ((idx = s.indexOf(sub, idx)) !== -1) {
+    n++;
+    idx += sub.length;
+  }
   return n;
 }
 
 export function preDetectHumanFingerprint(text: string): HumanFingerprintReport {
   if (!text || text.trim().length < 50) {
-    return { isHumanHand: false, hits: 0, metrics: { burstiness: 0, typosPerK: 0, shortRatio: 0, paraLeadCV: 0, personPronPerK: 0 } };
+    return {
+      isHumanHand: false,
+      hits: 0,
+      metrics: { burstiness: 0, typosPerK: 0, shortRatio: 0, paraLeadCV: 0, personPronPerK: 0 },
+    };
   }
   const stats = sentenceStats(text);
   const sents = splitSentences(text);
@@ -1398,10 +1728,10 @@ export function preDetectHumanFingerprint(text: string): HumanFingerprintReport 
   for (const w of TYPOS_HAND) if (text.includes(w)) typos++;
   const typosPerK = typos / Math.max(0.5, k);
 
-  const shortCnt = sents.filter(s => s.replace(/\s/g, "").length <= 8).length;
+  const shortCnt = sents.filter((s) => s.replace(/\s/g, "").length <= 8).length;
   const shortRatio = sents.length ? shortCnt / sents.length : 0;
 
-  const paras = text.split(/\n+/).filter(p => p.trim().length > 5);
+  const paras = text.split(/\n+/).filter((p) => p.trim().length > 5);
   const firstLens: number[] = [];
   for (const p of paras) {
     const f = splitSentences(p)[0];
@@ -1424,7 +1754,12 @@ export function preDetectHumanFingerprint(text: string): HumanFingerprintReport 
      关键：加 personPronPerK ≥ 50（高人称密度特征）+ leadCV≥0.25（段首参差，即非机切段首）+ shortRatio ≥ 0.08 三条同时命中 → H0 才命中 */
   const branchA = personPronPerK >= 50 && paraLeadCV >= 0.25 && shortRatio >= 0.08;
   // 分支 B：没有这么高的人称密度，但在其他维度"明显像人"
-  const branchB = paraLeadCV >= 0.30 && shortRatio >= 0.20 && typosPerK >= 1.5 && personPronPerK >= 3 && personPronPerK <= 40;
+  const branchB =
+    paraLeadCV >= 0.3 &&
+    shortRatio >= 0.2 &&
+    typosPerK >= 1.5 &&
+    personPronPerK >= 3 &&
+    personPronPerK <= 40;
   const isHumanHand = branchA || branchB;
 
   let hitsLoose = 0;
@@ -1451,7 +1786,7 @@ export function preDetectHumanFingerprint(text: string): HumanFingerprintReport 
    公共 API
    ========================================================= */
 
-export function crossChunkCleanup(text: string): string {
+export function crossChunkCleanup(text: string, stripCJKSpaces = false): string {
   let out = text;
   out = dedupePadWords(out);
   out = dedupeStarters(out);
@@ -1459,7 +1794,7 @@ export function crossChunkCleanup(text: string): string {
   out = limitPunctuation(out, "……", 1, "。");
   out = stripLeadingConnectivesHard(out);
   out = stripAICliches(out);
-  out = stripCJKEdgeSpaces(out);
+  out = stripCJKEdgeSpaces(out, stripCJKSpaces);
   return out;
 }
 
@@ -1493,9 +1828,7 @@ export function mechanicalShuffle(text: string, opts: HumanizeOptions = {}): str
   const textExpoScore = classifyExpositionScore(text);
   const applyExpoP3 =
     zhuqueBoost &&
-    (genreKnob === "main" && intensity >= 0.75
-      ? textExpoScore >= 0.35
-      : textExpoScore >= 0.55);
+    (genreKnob === "main" && intensity >= 0.75 ? textExpoScore >= 0.35 : textExpoScore >= 0.55);
   // zhuqueBoost → 论说锚点(P3-4)、段首方差(P3-3)要求强度≥0.85，把用户传 0.7 自动升档到 0.9
   const effAnchorIntensity = applyExpoP3 ? Math.max(intensity, 0.9) : intensity;
 
@@ -1519,6 +1852,8 @@ export function mechanicalShuffle(text: string, opts: HumanizeOptions = {}): str
           // P7-B/P7-E：体裁联动参数透传给结构层
           expoForceP3: applyExpoP3,
           skipSceneInject: isDialogueGenre,
+          // v0.9 专家修复 P5：文风透传（academic 禁口语承接头/自问自答）
+          style,
         });
         // P3-3 段首句长硬方差（仅论说文，避免对话体/叙事文体被硬切段首 → AI 特征反涨）
         if (applyExpoP3) return enforceParagraphLeadSentVariance(s, rng, intensity);
@@ -1539,7 +1874,7 @@ export function mechanicalShuffle(text: string, opts: HumanizeOptions = {}): str
   }
   working = stripLeadingConnectivesHard(working);
   working = stripAICliches(working);
-  working = stripCJKEdgeSpaces(working);
+  working = stripCJKEdgeSpaces(working, opts.stripCJKSpaces ?? false);
   working = reframeConcessives(working, rng, Math.min(1, 0.5 + 0.5 * intensity));
   working = injectHalfWidth(working, rng, 0.04 * intensity);
   // v2 P3-4：第一人称经验锚点（真人原稿禁用 + 只限论说文，避免叙事/对话再塞第一人称变成重复 → aiScore 反涨）
@@ -1552,7 +1887,13 @@ export function mechanicalShuffle(text: string, opts: HumanizeOptions = {}): str
   if (intensity >= 0.4) {
     const burstTarget =
       genreKnob === "main" ? 0.63 : genreKnob === "narrative" ? 0.59 : isDialogueGenre ? 0.57 : 0.5;
-    working = boostBurstinessIfLow(working, rng, Math.max(MIN_BURSTINESS_CV, burstTarget), 4);
+    working = boostBurstinessIfLow(
+      working,
+      rng,
+      Math.max(MIN_BURSTINESS_CV, burstTarget),
+      4,
+      style,
+    );
   }
   // v3 P4-A + 二次标点保险：最终清尾确保整篇「——」≤1、「……」≤1，解决 N2/D2 指纹检测红项
   working = limitPunctuation(working, "——", 1, "，");
@@ -1564,6 +1905,8 @@ export function mechanicalShuffle(text: string, opts: HumanizeOptions = {}): str
   }
   return working
     .replace(/—{3,}/g, "——")
+    .replace(/——(?=[。！？!?])/g, "")
+    .replace(/(^|\n)\s*[。，、；：]+/g, "$1")
     .replace(/但，/g, "但")
     .replace(/([，、])\1+/g, "$1")
     .replace(/，。/g, "。")

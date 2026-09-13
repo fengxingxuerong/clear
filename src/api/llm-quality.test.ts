@@ -1,9 +1,17 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { localHardGate, processCandidate, coherenceIssues } from "./llm-quality";
+import { localHardGate, processCandidate, coherenceIssues, fabricationIssues, truncationIssues, fabricationReview } from "./llm-quality";
 import { buildRevisionPrompt } from "./llm-prompts";
 import { ZHUQUE_DETECT_SYSTEM } from "./zhuque-semantic";
 import { humanizeViaApiDeep } from "./llm-humanize";
 import { DEFAULT_API } from "./llm-config";
+
+/** OpenAI 兼容响应 mock（同 llm.test.ts） */
+function okJson(content: string) {
+  return new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -21,10 +29,7 @@ describe("localHardGate（本地指纹+忠实度硬门槛）", () => {
   });
 
   it("垫词复读必被抓（指纹）", () => {
-    const issues = localHardGate(
-      "事情定下来了。",
-      "说白了，这事就这么定。说白了，别再问了。",
-    );
+    const issues = localHardGate("事情定下来了。", "说白了，这事就这么定。说白了，别再问了。");
     expect(issues.some((s) => s.includes("指纹：") && s.includes("垫词复读"))).toBe(true);
   });
 
@@ -33,6 +38,32 @@ describe("localHardGate（本地指纹+忠实度硬门槛）", () => {
     // 但无任何硬指纹 → 门槛应放行（节奏问题交给评分修订收敛）
     const text = [12, 16, 20, 24, 28, 32].map(sent).join("");
     expect(localHardGate(text, text)).toEqual([]);
+  });
+
+  it("末句无句读（截断稿）必被抓（v0.9.4 完结性守卫）", () => {
+    // 2026-09-12 实测 s3 事故签名：R3 输出被 token 截断，末句悬在名词上
+    const original = sent(30) + sent(28) + sent(26);
+    const truncated = "大语言模型这两年挺火，但不是没毛病。训练费";
+    const issues = localHardGate(original, truncated);
+    expect(issues.some((s) => s.includes("末句未完结"))).toBe(true);
+  });
+
+  it("严重缩水（< 原文 40%）必被抓，正常压缩（60%）不误杀", () => {
+    const original = Array.from({ length: 10 }, () => sent(12)).join("");
+    // 候选只剩 2 句（20% < 40%）：即使句读完整也判严重缩水
+    const shrunken = sent(12) + sent(12);
+    const issues = localHardGate(original, shrunken);
+    expect(issues.some((s) => s.includes("严重缩水"))).toBe(true);
+    // 候选保留 6 句（60%）：正常压缩带内，完结性守卫不应报任何问题
+    const normal = Array.from({ length: 6 }, () => sent(12)).join("");
+    const truncRelated = localHardGate(original, normal).filter(
+      (s) => s.includes("末句未完结") || s.includes("严重缩水"),
+    );
+    expect(truncRelated).toEqual([]);
+  });
+
+  it("truncationIssues：空候选直接报空稿", () => {
+    expect(truncationIssues(sent(10), "   ").some((s) => s.includes("候选稿为空"))).toBe(true);
   });
 });
 
@@ -70,10 +101,10 @@ describe("深度闭环 × 朱雀检测员提示词对齐", () => {
         const sys = systems[systems.length - 1] ?? "";
         if (sys.includes("质检员")) content = "PASS";
         else if (sys.includes("复刻检测员")) content = "论点骨架工整\n42";
-        return new Response(
-          JSON.stringify({ choices: [{ message: { content } }] }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
+        return new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
       }),
     );
     const r = await humanizeViaApiDeep("原文内容。", cfg, undefined, 10, 2);
@@ -119,10 +150,10 @@ describe("深度闭环调用预算（v0.8.5）", () => {
         let content = "改写后的文本，人工智能改变了生活。就这样。";
         if (sys.includes("质检员")) content = "PASS";
         else if (sys.includes("复刻检测员")) content = "论点骨架工整\n42";
-        return new Response(
-          JSON.stringify({ choices: [{ message: { content } }] }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
+        return new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
       }),
     );
     const r = await humanizeViaApiDeep("原文内容。", cfg, undefined, 10, 4);
@@ -147,10 +178,10 @@ describe("processCandidate（硬门槛打回路径）", () => {
         // 质检第一次放行（放走数字篡改稿），修复后仍由质检判定
         let content = "PASS";
         if (sys.includes("改写专家")) content = "改写稿：营收增长32%。";
-        return new Response(
-          JSON.stringify({ choices: [{ message: { content } }] }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
+        return new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
       }),
     );
     const r = await processCandidate("原文：营收增长23%。", "改写稿：营收增长32%。", cfg, 0.6);
@@ -175,5 +206,70 @@ describe("质检通道异常可见化（v0.8.6）", () => {
     expect(r.qc.issues.join("")).toContain("质检通道异常"); // 可见化：留痕
     // 评分阶段同样失败：score 为 null 但不抛错（调用方兜底已有测试覆盖）
     expect(r.score).toBeNull();
+  });
+});
+
+describe("编造兜底（v0.8.9）", () => {
+  // 实测 LLM 为求"接地气"现编人物与经历，而 LLM 质检对此类漏判严重（只抓得住数字/术语）
+  const orig = "人工智能提升了生产效率，也带来就业结构变化。";
+
+  it("改写稿凭空出现第一人称经历/亲属 → 判定编造", () => {
+    const bad = "人工智能提升了生产效率。我舅去年体检查出结节，我们公司还招了三个数据标注的。";
+    expect(fabricationIssues(orig, bad)).toHaveLength(1);
+    expect(fabricationIssues(orig, bad)[0]).toContain("疑似编造");
+  });
+
+  it("原文本就有的表述不算编造（不误伤真人原稿）", () => {
+    const origHas = "我朋友在厂里做质检，我妈也说这东西方便。人工智能提升了生产效率。";
+    const out = "人工智能真提升了生产效率。我朋友在厂里做质检，我妈也说这东西方便。";
+    expect(fabricationIssues(origHas, out)).toHaveLength(0);
+  });
+
+  it("localHardGate 已并入编造检查", () => {
+    const bad = "人工智能提升了生产效率。有一次我去医院，我邻居家孩子数学不好。";
+    expect(localHardGate(orig, bad).some((i) => i.includes("疑似编造"))).toBe(true);
+  });
+});
+
+describe("fabricationReview 编造专项复核（v0.9.4 P1.5）", () => {
+  const cfg = { ...DEFAULT_API, enabled: true, apiKey: "test-key", judgeModel: "glm-5.2" };
+  const orig = "数字化转型能提升运营效率。率先完成布局的企业往往能抢占先机。";
+
+  function stubReviewer(reply: string) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: unknown, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body));
+        const sys: string = body.messages?.[0]?.content ?? "";
+        // 编造审查员的 system 以「你是事实核查员」开头，与其他角色区分
+        if (sys.includes("事实核查员")) return okJson(reply);
+        // 其他角色（质检员等）一律 PASS，保证只测审查员解析逻辑
+        return okJson("PASS");
+      }),
+    );
+  }
+
+  it("正常 JSON：提取编造清单", async () => {
+    stubReviewer('{"fabrications": ["「我踩过不少坑」：原文无此经历", "「一定」：原文为往往，概率变绝对"]}');
+    const fabs = await fabricationReview(orig, "数字化转型能提升运营效率。我踩过不少坑，率先布局的一定占先机。", cfg);
+    expect(fabs).toHaveLength(2);
+    expect(fabs[0]).toContain("我踩过不少坑");
+  });
+
+  it("JSON 前后带说明文字：容错提取", async () => {
+    stubReviewer('好的，核查结果如下：\n{"fabrications": []}\n以上就是全部结论。');
+    const fabs = await fabricationReview(orig, "改写稿内容。", cfg);
+    expect(fabs).toEqual([]);
+  });
+
+  it("JSON 内含花括号与引号转义：状态机不被内容截断", async () => {
+    stubReviewer('{"fabrications": ["改写稿新增「{方法论}体系」：原文无，且引号内出现\\"嵌套\\""]}');
+    const fabs = await fabricationReview(orig, "改写稿内容。", cfg);
+    expect(fabs).toHaveLength(1);
+  });
+
+  it("模型输出垃圾文本：抛错（由调用方降级跳过）", async () => {
+    stubReviewer("我觉得这份改写稿没什么问题，不需要修改。");
+    await expect(fabricationReview(orig, "改写稿内容。", cfg)).rejects.toThrow("未返回有效 JSON");
   });
 });

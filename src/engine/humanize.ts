@@ -66,10 +66,13 @@ import {
   // v3 P4+P5 最终清尾（humanize() return 前最后一步调用）
   ensureEmDashCountHardCap,
   boostBurstinessIfLow,
-  capParticleSentenceDensity,
-  replaceGuardedFormulaicDerivs,
-  clampAvgSentenceLenUnder25,
+   capParticleSentenceDensity,
+   boostBurstinessByCutting,
+   replaceGuardedFormulaicDerivs,
+   clampAvgSentenceLenUnder25,
 } from "./humanize-shuffle.ts";
+
+import { countPadHeads, PAD_INJECT_CAP } from "./humanize-primitives.ts";
 
 import {
   aiScore,
@@ -83,6 +86,15 @@ import {
   PPL_MIN_MEAN_NLL,
   PPL_MAX_WIN_STD,
 } from "./humanize-metrics.ts";
+
+// v0.9 反「新指纹」层：模板复读封顶 / 语体门控 / 残句守卫 / 场景块保护
+import {
+  capLongTemplateRepetition,
+  guardFormalRegister,
+  collapseDoubleConnectives,
+  fixOrphanConnectiveLeads,
+  isSceneMetaSentence,
+} from "./anti-fingerprint.ts";
 
 // P7 引擎级体裁联动：自动体裁识别 + 每体裁参数旋钮
 import { classifyGenre, AutoGenre } from "./classify-genre.ts";
@@ -156,11 +168,12 @@ type EffectiveGenre = AutoGenre | "humanHand";
 interface GenreKnobs {
   avgLenTarget: number;
   burstTarget: number;
-  intensityCap: number;       // 硬上限：> 这个值会被 clamp
-  disableZhuque: boolean;     // 强制关闭朱雀增强
+  intensityCap: number; // 硬上限：> 这个值会被 clamp
+  disableZhuque: boolean; // 强制关闭朱雀增强
   expoForceP3: (intensity: number) => boolean;
-  skipSceneInject: boolean;   // 剧本场景块跳过自问自答
-  disableTyposAnchor: boolean;// 关闭错别字/第一人称锚点注入（humanHand专用）
+  skipSceneInject: boolean; // 剧本场景块跳过自问自答
+  disableTyposAnchor: boolean; // 关闭错别字/第一人称锚点注入（humanHand专用）
+  skipSelfQA: boolean; // v0.9.1：叙事文跳过自问自答/碎片注入（"例子呢？"不属于叙事）
 }
 
 function getGenreKnobs(genre: EffectiveGenre): GenreKnobs {
@@ -174,6 +187,7 @@ function getGenreKnobs(genre: EffectiveGenre): GenreKnobs {
         expoForceP3: (i) => i >= 0.75,
         skipSceneInject: false,
         disableTyposAnchor: false,
+        skipSelfQA: false, // v0.9.1：论说文保留自问自答（人味装置）
       };
     case "narrative":
       return {
@@ -184,6 +198,7 @@ function getGenreKnobs(genre: EffectiveGenre): GenreKnobs {
         expoForceP3: () => false,
         skipSceneInject: false,
         disableTyposAnchor: false,
+        skipSelfQA: true, // v0.9.1：叙事文不需要"例子呢？我随便举一个你就懂了"
       };
     case "dialogue":
       return {
@@ -194,17 +209,19 @@ function getGenreKnobs(genre: EffectiveGenre): GenreKnobs {
         expoForceP3: () => false,
         skipSceneInject: true,
         disableTyposAnchor: false,
+        skipSelfQA: true, // v0.9.1：对话体也不需要插话模板
       };
     case "humanHand":
     default:
       return {
         avgLenTarget: 36,
-        burstTarget: 0.50,
+        burstTarget: 0.5,
         intensityCap: 0.48,
         disableZhuque: true,
         expoForceP3: () => false,
         skipSceneInject: false,
         disableTyposAnchor: true,
+        skipSelfQA: true, // v0.9.1：人写原稿不注入插话
       };
   }
 }
@@ -212,8 +229,7 @@ function getGenreKnobs(genre: EffectiveGenre): GenreKnobs {
 /** 剧本格式的场景/人物/背景/时间/角色/旁白/简介 段首块正则（P7-E 共用） */
 // P7-E：剧本场景块行头。无锚 + 按行扫描——前置方言/观点注入会在段首加垫词，
 // ^ 锚定的整段匹配会被击穿（台词区被塞自问自答的真实缺陷）
-const SCENE_BLOCK_LINE_RE =
-  /【[^】]{0,80}(?:场景|人物|角色|地点|时间|背景|旁白|简介)[^】]{0,80}】/;
+const SCENE_BLOCK_LINE_RE = /【[^】]{0,80}(?:场景|人物|角色|地点|时间|背景|旁白|简介)[^】]{0,80}】/;
 
 /* ----------------------------- 替换规则 ----------------------------- */
 
@@ -223,28 +239,78 @@ const REPLACE_VOCAB_CANDIDATES: [string, string[]][] = VOCAB_ENTRIES.map(([from,
   return [from, realTos.length ? realTos : tos];
 });
 
+/** v0.9 专家修复 P5：academic 文风下禁止的口语替身（书面语体错位签名）。
+ *  按源词建白名单表——源词在这些学术语义词上不得替换成口语替身。 */
+const ACADEMIC_FROZEN = new Set([
+  "改善",
+  "持续",
+  "推动",
+  "认知",
+  "总而言之",
+  "综上所述",
+  "本质上",
+  "值得注意的是",
+  "由此可见",
+  "事实上",
+  "此外",
+  "因此",
+  "然而",
+  "从而",
+  "进而",
+  "逐步",
+  "日益",
+  "愈发",
+  "亟需",
+  "亟待",
+  "尚待",
+  "已然",
+  "不容忽视",
+  "不容小觑",
+  "至关重要",
+  // v0.9 长尾：书面连接词的口语替身在学术体里同样错位（与此同时→这期间/另一头）
+  "与此同时",
+  "伴随着",
+  "具体而言",
+  "换言之",
+  "不仅",
+  "而且",
+  "诸如",
+  "诸如",
+]);
+
 /** 替换文本里命中 VOCAB 的词（单趟收集命中、每词条一次线性拼接，避免逐命中整串重建） */
-function replaceVocab(text: string, rng: () => number, intensity: number): string {
+function replaceVocab(
+  text: string,
+  rng: () => number,
+  intensity: number,
+  style: RewriteStyle = "casual",
+): string {
   const p = intensity <= 0 ? 0 : Math.min(1, REPLACE_VOCAB_BASE + REPLACE_VOCAB_SLOPE * intensity);
+  const academic = style === "academic";
   let base = text;
   for (const [from, candidates] of REPLACE_VOCAB_CANDIDATES) {
     let idx = base.indexOf(from);
     if (idx === -1) continue;
+    // P5：academic 冻结表——学术语义词的口语替身（调顺/推一把/没停过/拉总账）
+    // 是书面语体 + 口语词的错位签名，学术体下直接跳过替换
+    const frozen = academic && ACADEMIC_FROZEN.has(from);
     const hits: { at: number; rep: string }[] = [];
     while (idx !== -1) {
       const end = idx + from.length;
       // 与原实现一致：每个命中位置无条件消耗一次 rng
       if (
+        !frozen &&
         rng() < p &&
         // v0.8.6 术语保护：命中位置落在受保护术语内则跳过（不影响 rng 消耗节奏）
         !isProtectedTerm(base, idx, end) &&
-        !guardBlocks(
-          from,
-          base.slice(end, end + 8),
-          base.slice(Math.max(0, idx - 3), idx),
-        )
+        !guardBlocks(from, base.slice(end, end + 8), base.slice(Math.max(0, idx - 3), idx))
       ) {
-        hits.push({ at: idx, rep: pick(rng, candidates) });
+        const rep = pick(rng, candidates);
+        // v0.8.9 叠字守卫：替换词尾字与右侧首字相同时将产生叠字——
+        // 「彰显着」→「透着着」、「不仅是」→「不只是是」，属一眼可辨的机器破坏。
+        // 该次替换作废但仍保留 rng 消耗，不改变后续随机节奏。
+        const nextCh = base.charAt(end);
+        if (!rep || !nextCh || !rep.endsWith(nextCh)) hits.push({ at: idx, rep });
       }
       idx = base.indexOf(from, end);
     }
@@ -337,17 +403,28 @@ function dropLeadingConnectives(text: string, rng: () => number, intensity: numb
 /** 处理带"……"通配的套话模板 */
 function replaceTemplates(text: string, rng: () => number, intensity: number): string {
   const rules: { re: RegExp; tos: string[] }[] = [
-    { re: /以([\u4e00-\u9fa5A-Za-z0-9]{1,12}?)为抓手/g, tos: ["拿$1当发力点", "靠$1发力", "用$1当突破口"] },
-    { re: /在([\u4e00-\u9fa5A-Za-z0-9]{1,12}?)的(背景|大环境)下/g, tos: ["借着$1的风", "在$1当口", "赶上$1这波"] },
     {
-      re: /为([\u4e00-\u9fa5A-Za-z0-9]{1,12}?)注入(新)?(动能|活力|动力)/g,
-      tos: ["给$1添了把劲", "让$1更有劲", "给$1加了把火"],
+      re: /以([\u4e00-\u9fa5A-Za-z0-9]{1,12}?)为抓手/g,
+      tos: ["拿$1当发力点", "靠$1发力", "用$1当突破口"],
+    },
+    {
+      re: /在([\u4e00-\u9fa5A-Za-z0-9]{1,12}?)的(背景|大环境)下/g,
+      tos: ["借着$1的风", "在$1当口", "赶上$1这波"],
+    },
+    {
+      re: /为([\u4e00-\u9fa5A-Za-z0-9]{1,12}?)注入(?:了|了一)?(?:新|强劲|强大|新的)?(动能|活力|动力|血液)/g,
+      // v0.9 专家修复 P6：原正则缺「了/强劲」可选组，「为经济增长注入了强劲动力」
+      // 整句漏匹配（专家实测 0.9 档原样存活）
+      tos: ["给$1添了把劲", "让$1更有劲", "给$1加了把火", "带动了$1"],
     },
     {
       re: /为([\u4e00-\u9fa5A-Za-z0-9]{1,12}?)提供了(有力|坚实|重要)?(支撑|保障)/g,
       tos: ["给$1撑了腰", "为$1兜了底"],
     },
-    { re: /成为([\u4e00-\u9fa5A-Za-z0-9]{1,12}?)的重要组成部分/g, tos: ["成了$1里重要的一块", "变$1里少不了的部分"] },
+    {
+      re: /成为([\u4e00-\u9fa5A-Za-z0-9]{1,12}?)的重要组成部分/g,
+      tos: ["成了$1里重要的一块", "变$1里少不了的部分"],
+    },
     { re: /以([\s\S]{1,12}?)为契机/g, tos: ["借着$1的机会", "趁$1"] },
     { re: /([\s\S]{1,14}?)发挥着([\s\S]{1,8}?)作用/g, tos: ["$1很重要", "$1顶用", "$1是关键"] },
     {
@@ -433,6 +510,10 @@ function replaceTemplates(text: string, rng: () => number, intensity: number): s
 /** 入口：按段落拆分逐段处理、保留原文分段 */
 export function humanize(text: string, opts: HumanizeOptions = {}): string {
   if (!text || !text.trim()) return "";
+  // v0.9.4 P1 边界守卫：超短文本透传。实测「短。」（3 字符）经整条管线后被清成
+  // 空串（替换/删除类 pass 在孤词上无东西可保，最终输出丢失原文）——数据丢失级
+  // 边界 bug。10 字以内没有"去味"的空间与必要，原样返回最安全。
+  if (text.replace(/\s+/g, "").length < 10) return text;
   // v0.8.6：强度=0 必须严格返回原文。之前所有 pass 都按概率 0 跳过，
   // 但最后几道确定性兜底（stripAICliches / stripLeadingConnectivesHard /
   // clampAvgSentenceLenUnder25 / replaceGuardedFormulaicDerivs 等）不关心强度，
@@ -465,9 +546,12 @@ export function humanize(text: string, opts: HumanizeOptions = {}): string {
   }
 
   // 朱雀增强模式（全文本级）——P7-D humanHand 强制关闭；P7-E 对话体场景块跳过自问自答
-  if (zhuqueOn && intensity >= 0.35) {
+  // v0.9.1：narrative/humanHand 跳过自问自答+碎片注入（"例子呢？"不属于叙事/人写原稿）
+  // v0.9.4 P2：垫词饱和守卫——输入已被垫词塞满（多轮处理/高度口语）时不再注入
+  if (zhuqueOn && intensity >= 0.35 && countPadHeads(text) < PAD_INJECT_CAP) {
     result = applyZhuqueFeatures(result, intensity, opts.seed, opts.style ?? "casual", {
       skipSceneInject: knobs.skipSceneInject,
+      skipSelfQA: knobs.skipSelfQA,
     });
   }
 
@@ -480,6 +564,9 @@ export function humanize(text: string, opts: HumanizeOptions = {}): string {
       zhuqueMode: zhuqueOn,
       expoForceP3: knobs.expoForceP3(intensity),
       skipSceneInject: knobs.skipSceneInject,
+      skipSelfQA: knobs.skipSelfQA, // v0.9.1：narrative/humanHand 跳过结构层自问自答
+      // v0.9 专家修复 P5：文风透传到结构层（academic 禁口语承接头/自问自答）
+      style: opts.style ?? "casual",
     };
     result = result
       .split(/\n\n+/)
@@ -498,31 +585,80 @@ export function humanize(text: string, opts: HumanizeOptions = {}): string {
   // 全文级句长节奏兜底
   if (intensity > 0.4) {
     const rng3 = makeRng(opts.seed, 4444);
-    result = boostBurstiness(result, rng3, 0.6 * intensity, opts.style ?? "casual");
+    // v0.9.4 P2：垫词饱和时改走「纯切句」兜底（零注入），只拉节奏不再加料
+    result =
+      countPadHeads(result) >= PAD_INJECT_CAP
+        ? boostBurstinessByCutting(result, 0.55, 8)
+        : boostBurstiness(result, rng3, 0.6 * intensity, opts.style ?? "casual");
   }
 
   // v3 P4+P5 最终清尾（必须放在所有结构/自问自答生成之后）——
   // P4-C：VOCAB GUARD 保护的"针对→性/系统→性/有效→性"等合法套话衍生，保语义整体替换为口语
   result = replaceGuardedFormulaicDerivs(result);
+  // v0.9 反「新指纹」层：引擎注入特征不得变成新指纹
+  //  A) 长模板跨段复读封顶（自问自答/插话模板全文每种限 1 次，仅在注入强度 ≥0.65 时启用）
+  if (intensity >= 0.65) {
+    result = capLongTemplateRepetition(result);
+  }
+  //  B) 语体门控：论说/学术（formal）下还原过度口语替换；双连接词叠放不限语体
+  const formalRegister = effectiveGenre === "main" || (opts.style ?? "casual") === "academic";
+  result = guardFormalRegister(result, formalRegister);
+  result = collapseDoubleConnectives(result);
+  //  C) 残句开头守卫：句首独词连接词（并/而/且/但/亦/另）修复
+  if (intensity >= 0.55) {
+    result = fixOrphanConnectiveLeads(result);
+  }
   // P7-C + P5-A：按体裁压 avgLen（论说23 / 叙事28 / 对话32 / 人写36 不触发硬切）
-  result = clampAvgSentenceLenUnder25(result, knobs.avgLenTarget, 5);
+  // v0.9 专家修复 P2 连带：切点守卫收紧后长句切分机会变少，maxCuts 5→8 补偿——
+  // 只放宽「尝试次数」，每刀仍逐点过守卫，不会切出残句
+  result = clampAvgSentenceLenUnder25(result, knobs.avgLenTarget, 8);
   // P7-C + P4-B（P5 增强版）：按体裁拉 burstiness CV（论说0.63 / 叙事0.59 / 对话0.57 / 人写0.50）
   //       （原全局固定 0.61 → 现按体裁分档，论说最严、人写最松，避免负斜率体裁被过度注入锚点）
-  if (intensity >= 0.4) {
-    const p4Rng = makeRng(opts.seed, 9401);
-    result = boostBurstinessIfLow(result, p4Rng, knobs.burstTarget, 8);
-  }
   // P4-A：最终保险整篇破折号/省略号硬上限，解决指纹自检"破折号超标×2/×3"红项
   result = ensureEmDashCountHardCap(result, 1);
   result = limitPunctuation(result, "……", 1, "。");
   result = limitPunctuation(result, "——", 1, "，");
-  // v0.8.8：独立极短语气句密度收口（每段 ≤2）——只在高强度档（≥0.75）启用。
-  // 低强度档里这些极短句是句长 burstiness 的主要来源，砍掉会把节奏压平
-  // （外部回归实测：0.6 档触发"指纹-句长节奏过平"4 次）；而"呣。哦。咳。"
-  // 三连密簇只在 0.9 档的注入叠加下出现，收这里正合适。
-  if (intensity >= 0.75) {
+  // v0.8.8：独立极短语气句密度收口（每段 ≤1）——v0.9 专家修复 P3：门槛 0.75→0.5。
+  // 实测 0.5/0.6 档输出同样出现段尾「嗯。啧。」成串（多注入器叠加不分档位），
+  // 收口只删超额语气句、不动正常短句，低强度下也安全。
+  if (intensity >= 0.5) {
     result = capParticleSentenceDensity(result);
   }
+  // v0.9-CV：capParticle 丢弃超额极短语气句会拉低 CV（对话 0.9 实测指纹"句长节奏过平"），
+  // boost 兜底必须放最后，删完极短句后再按体裁目标拉 CV
+  if (intensity >= 0.4) {
+    const p4Rng = makeRng(opts.seed, 9401);
+
+    // v0.9 专家修复 P5：style 透传——academic 禁极短语气锚
+    result = boostBurstinessIfLow(result, p4Rng, knobs.burstTarget, 8, opts.style ?? "casual");
+  }
+  // v0.9 专家修复 P3（补刀）：capParticle 必须在最终 boost 之后再次收口——
+  // boost 的 P5-B 尾挂会回填新的极短语气句，先 cap 后 boost 会漏掉这批。
+  // v0.9.2 修复：cap2 删除超额语气锚后 CV 会跌回原点（实测锚灌注 0.66 → 删锚 0.24），
+  // 死结在于「boost 灌锚拉 CV ↔ cap 删锚防指纹」互相拉锯。解法：cap2 之后改用
+  // 「纯切句」兜底（boostBurstinessByCutting：只切长句、零注入），锚该删删、
+  // 方差由长短句交错补足，两个目标不再冲突。
+  if (intensity >= 0.5) {
+    result = capParticleSentenceDensity(result, 1, false);
+    // v0.9.2：兜底触发线用「指纹红线 + 余量」而非体裁目标——cv 0.44~0.46 的
+    // 边缘卡线（差 0.01）在探针阈值下仍红，但把切句目标拉到体裁目标会过度切分。
+    // 触发条件 0.45+余量，切句目标 0.5：稳过红线、不追满体裁档。
+    // P7-F 段落感知：必须按段分发——boostBurstinessByCutting 内部 splitSentences
+    // 会剥掉段尾 \n\n，整篇直调会把多段焊成单段（v4.3 段落保留探针实测 37 次违规）。
+    const FP_LINE = 0.48; // 指纹体检红线 0.45 + 余量
+    if (aiScore(result).burstiness < FP_LINE) {
+      result = result.includes("\n\n")
+        ? result
+            .split(/\n\n+/)
+            .map((p) => boostBurstinessByCutting(p, 0.55, 8))
+            .join("\n\n")
+        : boostBurstinessByCutting(result, 0.55, 8);
+    }
+  }
+  // 行首残留标点清理（结构重排/模板删除可留下「，一句话概括」式残逗号）
+  result = result
+    .replace(/(^|\n)\s*[，、；：]+/g, "$1")
+    .replace(/([。！？])\s*([，、；：]+)/g, "$1");
 
   return result;
 }
@@ -534,13 +670,15 @@ export function applyZhuqueFeatures(
   seed?: number,
   style: RewriteStyle = "casual",
   // P7-E：对话体剧本场景块跳过自问自答注入
-  opts: { skipSceneInject?: boolean } = {},
+  // v0.9.1：narrative/humanHand 跳过全部自问自答+碎片注入
+  opts: { skipSceneInject?: boolean; skipSelfQA?: boolean } = {},
 ): string {
   if (!text || intensity < 0.35) return text;
   const zrng = makeRng(seed, 7777);
   let result = text;
 
   const isCasual = style === "casual";
+  const skipSelfQA = opts.skipSelfQA ?? false;
   if (isCasual) {
     result = injectDialect(result, zrng, 0.2 * intensity);
   }
@@ -548,7 +686,7 @@ export function applyZhuqueFeatures(
     result = injectParentheticals(result, zrng, 0.15 * intensity);
     result = injectOpinion(result, zrng, 0.12 * intensity);
   }
-  if (isCasual) {
+  if (isCasual && !skipSelfQA) {
     result = injectParentheticNotes(result, zrng, 0.08 * intensity);
     result = injectFragments(result, zrng, 0.06 * intensity);
   }
@@ -556,20 +694,26 @@ export function applyZhuqueFeatures(
   result = limitPunctuation(result, "——", 1, "，");
   // v0.8：自问自答（增强句式跳脱，AI 极少写自问自答，人类日常到处是）
   // P7-E：对话体剧本【场景/人物/背景】块跳过注入，避免台词区被塞"问：…答：…"违和
-  if (isCasual && intensity >= 0.7) {
+  // v0.9.1：narrative/humanHand 跳过全部自问自答（"例子呢？"不属于叙事/人写原稿）
+  if (isCasual && intensity >= 0.7 && !skipSelfQA) {
     const qrng = makeRng(seed, 8888);
     // P7-E：体裁级开关（对话体）→ 全文跳过；未开开关时逐段保护——
     // 含剧本【场景/人物/背景】行的段落原样保留，其余段落照常注入
     const skipFlag = opts.skipSceneInject ?? false;
-    result = result
-      .split(/\n\n+/)
-      .map((p) => {
-        if (skipFlag || p.split(/\n/).some((ln) => SCENE_BLOCK_LINE_RE.test(ln))) return p;
-        const sents = splitSentences(p);
-        if (sents.length < 5) return p;
-        return injectSelfQA(sents, qrng, intensity).join("");
-      })
-      .join("\n\n");
+    // v0.9 专家修复 P5：academic 文风禁自问自答（style !== "academic" 已在
+    // 外层 if 拦截方言/插话，但本块 isCasual 为 false 时 academic 仍会进来——
+    // 明确跳过）。plain 走克制型池。
+    if (style === "casual") {
+      result = result
+        .split(/\n\n+/)
+        .map((p) => {
+          if (skipFlag || p.split(/\n/).some((ln) => SCENE_BLOCK_LINE_RE.test(ln))) return p;
+          const sents = splitSentences(p);
+          if (sents.length < 5) return p;
+          return injectSelfQA(sents, qrng, intensity, style).join("");
+        })
+        .join("\n\n");
+    }
   }
   return result;
 }
@@ -593,7 +737,7 @@ function humanizeSingle(text: string, opts: HumanizeOptions = {}): string {
   working = relaxIntensifierVerb(working, rng, 0.85 * intensity);
   working = relaxLe(working, rng, 0.6 * intensity); // 补"了"概率从 0.4 提到 0.6，人味更强
   working = replaceTemplates(working, rng, intensity);
-  working = replaceVocab(working, rng, intensity);
+  working = replaceVocab(working, rng, intensity, style);
   working = replaceWithDevelopment(working, rng, intensity);
   working = reframeConcessives(working, rng, Math.min(1, 0.5 + 0.5 * intensity));
   working = relaxEmDash(working, rng, 0.6 * intensity);
@@ -610,6 +754,13 @@ function humanizeSingle(text: string, opts: HumanizeOptions = {}): string {
 
   for (let i = 0; i < sentences.length; i++) {
     let s = sentences[i];
+
+    // v0.9-D 场景块行保护：剧本【场景/人物/背景…】块头行原样保留，
+    // 跳过语气词/句尾软化/拆句/合并等全部注入（此前"啧。嗯。呣。"会污染块头）
+    if (isSceneMetaSentence(s)) {
+      out.push(s);
+      continue;
+    }
 
     s = replaceOpener(s, rng, intensity);
 
@@ -670,7 +821,10 @@ function humanizeSingle(text: string, opts: HumanizeOptions = {}): string {
       // 「教育的本质呀。」「技术发展趋势嘛。」是书面语体 + 口语气词的错位组合，
       // 既是 scan-bugs 探针签名，也是真人一眼能读出的机器感。
       const stripped = s.replace(/[。！？!?]+$/, "");
-      const formalityGuard = /[\u4e00-\u9fa5]{0,4}(行业|趋势|教育|技术|发展|本质|方案|融合|转型|体系|机制|模式|能力|水平|质量|效率|价值|意义|作用|目标|战略|格局|态势)$/.test(stripped);
+      const formalityGuard =
+        /[\u4e00-\u9fa5]{0,4}(行业|趋势|教育|技术|发展|本质|方案|融合|转型|体系|机制|模式|能力|水平|质量|效率|价值|意义|作用|目标|战略|格局|态势)$/.test(
+          stripped,
+        );
       const r = rng();
       if (!formalityGuard) {
         if (r < SOFT_ENDING_PROB * intensity && isCasual) {

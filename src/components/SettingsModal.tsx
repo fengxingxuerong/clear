@@ -65,7 +65,13 @@ export function SettingsModal({
 
   return (
     <div className="modal-mask" onClick={onClose}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label="API 设置" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="API 设置"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="modal-head">
           <span>API 设置（可选）</span>
           <button onClick={onClose}>✕</button>
@@ -93,8 +99,8 @@ export function SettingsModal({
         {draftApi.baseUrl.trim().startsWith("/") && (
           <p className="modal-tip" style={{ marginTop: -6 }}>
             ⚠️ 以 / 开头的相对路径只在 <b>dev（vite 代理转发）</b>或 <b>Electron 桌面版</b>
-            下可用。把 dist/ 托管到静态空间的用户需自备反向代理，或改填 CORS 放行的服务商
-            （如 https://api.openai.com/v1）。
+            下可用。把 dist/ 托管到静态空间的用户需自备反向代理，或改填 CORS 放行的服务商 （如
+            https://api.openai.com/v1）。
           </p>
         )}
         <label className="row">
@@ -118,9 +124,15 @@ export function SettingsModal({
           </span>
           <textarea
             style={{
-              flex: 1, minHeight: 60, background: "rgba(8,12,22,0.7)", color: "var(--text)",
-              border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px",
-              fontFamily: "inherit", fontSize: 12,
+              flex: 1,
+              minHeight: 60,
+              background: "rgba(8,12,22,0.7)",
+              color: "var(--text)",
+              border: "1px solid var(--border)",
+              borderRadius: 8,
+              padding: "8px 10px",
+              fontFamily: "inherit",
+              fontSize: 12,
             }}
             value={draftApi.apiKeys ?? ""}
             onChange={(e) => updateApi({ apiKeys: e.target.value })}
@@ -146,7 +158,9 @@ export function SettingsModal({
             title={
               SENSENOVA_PRESET.keys.length === 0
                 ? "未检测到本地 Key（环境变量 SENSENOVA_KEYS 或 scripts/.sensenova-keys），请手动填入或参考 README 配置"
-                : "内置 SenseNova 网关常驻通道（2026-09-01 实测可用）：deepseek-v4-flash 主力 + glm-5.2 交叉评判 + " + SENSENOVA_PRESET.keys.length + " Key 自动轮换"
+                : "内置 SenseNova 网关常驻通道（2026-09-01 实测可用）：deepseek-v4-flash 主力 + glm-5.2 交叉评判 + " +
+                  SENSENOVA_PRESET.keys.length +
+                  " Key 自动轮换"
             }
           >
             填入 SenseNova 常驻通道{SENSENOVA_PRESET.keys.length === 0 ? "（未配置 Key）" : ""}
@@ -186,7 +200,8 @@ export function SettingsModal({
         </label>
         <p className="modal-tip" style={{ marginTop: -6 }}>
           交叉评判：实测同一去味文本主模型（deepseek）自评 30 分、glm-5.2 评 4 分——
-          填一个不同家族的模型（如 glm-5.2 或 sensenova-6.7-flash-lite）评分更客观，痕迹指认也更犀利。
+          填一个不同家族的模型（如 glm-5.2 或
+          sensenova-6.7-flash-lite）评分更客观，痕迹指认也更犀利。
         </p>
         <label className="row">
           <span>一键配置</span>
@@ -296,6 +311,40 @@ export function SettingsModal({
             <option value={80}>80 次</option>
           </select>
         </label>
+        <label className="row">
+          <span>首轮候选数</span>
+          <select
+            value={draftApi.contestSamples ?? 1}
+            onChange={(e) => updateApi({ contestSamples: Number(e.target.value) })}
+          >
+            <option value={1}>1（关闭，最快）</option>
+            <option value={2}>2（推荐）</option>
+            <option value={3}>3（最稳，首轮调用数 ×3）</option>
+          </select>
+        </label>
+        <p className="modal-tip" style={{ marginTop: -6 }}>
+          首轮多候选竞争：未填「备选改写」时生效，同一模型采样 N 稿后取评价最好的一版当底稿。
+          实测同一模型的改写稿质量在 20~88 分之间横跳（极差 89），而评判持尺极稳
+          （同一文本重复评判极差仅 2）——20 分还是 88 分基本看采样运气。
+          多采几稿能把"运气差"的下限直接抹掉；代价是首轮调用数按倍数增长。
+        </p>
+        <p className="modal-tip" style={{ marginTop: -6 }}>
+          调用上限参考：每轮约消耗 5~6 次调用（改写 + 质检 + 评判 + 交叉评判）， 跑满{" "}
+          {DEEP_MAX_ROUNDS} 轮约需 20~24 次。填 10 实测只够 2 轮。
+        </p>
+        <label className="row">
+          <span>严格保真</span>
+          <input
+            type="checkbox"
+            checked={draftApi.strictFidelity ?? false}
+            onChange={(e) => updateApi({ strictFidelity: e.target.checked })}
+          />
+        </label>
+        <p className="modal-tip" style={{ marginTop: -6 }}>
+          严格保真：财经/新闻/学术等事实敏感场景建议开启。深度闭环收稿前若仍有未修复的
+          编造/忠实度问题（如现编「我见过不少例子」），会预算外追加一轮定向修复；
+          修不掉则保留原稿并明确警告，绝不静默带病交付。
+        </p>
 
         <div className="modal-divider">朱雀增强（可选 · 反检测特征）</div>
         <p className="modal-tip">
@@ -350,20 +399,23 @@ export function SettingsModal({
             value={draftLocal.candidates}
             onChange={(e) => {
               const v = parseInt(e.target.value, 10);
-              setDraftLocal({ ...draftLocal, candidates: Number.isFinite(v) ? Math.max(1, Math.min(30, v)) : 8 });
+              setDraftLocal({
+                ...draftLocal,
+                candidates: Number.isFinite(v) ? Math.max(1, Math.min(30, v)) : 8,
+              });
             }}
           />
         </label>
 
         <div className="modal-divider">对标检测器（可选 · 如朱雀）</div>
         <p className="modal-tip">
-          把 {`{text}`} POST 到你的检测器接口，从返回 JSON
-          按路径取分数。朱雀 API 用户填入 EdgeOne 网关域名 + Key 即可。
+          把 {`{text}`} POST 到你的检测器接口，从返回 JSON 按路径取分数。朱雀 API 用户填入 EdgeOne
+          网关域名 + Key 即可。
         </p>
         <p className="modal-tip" style={{ marginTop: -6 }}>
-          <b>朱雀一键配置</b>：在腾讯云 EdgeOne 控制台创建 AI 网关后，
-          将网关域名和 API Key 填入下方，点「朱雀预设」自动配好路径和刻度。
-          网关路由 = <code>{`/v1/providers/zhuque-text/classify`}</code>
+          <b>朱雀一键配置</b>：在腾讯云 EdgeOne 控制台创建 AI 网关后， 将网关域名和 API Key
+          填入下方，点「朱雀预设」自动配好路径和刻度。 网关路由 ={" "}
+          <code>{`/v1/providers/zhuque-text/classify`}</code>
         </p>
         <label className="row">
           <span>朱雀预设</span>
@@ -372,7 +424,9 @@ export function SettingsModal({
             onClick={() =>
               updateDetector({
                 enabled: true,
-                url: (draftDetector.url.replace(/\/+$/, "") || "https://your-gateway.edgeone.app") + "/v1/providers/zhuque-text/classify",
+                url:
+                  (draftDetector.url.replace(/\/+$/, "") || "https://your-gateway.edgeone.app") +
+                  "/v1/providers/zhuque-text/classify",
                 scorePath: "softmax_confidence",
                 scale: "0-1",
               })

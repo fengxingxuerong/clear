@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { humanize, aiScore, humanizeWithScore, crossChunkCleanup } from "./humanize.ts";
 import { VOCAB, DIALECT_VOCAB } from "./humanize-data.ts";
+import { countPadHeads, PAD_INJECT_CAP } from "./humanize-primitives.ts";
+import { restoreMixedSpacing } from "./humanize-shuffle.ts";
 import {
   pplIssues,
   PPL_MIN_MEAN_NLL,
@@ -15,6 +17,38 @@ describe("humanize 引擎", () => {
   it("空/纯空白输入返回空串", () => {
     expect(humanize("")).toBe("");
     expect(humanize("   \n  \t  ")).toBe("");
+  });
+
+  it("超短文本透传（v0.9.4：实测「短。」被管线清成空串，数据丢失）", () => {
+    expect(humanize("短。")).toBe("短。");
+    expect(humanize("好的", { intensity: 0.9, zhuqueMode: true })).toBe("好的");
+    // 10 字及以上的正常短句不受守卫影响（不做内容断言，只断非空且包含原词根）
+    const out = humanize("这句话有十个字以上了吗", { seed: 1 });
+    expect(out.length).toBeGreaterThan(0);
+  });
+
+  it("串联迭代不堆积垫词（v0.9.4 P2 跨轮饱和守卫）", () => {
+    // 实测迭代 5 轮垫词 12→22→28→35 线性堆积、字数 +89%——
+    // 守卫生效后：第二次处理的注入被抑制，垫词计数不得随轮次显著增长
+    const sample = `值得注意的是，在当今社会，随着人工智能技术的快速发展，AI 写作工具应运而生。
+首先，它能够提升效率。通过自动化的方式，减少重复劳动。其次，它降低了门槛。普通人也能生成可用的文本。最后，它改变了行业。许多岗位被重新定义。
+综上所述，这项技术至关重要。它不仅影响当下，还塑造未来。唯有主动拥抱变化，方能行稳致远。`;
+    const r1 = humanize(sample, { intensity: 0.9, seed: 20260905, zhuqueMode: true });
+    const r2 = humanize(r1, { intensity: 0.9, seed: 20260905, zhuqueMode: true });
+    const r3 = humanize(r2, { intensity: 0.9, seed: 20260905, zhuqueMode: true });
+    // 饱和守卫：第 2 轮起注入被抑制，垫词数不再单调上涨（允许 ±2 抖动）
+    expect(countPadHeads(r2)).toBeLessThanOrEqual(countPadHeads(r1) + 2);
+    expect(countPadHeads(r3)).toBeLessThanOrEqual(countPadHeads(r2) + 2);
+    // 字数不随迭代注水（旧实现 3 轮 +40%+）
+    expect(r3.replace(/\s/g, "").length).toBeLessThanOrEqual(
+      r1.replace(/\s/g, "").length * 1.2,
+    );
+  });
+
+  it("countPadHeads 基础口径", () => {
+    expect(countPadHeads("正常的文本没有垫词。")).toBe(0);
+    expect(countPadHeads(`你懂的。就这么回事。`)).toBe(2);
+    expect(PAD_INJECT_CAP).toBeGreaterThan(5);
   });
 
   it("纯英文不崩溃且产出非空", () => {
@@ -134,7 +168,6 @@ describe("数据词典完整性", () => {
   }
 });
 
-
 describe("pplIssues 第 8 项判定", () => {
   const win = { charStart: 0, charEnd: 100, scoredCount: 80, meanNll: 0.5 };
   const base = {
@@ -165,5 +198,26 @@ describe("pplIssues 第 8 项判定", () => {
 
   it("短文（低于 PPL_MIN_CHARS）静默跳过", () => {
     expect(pplIssues({ ...base, scoredChars: PPL_MIN_CHARS - 1, meanNll: 0 })).toHaveLength(0);
+  });
+});
+
+describe("restoreMixedSpacing（v0.8.9 LLM 稿空格回填）", () => {
+  const orig = "从 Webpack 迁移到 Vite，包含 1200 个模块。";
+  it("原文带空格排版 → 回填被 LLM 压掉的空格", () => {
+    const out = restoreMixedSpacing(orig, "从Webpack迁移到Vite，包含1200个模块。");
+    expect(out).toBe("从 Webpack 迁移到 Vite，包含 1200 个模块。");
+  });
+  it("中文标点后不插空格（初版 bug：产出'， 1200 个模块'）", () => {
+    const out = restoreMixedSpacing(orig, "我们有个项目，1200个模块。Vite很快。");
+    expect(out).not.toMatch(/[，。；：、]\s/);
+    expect(out).toContain("，1200 个模块");
+  });
+  it("原文不带空格 → 原样返回，不擅自加空格", () => {
+    const noSpace = "从Webpack迁移到Vite。";
+    expect(restoreMixedSpacing(noSpace, "从Webpack迁移到Vite。")).toBe("从Webpack迁移到Vite。");
+  });
+  it("幂等：已有空格不重复插入", () => {
+    const once = restoreMixedSpacing(orig, "从Webpack迁移到Vite");
+    expect(restoreMixedSpacing(orig, once)).toBe(once);
   });
 });

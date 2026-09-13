@@ -33,6 +33,8 @@ export interface RunResult {
   roundScores: number[];
   /** 多候选择优信息（仅本地引擎路径有） */
   bestOf?: { tried: number; rejected: number; seed: number };
+  /** v0.9.4 P2 压缩率（去空白产出/原文，仅 API 路径）：UI 知情用 */
+  shrinkRatio?: number;
 }
 
 /** 本地引擎选项：多候选择优 */
@@ -51,8 +53,18 @@ function runLocal(
   local?: LocalOptions,
 ): { text: string; after: ReturnType<typeof aiScore>; bestOf: RunResult["bestOf"] } {
   if (local?.bestOf) {
-    const r = humanizeBestOf(text, { intensity, zhuqueMode, style, genre, candidates: local.candidates });
-    return { text: r.text, after: r.after, bestOf: { tried: r.tried, rejected: r.rejected, seed: r.seed } };
+    const r = humanizeBestOf(text, {
+      intensity,
+      zhuqueMode,
+      style,
+      genre,
+      candidates: local.candidates,
+    });
+    return {
+      text: r.text,
+      after: r.after,
+      bestOf: { tried: r.tried, rejected: r.rejected, seed: r.seed },
+    };
   }
   const out = humanize(text, { intensity, zhuqueMode, style, genre });
   return { text: out, after: aiScore(out), bestOf: undefined };
@@ -69,11 +81,25 @@ export async function runHumanize(
   local?: LocalOptions,
 ): Promise<RunResult> {
   const before = aiScore(text);
+  // v0.9.4 P1 边界守卫：超短文本透传。实测「短。」发给 LLM 被当成用户指令，
+  // 模型回复「好的，请把原文发给我」这类元话语并拿到 3 分"达标"——质检与评判
+  // 都识别不了"答非所问"。10 字以内直接跳过 API 路径（本地引擎同样透传）。
+  if (text.replace(/\s+/g, "").length < 10 && text.trim()) {
+    return {
+      text,
+      before,
+      after: before,
+      usedApi: false,
+      note: "文本过短（去空白 <10 字），跳过去味",
+      roundScores: [],
+    };
+  }
   let usedApi = false;
   let note = "";
   let outText: string;
   let roundScores: number[] = [];
   let bestOf: RunResult["bestOf"];
+  let shrinkRatio: number | undefined;
 
   if (cfg.enabled && effectiveKeys(cfg).length > 0) {
     try {
@@ -123,6 +149,13 @@ export async function runHumanize(
         outText = crossChunkCleanup(outText);
         usedApi = true;
         const fid = checkFidelityLocal(text, outText);
+        // v0.9.4 P2：整篇压缩率（含单块本地回退的混拼结果，按最终拼稿算）
+        const rc = (s: string) => s.replace(/\s+/g, "").length;
+        shrinkRatio = rc(text) > 0 ? +(rc(outText) / rc(text)).toFixed(2) : undefined;
+        const shrinkNote =
+          shrinkRatio !== undefined && shrinkRatio < 0.8
+            ? ` · 字数压缩 ${Math.round((1 - shrinkRatio) * 100)}%`
+            : "";
         note =
           `长文分块处理（${chunks.length} 块）` +
           (allScores.length
@@ -130,7 +163,8 @@ export async function runHumanize(
             : "") +
           (allQc.length ? ` · 质检 ${allQc.filter(Boolean).length}/${allQc.length} 通过` : "") +
           (fid.pass ? "" : ` · ⚠️忠实度：${fid.problems[0]}`) +
-          (anyIssue ? " · 部分块有未修复质检问题" : "");
+          (anyIssue ? " · 部分块有未修复质检问题" : "") +
+          shrinkNote;
         // v0.8.6 LLM 主导：API 输出即最终稿，不再叠加本地朱雀特征（方言/自问自答/错别字
         // 注入会污染 LLM 的语义级改写）。反检测特征由提示词 19 条战术原生产出。
         return {
@@ -159,12 +193,20 @@ export async function runHumanize(
         const qcSummary = deep.qcPassed.length
           ? ` · 质检 ${qcOk}/${deep.qcPassed.length} 轮通过${deep.qcIssues.length ? "（最终稿有未修复问题：" + deep.qcIssues[0] + "…）" : ""}`
           : "";
+        // v0.9.4 P2：压缩超 20% 时显式告知（LLM 改写系统性缩水，用户需知情）
+        const shrinkNote =
+          deep.shrinkRatio !== undefined && deep.shrinkRatio < 0.8
+            ? ` · 字数压缩 ${Math.round((1 - deep.shrinkRatio) * 100)}%`
+            : "";
         note =
           (deep.hitTarget
             ? `深度去味达标：各轮评分 ${shown}`
             : deep.note
               ? `${deep.note}：各轮评分 ${shown}`
-              : `深度去味完成（未压到 ${deep.targetUsed} 以下）：各轮评分 ${shown}`) + qcSummary;
+              : `深度去味完成（未压到 ${deep.targetUsed} 以下）：各轮评分 ${shown}`) +
+          qcSummary +
+          shrinkNote;
+        shrinkRatio = deep.shrinkRatio;
       } else {
         outText = await humanizeViaApi(text, cfg, intensity);
         // 单轮 LLM 输出同样过反指纹清理（垫词去重/破折号限额/套话清除/空格清理），
@@ -190,5 +232,20 @@ export async function runHumanize(
   // 朱雀增强（zhuqueMode）仅作用于本地引擎路径（runLocal 内部处理）。
 
   const after = aiScore(outText);
-  return { text: outText, before, after, usedApi, note, roundScores, bestOf };
+  // v0.9.4 P2 迭代收益提示：实测深度模式对已去味文本（AI 味 <35 分）再处理
+  // 收益趋零（31→30）且白烧 5~10 分钟——信息提示不拦截，用户自行决定
+  const tip =
+    before.probability < 35 && usedApi
+      ? "（提示：输入 AI 味已较低，本轮收益有限；重复/串联去味不建议）"
+      : "";
+  return {
+    text: outText,
+    before,
+    after,
+    usedApi,
+    note: (note + (tip ? ` ${tip}` : "")).trim(),
+    roundScores,
+    bestOf,
+    shrinkRatio,
+  };
 }

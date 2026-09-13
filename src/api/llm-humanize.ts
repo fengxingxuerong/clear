@@ -3,9 +3,15 @@
  */
 
 import { ApiConfig, DEEP_MAX_ROUNDS, DEEP_TARGET_SCORE } from "./llm-config";
-import { SYSTEM_PROMPT, buildRevisionPrompt, intensityDirective, styleDirective } from "./llm-prompts";
+import {
+  SYSTEM_PROMPT,
+  buildRevisionPrompt,
+  intensityDirective,
+  styleDirective,
+} from "./llm-prompts";
 import { chat, resetApiCallCount, getApiCallCount } from "./llm-chat";
-import { processCandidate } from "./llm-quality";
+import { processCandidate, fabricationReview } from "./llm-quality";
+import { restoreMixedSpacing } from "../engine/humanize-shuffle.ts";
 import { errMsg } from "./llm-judge";
 
 /* ----------------------------- 去味 ----------------------------- */
@@ -41,7 +47,56 @@ export async function humanizeViaApi(
   if (!content) {
     throw new Error("模型返回空内容（思考型模型 token 预算耗尽，可重试或换非思考型模型）");
   }
-  return content;
+  // v0.8.9：回填被 LLM 压掉的中英/中数空格（提示词管不住，改确定性后处理）
+  return restoreMixedSpacing(text, content);
+}
+
+/**
+ * v0.8.9 P0：空响应降级重试。
+ *
+ * 背景：深度闭环实测在第 2 轮拿到空 content 就直接 break——首轮明明改写成功，说明模型可用，
+ * 空响应多为偶发（思考型模型 reasoning 吃光 max_tokens / 网关抖动 / 修订指令过长）。
+ * 原实现不重试、不换模型，242s 后把「首轮 60 分、目标 21」的未达标稿静默交付。
+ *
+ * 降级链：默认参数 → token 预算翻倍 → 换备选模型，任一环节拿到非空内容即返回。
+ * 已超调用预算时不再重试，避免把时间/额度烧在重试上。
+ */
+async function chatNonEmpty(
+  cfg: ApiConfig,
+  messages: { role: "system" | "user"; content: string }[],
+  opts: { temperature: number; maxTokens: number; model?: string },
+  altModel: string,
+  isOverBudget: () => boolean,
+): Promise<{ content: string; via: string }> {
+  const attempts: { model?: string; maxTokens: number; label: string }[] = [
+    { model: opts.model, maxTokens: opts.maxTokens, label: "" },
+    { model: opts.model, maxTokens: Math.min(32000, opts.maxTokens * 2), label: "token 预算翻倍" },
+  ];
+  if (altModel && altModel !== opts.model) {
+    attempts.push({ model: altModel, maxTokens: opts.maxTokens, label: `换模型 ${altModel}` });
+  }
+  for (let i = 0; i < attempts.length; i++) {
+    if (i > 0 && isOverBudget()) break;
+    try {
+      const r = await chat(cfg, messages, {
+        temperature: opts.temperature,
+        maxTokens: attempts[i].maxTokens,
+        model: attempts[i].model,
+      });
+      if (r.content) return { content: r.content, via: attempts[i].label };
+    } catch {
+      // 单档失败交给下一档降级；全部失败由调用方按空内容处理
+    }
+  }
+  return { content: "", via: "" };
+}
+
+/** v0.9.4 P2：去空白字符数之比（产出/原文），作为压缩率口径 */
+function shrinkRatioOf(original: string, output: string): number {
+  const chars = (s: string) => s.replace(/\s+/g, "").length;
+  const o = chars(original);
+  if (o <= 0) return 1;
+  return +(chars(output) / o).toFixed(2);
 }
 
 export interface DeepResult {
@@ -58,6 +113,9 @@ export interface DeepResult {
   qcPassed: boolean[];
   /** 最后一轮未修复的质检问题（展示用） */
   qcIssues: string[];
+  /** v0.9.4 P2 压缩率：去空白后 产出字数 / 原文字数。LLM 改写系统性压缩 25~44%，
+   *  UI/note 需要让用户知情（本地引擎是注水 +8~22%，两者方向相反）。 */
+  shrinkRatio?: number;
 }
 
 /** 深度去味闭环：改写 →（机械扰动）→ 质检 → 交叉评判 → 未达标按痕迹定向修订，
@@ -100,45 +158,66 @@ export async function humanizeViaApiDeep(
   // 避免"越改越宽"），有效目标 = max(绝对目标, 首轮分 × RELATIVE_TARGET_RATIO)
   let anchorScore: number | null = null;
   const effTarget = () =>
-    anchorScore === null ? target : Math.max(target, Math.round(anchorScore * RELATIVE_TARGET_RATIO));
+    anchorScore === null
+      ? target
+      : Math.max(target, Math.round(anchorScore * RELATIVE_TARGET_RATIO));
 
   // v0.5.1 双改写器竞争：主模型与备选模型各写一版第一稿，交叉评分择优当底稿。
   // 依据 A/B 实测：glm-5.2 改写被 deepseek 判 35，deepseek 改写被 glm 判 75（两样本一致）——
   // 不同模型的改写强项差异巨大，让它们赛一场比押注单模型稳。
+  // v0.8.9 扩展：未配 altModel 时，可用同一模型多采样竞争（cfg.contestSamples ≥ 2）。
+  // 依据：实测同一 temperature=0.9 的改写稿质量在 20~88 分之间横跳（极差 89），
+  // 而评判尺子极稳（同文本重复评判极差 2）——瓶颈是改写采样的运气，多采几稿取最优最直接。
   const alt = cfg.altModel.trim();
+  const contestants: string[] = [];
   if (alt && alt !== cfg.model) {
+    contestants.push(cfg.model, alt);
+  } else {
+    const n = Math.max(1, Math.min(5, Math.floor(cfg.contestSamples ?? 1)));
+    for (let i = 0; i < n; i++) contestants.push(cfg.model);
+  }
+  const multiContest = contestants.length > 1;
+  if (multiContest) {
     const contestInfo: string[] = [];
-    for (const m of [cfg.model, alt]) {
+    for (let ci = 0; ci < contestants.length; ci++) {
+      const m = contestants[ci];
+      // 同模型多次采样时给日志加序号，否则 N 条记录长得一模一样没法排查
+      const tag = `${m}#${ci + 1}`;
       // v0.8.6 竞争段接入调用预算：每个竞争者开跑前检查（与主循环"轮间检查"同语义），
       // 超预算不再发起竞争调用——此前竞争段计入计数却不受约束，极小预算配置下
       // 会先烧穿 maxApiCalls 才轮到主循环首次检查
       if (isOverBudget()) {
-        contestInfo.push(`${m}:预算已耗尽跳过`);
+        contestInfo.push(`${tag}:预算已耗尽跳过`);
         continue;
       }
       try {
-        const r = await chat(
+        // v0.8.9：竞争段同样走空响应降级重试；altModel 传空——本段已是多候选竞争，
+        // 不再嵌套"换模型"档，避免调用数不可控
+        const r = await chatNonEmpty(
           cfg,
           [
             { role: "system", content: buildSystemPrompt(cfg, intensity) },
             { role: "user", content: text },
           ],
           { temperature: cfg.temperature, maxTokens: 8000, model: m },
+          "",
+          isOverBudget,
         );
         if (!r.content) {
-          contestInfo.push(`${m}:空输出`);
+          contestInfo.push(`${tag}:空输出`);
           continue;
         }
         const cand = await processCandidate(text, r.content, cfg, intensity);
         qcPassed.push(cand.qc.pass);
         if (!cand.qc.pass) {
-          contestInfo.push(`${m}:质检未过`);
+          contestInfo.push(`${tag}:质检未过`);
           qcIssues = cand.qc.issues;
           continue;
         }
         roundScores.push(cand.score ?? -1);
-        if (cand.score !== null && cand.score >= 0 && anchorScore === null) anchorScore = cand.score;
-        contestInfo.push(`${m}:${cand.score ?? "?"}`);
+        if (cand.score !== null && cand.score >= 0 && anchorScore === null)
+          anchorScore = cand.score;
+        contestInfo.push(`${tag}:${cand.score ?? "?"}`);
         const sc = cand.score ?? 999;
         if (sc < bestScore) {
           bestScore = sc;
@@ -146,14 +225,27 @@ export async function humanizeViaApiDeep(
           lastCritique = cand.critique;
           writerModel = m;
         }
-        onProgress?.(1, cand.score, `竞争 ${m} `);
+        onProgress?.(1, cand.score, `竞争 ${tag} `);
       } catch {
-        contestInfo.push(`${m}:调用失败`);
+        contestInfo.push(`${tag}:调用失败`);
       }
     }
     note = `双模型竞争（${contestInfo.join("，")}）`;
+    // v0.8.9：竞争段有多个有效分时，锚点取<b>最优（最低）</b>分而非首个——首个分只是
+    // "第一次采样的运气"，用它标定宽严会把达标线抬松。实测三候选 85/70/70，
+    // 用首个分定锚 → 达标线 ≤30；用最优分 70 定锚 → ≤24，才反映真实可达水平。
+    if (anchorScore === null && bestScore < 999) anchorScore = bestScore;
     if (bestText && bestScore <= effTarget()) {
-      return { text: bestText, roundScores, hitTarget: true, note, qcPassed, qcIssues, targetUsed: effTarget() };
+      return {
+        text: bestText,
+        roundScores,
+        hitTarget: true,
+        note,
+        qcPassed,
+        qcIssues,
+        targetUsed: effTarget(),
+        shrinkRatio: shrinkRatioOf(text, bestText),
+      };
     }
   }
 
@@ -170,6 +262,7 @@ export async function humanizeViaApiDeep(
     }
     // 单轮失败（限流耗尽/网络）不丢掉已完成成果：有 bestText 就带结果收场
     let content: string;
+    let retryVia: string | undefined; // v0.8.9：记录本轮靠哪档降级重试拿到的内容（undefined=未重试）
     try {
       const userMsg = bestText
         ? buildRevisionPrompt(
@@ -179,7 +272,8 @@ export async function humanizeViaApiDeep(
             lastCritique,
           )
         : text; // 没有可用底稿（如前轮质检全挂）就重新改写原文
-      const r = await chat(
+      // v0.8.9 P0：空响应不再直接放弃，走降级重试（token 预算翻倍 / 换备选模型）
+      const r = await chatNonEmpty(
         cfg,
         [
           { role: "system", content: buildSystemPrompt(cfg, intensity) },
@@ -190,8 +284,11 @@ export async function humanizeViaApiDeep(
           maxTokens: 8000,
           model: writerModel,
         },
+        alt,
+        isOverBudget,
       );
       content = r.content;
+      retryVia = r.via;
     } catch (e: unknown) {
       if (bestText) {
         note = `第 ${round} 轮调用失败（${errMsg(e)}），返回已有最优结果`;
@@ -199,11 +296,31 @@ export async function humanizeViaApiDeep(
       }
       throw e;
     }
+    if (!content && bestText) {
+      // v0.8.9：带痕迹清单的修订 prompt 长度与指令复杂度都远高于首轮，是空响应高发区。
+      // 降级重试仍为空时，退回"纯原文重改写"（不带 critique）再给一次机会——
+      // 拿到内容就继续闭环，拿不到才带已有最优结果收场。
+      const fb = await chatNonEmpty(
+        cfg,
+        [
+          { role: "system", content: buildSystemPrompt(cfg, intensity) },
+          { role: "user", content: text },
+        ],
+        { temperature: cfg.temperature, maxTokens: 8000, model: writerModel },
+        alt,
+        isOverBudget,
+      );
+      if (fb.content) {
+        content = fb.content;
+        retryVia = retryVia ? `${retryVia}+纯原文重改写` : "纯原文重改写";
+      }
+    }
     if (!content) {
       if (!bestText) {
         throw new Error("模型返回空内容（思考型模型 token 预算耗尽，可重试或换非思考型模型）");
       }
-      note = `第 ${round} 轮模型返回空内容，返回已有最优结果`;
+      // v0.8.9：已走完降级重试仍为空才放弃，并把重试情况写进 note 让 UI 可见
+      note = `第 ${round} 轮模型返回空内容${retryVia ? `（已重试：${retryVia}）` : "（降级重试亦为空）"}，返回已有最优结果`;
       break;
     }
 
@@ -232,14 +349,26 @@ export async function humanizeViaApiDeep(
     onProgress?.(round, score);
 
     if (score !== null && score >= 0) {
-      if (score < bestScore) {
-        bestScore = score;
-        bestText = cand.shuffled;
-      }
+      // 达标优先：本轮达标即收，若同时是最低分则更新底稿
       if (score <= effTarget()) {
         hitTarget = true;
+        // 达标即最优（后续不再更新），直接落底稿后退出
+        if (score < bestScore) {
+          bestText = cand.shuffled;
+        }
         break;
       }
+      // v0.8.9 未改进即停：本轮分数不优于当前最优 = 修订没带来收益，立即收手。
+      // 实测修订轮频繁反向优化（76→88；三候选底稿 70、修订后 89），继续只会白烧预算。
+      // 早前版本按"高于上一轮"判定，但上一轮基线不含竞争段最优分，
+      // 于是出现"竞争稿 70、修订稿 89"仍继续跑下一轮的情况。改用 bestScore 作基线：
+      // 初值 999（哨兵）保证首轮必然优于它，不会误停。
+      if (score >= bestScore) {
+        note = `第 ${round} 轮未优于当前最优（${bestScore} → ${score}），修订无收益，停止后续轮次`;
+        break;
+      }
+      bestScore = score;
+      bestText = cand.shuffled;
     } else if (!bestText) {
       // 评分失败但质检已过，兜底保留；分数记 999（劣于一切真实分），
       // 不能用 -1 —— 那会让后续真实分数永远赢不了它（best-of 被哨兵污染）
@@ -254,10 +383,122 @@ export async function humanizeViaApiDeep(
     throw new Error((note || "深度去味未获得任何可用结果") + "，已回退本地引擎");
   }
 
+  // v0.9.4 P1 严格保真补偿轮：深度闭环超时/未达标收场时，最后一轮未修复的
+  // 质检项（编造/忠实度类）会随最优稿交付——事实敏感场景不能带病交付。
+  // 预算外补一轮定向修订（只修事实错误、不追分数）：修好替换底稿，
+  // 修不掉保留原稿并把警告写进 note。不受 isOverBudget 约束（只此一轮）。
+  if (cfg.strictFidelity && qcIssues.length > 0 && bestText) {
+    try {
+      const rep = await chatNonEmpty(
+        cfg,
+        [
+          { role: "system", content: buildSystemPrompt(cfg, intensity) },
+          {
+            role: "user",
+            content: buildRevisionPrompt(
+              bestText,
+              bestScore > 100 ? 50 : bestScore,
+              effTarget(),
+              qcIssues,
+            ),
+          },
+        ],
+        { temperature: 0.4, maxTokens: 8000, model: writerModel },
+        alt,
+        () => false,
+      );
+      if (rep.content) {
+        const cand = await processCandidate(text, rep.content, cfg, intensity);
+        qcPassed.push(cand.qc.pass);
+        if (cand.qc.pass) {
+          if (cand.score !== null && cand.score >= 0) roundScores.push(cand.score);
+          bestText = cand.shuffled;
+          qcIssues = [];
+          note = (note ? `${note}；` : "") + "严格保真补偿轮修复通过";
+          onProgress?.(roundScores.length, cand.score, "严格保真补偿 ");
+        } else {
+          qcIssues = cand.qc.issues;
+          note =
+            (note ? `${note}；` : "") +
+            "严格保真补偿轮未能消除风险项（编造/忠实度），建议人工复核";
+        }
+      }
+    } catch {
+      note = (note ? `${note}；` : "") + "严格保真补偿轮调用失败，保留原最优稿";
+    }
+  }
+
+  // v0.9.4 P1.5 编造专项复核：补偿轮只管"已报出的未修复项"，抓不住"最后一轮
+  // LLM 质检漏判"的编造（实测 s5 分块输出 7 处第一人称编造全部漏网交付）。
+  // strictFidelity 时对最终稿整体过一遍独立事实核查（交叉评判模型）：审出编造
+  // → 定向修复 → 复审；修不掉保留原稿并显式警告。复核通道异常不阻断交付。
+  if (cfg.strictFidelity) {
+    try {
+      const fabs = await fabricationReview(text, bestText, cfg);
+      if (fabs.length) {
+        let fixed = false;
+        const rep = await chatNonEmpty(
+          cfg,
+          [
+            { role: "system", content: buildSystemPrompt(cfg, intensity) },
+            {
+              role: "user",
+              content: buildRevisionPrompt(
+                bestText,
+                bestScore > 100 ? 50 : bestScore,
+                effTarget(),
+                fabs,
+              ),
+            },
+          ],
+          { temperature: 0.4, maxTokens: 8000, model: writerModel },
+          alt,
+          () => false,
+        );
+        if (rep.content) {
+          const cand = await processCandidate(text, rep.content, cfg, intensity);
+          if (cand.qc.pass) {
+            const fabs2 = await fabricationReview(text, cand.shuffled, cfg);
+            if (!fabs2.length) {
+              if (cand.score !== null && cand.score >= 0) roundScores.push(cand.score);
+              qcPassed.push(true);
+              bestText = cand.shuffled;
+              fixed = true;
+              onProgress?.(roundScores.length, cand.score, "编造复核修复 ");
+            }
+          }
+        }
+        note =
+          (note ? `${note}；` : "") +
+          (fixed
+            ? `编造复核：发现 ${fabs.length} 项事实性新增，定向修复后复审通过`
+            : `编造复核：发现 ${fabs.length} 项事实性新增未能消除，建议人工核对（如「${fabs[0].slice(0, 30)}」）`);
+      }
+    } catch {
+      note = (note ? `${note}；` : "") + "编造复核通道异常，本轮跳过（不影响交付）";
+    }
+  }
+
   // v0.8.8 评判锚点可见化：达标线被放宽时写进 note，用户知道为什么"分高也算达标"
   const targetUsed = effTarget();
   if (anchorScore !== null && targetUsed > target) {
-    note = (note ? `${note}；` : "") + `评判锚点：首轮 ${anchorScore} 分 → 达标线放宽至 ≤${targetUsed}`;
+    note =
+      (note ? `${note}；` : "") + `评判锚点：首轮 ${anchorScore} 分 → 达标线放宽至 ≤${targetUsed}`;
   }
-  return { text: bestText, roundScores, hitTarget, note, qcPassed, qcIssues, targetUsed };
+  // v0.8.9：闭环提前收场且未达标时必须说清楚——此前 UI 静默交付"看起来完成"的未达标稿
+  if (!hitTarget && roundScores.length > 0) {
+    note =
+      (note ? `${note}；` : "") +
+      `仅完成 ${roundScores.length} 轮，未达目标 ≤${targetUsed} 分，结果可能仍偏 AI（可重试或换改写模型）`;
+  }
+  return {
+    text: bestText,
+    roundScores,
+    hitTarget,
+    note,
+    qcPassed,
+    qcIssues,
+    targetUsed,
+    shrinkRatio: shrinkRatioOf(text, bestText),
+  };
 }

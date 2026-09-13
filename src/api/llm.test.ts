@@ -11,10 +11,10 @@ afterEach(() => {
 });
 
 function okJson(content: string): Response {
-  return new Response(
-    JSON.stringify({ choices: [{ message: { content } }] }),
-    { status: 200, headers: { "Content-Type": "application/json" } },
-  );
+  return new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
 const SAMPLE =
@@ -51,7 +51,10 @@ describe("runHumanize 分发", () => {
   });
 
   it("API 失败（404 无退避）：回退本地引擎，note 注明原因，结果不丢", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("down", { status: 404 })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("down", { status: 404 })),
+    );
     const cfg = { ...DEFAULT_API, enabled: true, apiKey: "k", deepMode: false };
     const r = await runHumanize(SAMPLE, 0.7, cfg);
     expect(r.usedApi).toBe(false);
@@ -93,7 +96,8 @@ describe("runHumanize 分发", () => {
 
   it("深度模式：走 humanizeViaApiDeep 闭环，note 汇总各轮评分", async () => {
     // 样本不含英文术语——改写稿假人不保留原词时忠实度校验会打回
-    const sample = "值得注意的是，随着智能技术的快速发展，写作工具应运而生。综上所述，数字化办公不仅极大地提升了工作效率，而且有效地降低了运营成本。然而，技术的变革也带来了一系列值得关注的挑战。与此同时，如何平衡创新与风险，成为至关重要的课题。";
+    const sample =
+      "值得注意的是，随着智能技术的快速发展，写作工具应运而生。综上所述，数字化办公不仅极大地提升了工作效率，而且有效地降低了运营成本。然而，技术的变革也带来了一系列值得关注的挑战。与此同时，如何平衡创新与风险，成为至关重要的课题。";
     // 角色化 mock：改写专家→正文，质检员→PASS，检测员→分数
     vi.stubGlobal(
       "fetch",
@@ -102,7 +106,9 @@ describe("runHumanize 分发", () => {
         const sys = body.messages?.[0]?.content ?? "";
         if (sys.includes("质检员")) return okJson("PASS");
         if (sys.includes("改写专家"))
-          return okJson("时间往前倒几年，这类工具还没几个人用，现在情况已经完全不一样了，值得慢慢琢磨。");
+          return okJson(
+            "时间往前倒几年，这类工具还没几个人用。现在情况完全不一样了，写作成本降了不少，效率也上来了。不过用得多了，内容同质化的担心也在，使用规范还得慢慢建立。",
+          );
         return okJson("句长过于均匀\n35");
       }),
     );

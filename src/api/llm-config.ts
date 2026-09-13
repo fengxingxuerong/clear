@@ -6,7 +6,6 @@ import type { RewriteStyle } from "../engine/humanize-primitives";
 
 export type { RewriteStyle };
 
-
 export interface ApiConfig {
   enabled: boolean;
   baseUrl: string;
@@ -21,6 +20,17 @@ export interface ApiConfig {
   judgeModel: string;
   /** 备选改写模型（可选）：配置后深度模式首轮"双模型竞争"择优。 */
   altModel: string;
+  /**
+   * v0.8.9：首轮多候选竞争采样数（默认 1 = 关闭）。仅在<b>未配置 altModel</b> 时生效——
+   * 配了 altModel 就走原来的双模型竞争。
+   *
+   * 依据：专项实测同一 temperature=0.9 的改写稿质量在 20~88 分之间横跳（极差 89），
+   * 而评判尺子极稳（同文本重复评判极差 2）——瓶颈是改写采样的运气，不是尺子。
+   * 首轮多采 N 稿、评判后取最低分，能直接抹掉"运气差"的下限。
+   *
+   * 代价：首轮调用数 × N（每稿含改写 + 质检 + 评判）。建议 2~3，配合 maxApiCalls 使用。
+   */
+  contestSamples?: number;
   /** 文风预设：casual=自然口语 / plain=平实书面 / academic=学术体保术语 */
   style: RewriteStyle;
   /** 推理强度（可选，仅推理模型如 Ox Alpha / o1 / DeepSeek-R1 支持）：
@@ -34,6 +44,11 @@ export interface ApiConfig {
    *  计费类网关按调用计费，一篇深度闭环约消耗 4~6 次（改写+质检+评判），竞争模式首轮翻倍。
    *  粒度说明：轮间检查，轮内不中断，超预算后带当前最优结果收场。 */
   maxApiCalls?: number;
+  /** v0.9.4 P1 严格保真模式：财经/新闻/学术等事实敏感场景开启。
+   *  背景：实测深度闭环超时/未达标收场时，最后一轮未修复的编造类质检项
+   *  （如现编「我见过不少例子」）会随最优稿交付。开启后：收稿前做一轮预算外
+   *  定向补偿修订（只修事实错误不追分数），修不掉则保留原稿并在 note 显式警告。 */
+  strictFidelity?: boolean;
 }
 
 /* ---------------------- SenseNova 常驻预置 ----------------------
@@ -76,7 +91,10 @@ export function loadPresetKeys(): string[] {
       // Node 侧 LLM 通道静默失效（v0.8.7 实测发现并修复）。
       // 现按优先级：process.getBuiltinModule（Node ≥22.3，同步且对打包器不可见）
       // → new Function require（CJS 场景如 Electron main 的旧路径兜底）→ 静默降级。
-      type FsLike = { existsSync(p: string): boolean; readFileSync(p: string, enc: string): string };
+      type FsLike = {
+        existsSync(p: string): boolean;
+        readFileSync(p: string, enc: string): string;
+      };
       type PathLike = { resolve(...parts: string[]): string };
       let fs: FsLike | undefined;
       let path: PathLike | undefined;
@@ -116,7 +134,13 @@ export function loadPresetKeys(): string[] {
 export const SENSENOVA_PRESET = {
   baseUrl: "/sensenova/v1",
   keys: loadPresetKeys(),
-  models: ["deepseek-v4-flash", "deepseek-v4-pro", "glm-5.2", "sensenova-6.8-flash-lite", "kimi-k3"],
+  models: [
+    "deepseek-v4-flash",
+    "deepseek-v4-pro",
+    "glm-5.2",
+    "sensenova-6.8-flash-lite",
+    "kimi-k3",
+  ],
 };
 
 export const DEFAULT_API: ApiConfig = {
@@ -132,6 +156,7 @@ export const DEFAULT_API: ApiConfig = {
   reasoningEffort: undefined,
   maxWaitSeconds: 0,
   maxApiCalls: 0,
+  contestSamples: 1,
 };
 
 /** 解析 Key 池：apiKey 与 apiKeys 合并去重（换行/逗号/分号分隔均可） */

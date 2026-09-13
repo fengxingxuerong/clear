@@ -31,10 +31,81 @@ export interface HumanizeOptions {
    *  · undefined（默认）：由 classifyGenre(text) 自动在 main/narrative/dialogue 三选内判定
    */
   genre?: "main" | "narrative" | "dialogue" | "humanHand";
+  /**
+   * v0.8.9 P0：是否强制剥离中英/中数之间的空格（默认 false = 尊重原文排版）。
+   *
+   * 背景：无条件剥离会毁掉技术文档的可读性——
+   *   「从 Webpack 迁移到 Vite」→「从Webpack迁移到Vite」、「手动 scp」→「手动scp」，
+   *   连 optimizeDeps.include 这类标识符都变得难辨认。
+   * 而空格是排版习惯，不是可靠的 AI 语义特征：真人写技术博客同样会加空格。
+   *
+   * 默认 false：成规模的中英空格排版（≥3 处）视为技术/正式文档，原样保留；
+   *             零散一两处仍照旧剥离，保留零散场景的降分收益。
+   * 传 true：恢复 v0.8.8 及之前的无条件剥离行为（回归探针用，见 scripts/scan-bugs.ts）。
+   */
+  stripCJKSpaces?: boolean;
 }
 
 /** 句长变异系数最低阈值（节奏兜底与指纹体检共用） */
 export const MIN_BURSTINESS_CV = 0.45;
+
+/* =========================================================
+   v0.9.4 P2 跨轮垫词饱和守卫
+   ========================================================= */
+/**
+ * 口语插话/碎片句头共享表：shuffle 碎片、朱雀模板、方言替换产物的并集。
+ * 背景：实测把去味输出再次喂回引擎（串联迭代），垫词 12→22→28→35 线性堆积、
+ * 字数注水 +89% 而自检分横盘——三个注入点各自只管"本轮限额"，对输入里
+ * 已有的垫词无记忆。守卫口径：文本已有垫词达到上限后，本轮不再注入新的。
+ * （只关注入、不禁减法：套话清除/指纹清理等 pass 在饱和文本上照常工作。）
+ */
+export const PAD_HEADS: string[] = [
+  "就这样",
+  "你懂的",
+  "说白了",
+  "差不多得了",
+  "哦对",
+  "行吧",
+  "有一说一",
+  "要我说",
+  "说起来",
+  "据我观察",
+  "客观讲",
+  "客观来讲",
+  "老实讲",
+  "话又说回来",
+  "话又侃回来",
+  "不瞒你说",
+  "不吹不黑",
+  "讲道理",
+  "真的假的",
+  "插一句",
+  "这有什么要紧的",
+  "要紧的在后头",
+  "为啥这么说",
+  "细想一下还真不是",
+  "就这么回事",
+  "侃真的",
+  "往实了说",
+  "往好听了说",
+];
+
+/** 单篇垫词注入上限：已有命中 ≥ 此值时跳过所有注入类 pass（实测单次正常去味
+ *  的输出垫词数约 10~14 个，取 10 保证"第二次处理"即触发守卫，堵死堆积）。 */
+export const PAD_INJECT_CAP = 10;
+
+/** 统计文本中垫词句头出现次数（饱和度估计口径，允许少量跨界误配） */
+export function countPadHeads(text: string): number {
+  let n = 0;
+  for (const p of PAD_HEADS) {
+    let i = 0;
+    while ((i = text.indexOf(p, i)) !== -1) {
+      n++;
+      i += p.length;
+    }
+  }
+  return n;
+}
 
 /** mulberry32 伪随机源：零依赖、可复现（seed 固定则序列固定） */
 export function mulberry32(seed: number): () => number {
@@ -99,8 +170,77 @@ export function findSplitPoint(s: string, minLen: number): number {
     if (depth[ci] === 0) commas.push(ci);
     ci = s.indexOf("，", ci + 1);
   }
-  const mid = commas.find((c) => c > s.length * 0.3 && c < s.length * 0.7);
+  const mid = commas.find(
+    (c) => c > s.length * 0.3 && c < s.length * 0.7 && fragmentFrontCanStand(s.slice(0, c).trim()),
+  );
   if (mid === undefined) return -1;
   if (!fragmentCanStand(s.slice(mid + 1).trim())) return -1;
   return mid;
+}
+
+/** v0.9 专家修复 P2/P3 配套：在 s 中找离 preferPos 最近、且前后半句均能独立成句的
+ *  「，；：」切点。括号内不切、顿号并列不切、状语/名词残片/光杆谓语均否决。无则 -1。 */
+export function findGuardedCutNear(s: string, preferPos: number): number {
+  if (!s) return -1;
+  const depth = new Array<number>(s.length).fill(0);
+  {
+    let d = 0;
+    for (let k = 0; k < s.length; k++) {
+      if ("（（《【「".includes(s[k])) d++;
+      depth[k] = d;
+      if ("））》】」".includes(s[k])) d = Math.max(0, d - 1);
+    }
+  }
+  const cuts: number[] = [];
+  for (let k = 0; k < s.length - 1; k++) {
+    if ("，；：".includes(s[k]) && depth[k] === 0) cuts.push(k);
+  }
+  if (cuts.length === 0) return -1;
+  cuts.sort((a, b) => Math.abs(a - preferPos) - Math.abs(b - preferPos));
+  return (
+    cuts.find(
+      (k) =>
+        fragmentFrontCanStand(s.slice(0, k).trim()) &&
+        fragmentCanStand(
+          s
+            .slice(k + 1)
+            .replace(/[。！？!?…]$/, "")
+            .trim(),
+        ),
+    ) ?? -1
+  );
+}
+
+/** v0.9 专家修复 P2（前半句守卫）：切点前半句若以「在/随着/当/根据/通过…下/中/时/后」
+ *  收束，说明这是状语从句与主句的分界——句号化后前半句是无谓语残句
+ *  （「在28纳米工艺节点下。」），这种切点必须否决。
+ *  v0.9 长尾补充：名词残片守卫——前半句末段若是光杆名词短语（「工艺」「一颗采用3D
+ *  堆叠封装的处理器」），句号化后同样是残句。 */
+const ADVERBIAL_HEAD_RE = /^(?:在|随着|当|于|对于|根据|通过|由|从|自|沿着|处于)/;
+const ADVERBIAL_TAIL_RE = /[下中时后里间际]$/;
+/** 谓语/体态标记：正常分句几乎必含其一（排除「的」——名词短语也常带「的」） */
+const CLAUSE_PREDICATE_RE = /[了着过是将有可会为使应需已能得以更很都也还就便再又均亦尚加以]/;
+/** 量词开头（同位语名词短语签名：「一颗…处理器」「这项…技术」） */
+const QUANTIFIER_HEAD_RE = /^(?:一|两|三|四|五|几|某|该|这|那)?[颗个种项目条台套份位款只张批次家]/;
+export function fragmentFrontCanStand(front: string): boolean {
+  if (!front) return false;
+  // v0.9 长尾：「随着」引导的从句必须挂主句——切点落在其后必然产生
+  // 悬空状语（「随着半导体制造工艺进入3纳米节点。」），一律否决
+  if (/^随着/.test(front)) return false;
+  if (ADVERBIAL_HEAD_RE.test(front) && ADVERBIAL_TAIL_RE.test(front)) return false;
+  // 「…的同时」「…的时候」等复合状语尾
+  if (/(?:的同时|的时候|的情形|的情况下|的基础上)$/.test(front)) return false;
+  // 名词残片：末段过短且无谓语标记（「工艺」）；或量词开头的同位语短语且无谓语标记
+  const lastSeg = front.split(/[，、；]/).pop() ?? front;
+  if (lastSeg.length <= 4 && !CLAUSE_PREDICATE_RE.test(lastSeg)) return false;
+  if (QUANTIFIER_HEAD_RE.test(lastSeg) && !CLAUSE_PREDICATE_RE.test(lastSeg)) return false;
+  // v0.9 长尾：末段为悬空状语/时间名词短语（「说到底，在后摩尔时代」切点在时代后）
+  // ——以介词/时间词开头且无任何谓语标记，句号化即无谓语残句
+  if (ADVERBIAL_HEAD_RE.test(lastSeg) && !CLAUSE_PREDICATE_RE.test(lastSeg)) return false;
+  if (
+    /^(?:前|后)?摩?尔?时代|^(?:古|新|旧|大)?时代$|时期$|阶段$|节点$/.test(lastSeg) &&
+    !CLAUSE_PREDICATE_RE.test(lastSeg)
+  )
+    return false;
+  return true;
 }
