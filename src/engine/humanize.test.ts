@@ -51,6 +51,22 @@ describe("humanize 引擎", () => {
     expect(PAD_INJECT_CAP).toBeGreaterThan(5);
   });
 
+  it("坏替身回归：Phase1 实测病句不得复现（v0.9.5 P4 词表清理+GUARD 长搭配）", () => {
+    // 以下病句全部在 Phase1 实测中出现（测试报告附 1）
+    const cases: Array<[string, string]> = [
+      ["为职业发展注入源源不断的动力", "源源接连"], // 不断→接连 腰斩成语
+      ["发挥日益重要的作用", "起渐渐"], // 发挥→起 与 日益→渐渐 相撞
+      ["发挥日益重要的作用", "施展渐渐"], // 删"起"后双替身仍相撞 → GUARD 整组保护
+      ["满足日常需求", "合上"], // 满足→合上 缺搭配
+      ["同时关注上下文中的其他词语", "盯住不放上下文"], // 盯住不带宾语
+      ["为您的使用安全保驾护航", "安全护住"], // 保驾护航→护住 丢搭配
+    ];
+    for (const [input, bad] of cases) {
+      const out = humanize(input, { intensity: 0.9, seed: 20260905, zhuqueMode: true });
+      expect(out).not.toContain(bad);
+    }
+  });
+
   it("纯英文不崩溃且产出非空", () => {
     const out = humanize("This is a test. Notably, AI tools are important.", { seed: 1 });
     expect(out.length).toBeGreaterThan(0);

@@ -136,7 +136,11 @@ export async function runHumanize(
             } catch {
               // 单块失败（如预算耗尽且该块零产出/各轮质检全挂）只回退该块本地引擎，
               // 不再让整篇抛错丢弃已完成块的 API 成果（v0.8.6 行为修正）
-              parts.push(humanize(chunks[i], { intensity }));
+              // v0.9.5 P4：回退块强制温和档（≤0.5、不开朱雀）——深度稿是自然口语，
+              // 全强度机械扰动产物（垫词/语气词/句序打乱）混进来是质量断崖
+              // （s7 事故实测：后 1/3 出现"是啊/对哦"堆叠与断引用）。温和档只做
+              // 套话与连接词清理，与 LLM 稿的风格落差最小。
+              parts.push(humanize(chunks[i], { intensity: Math.min(intensity, 0.5) }));
               anyIssue = true;
             }
           } else {
