@@ -346,7 +346,7 @@ export async function processCandidate(
       const rep = await chat(
         cfg,
         [
-          { role: "system", content: buildSystemPrompt(cfg, intensity) },
+          { role: "system", content: buildSystemPrompt(cfg, intensity, original) },
           { role: "user", content: buildRepairPrompt(original, content, qc.issues) },
         ],
         { temperature: 0.4, maxTokens: 8000 },

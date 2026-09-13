@@ -5,6 +5,7 @@
 import { ApiConfig, ADAPTIVE_CONTEST_CHARS, DEEP_MAX_ROUNDS, DEEP_TARGET_SCORE } from "./llm-config";
 import {
   SYSTEM_PROMPT,
+  pickExemplarBlock,
   buildRevisionPrompt,
   intensityDirective,
   styleDirective,
@@ -24,9 +25,14 @@ import { errMsg } from "./llm-judge";
  *  "改写稿显著优于底稿"的语义带内，且不需要按模型硬编码宽严表。 */
 const RELATIVE_TARGET_RATIO = 0.35;
 
-/** 组装改写用的 system 提示词（基础战术 + 文风预设 + 强度档位） */
-export function buildSystemPrompt(cfg: ApiConfig, intensity: number): string {
-  return SYSTEM_PROMPT + styleDirective(cfg.style) + intensityDirective(intensity);
+/** 组装改写用的 system 提示词（基础战术 + 按体裁选范例 + 文风预设 + 强度档位） */
+export function buildSystemPrompt(cfg: ApiConfig, intensity: number, sourceText?: string): string {
+  return (
+    SYSTEM_PROMPT +
+    pickExemplarBlock(sourceText ?? "", cfg.style) +
+    styleDirective(cfg.style) +
+    intensityDirective(intensity)
+  );
 }
 
 /** 单轮 LLM 去味 */
@@ -38,7 +44,7 @@ export async function humanizeViaApi(
   const { content } = await chat(
     cfg,
     [
-      { role: "system", content: buildSystemPrompt(cfg, intensity) },
+      { role: "system", content: buildSystemPrompt(cfg, intensity, text) },
       { role: "user", content: text },
     ],
     { temperature: cfg.temperature, maxTokens: 16000 },
@@ -206,7 +212,7 @@ export async function humanizeViaApiDeep(
         const r = await chatNonEmpty(
           cfg,
           [
-            { role: "system", content: buildSystemPrompt(cfg, intensity) },
+            { role: "system", content: buildSystemPrompt(cfg, intensity, text) },
             { role: "user", content: text },
           ],
           { temperature: cfg.temperature, maxTokens: 8000, model: m },
@@ -286,7 +292,7 @@ export async function humanizeViaApiDeep(
       const r = await chatNonEmpty(
         cfg,
         [
-          { role: "system", content: buildSystemPrompt(cfg, intensity) },
+          { role: "system", content: buildSystemPrompt(cfg, intensity, text) },
           { role: "user", content: userMsg },
         ],
       // v0.9.5 能力优化：修订温度递减。旧实现逐轮升温（+0.05）——设计意图是
@@ -317,7 +323,7 @@ export async function humanizeViaApiDeep(
       const fb = await chatNonEmpty(
         cfg,
         [
-          { role: "system", content: buildSystemPrompt(cfg, intensity) },
+          { role: "system", content: buildSystemPrompt(cfg, intensity, text) },
           { role: "user", content: text },
         ],
         { temperature: cfg.temperature, maxTokens: 8000, model: writerModel },
