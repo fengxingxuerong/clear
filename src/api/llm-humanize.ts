@@ -289,8 +289,12 @@ export async function humanizeViaApiDeep(
           { role: "system", content: buildSystemPrompt(cfg, intensity) },
           { role: "user", content: userMsg },
         ],
-        {
-          temperature: Math.min(2, cfg.temperature + (round - 1) * 0.05),
+      // v0.9.5 能力优化：修订温度递减。旧实现逐轮升温（+0.05）——设计意图是
+      // "打不开局面时加大随机性逃逸"，但实测修订是执行痕迹清单的精准任务，
+      // 升温加剧横跳（90→90、76→88 的部分根因）。改递减：首轮保持采样多样性，
+      // 越往后越收敛，配合"局部修改铁律"把修订稳定在清单执行上。
+      {
+        temperature: Math.max(0.5, cfg.temperature - (round - 1) * 0.15),
           maxTokens: 8000,
           model: writerModel,
         },
@@ -399,6 +403,23 @@ export async function humanizeViaApiDeep(
   // v0.9.5 P1：严格保真补偿轮与收稿终审已移除——编造复核前移至 processCandidate
   // （每候选质检后即审，走既有修复链），所有产出路径的候选均已被复核覆盖；
   // 补偿轮「拿弃用候选的问题清单修最优稿」的语义错位随之消除。
+  //
+  // 但复核有漏判率（实测 s1：竞争稿的"见效最快/比拍脑袋准"漏网，修订轮同内容
+  // 才被抓到），前移复核不能完全替代收稿检查。折中：交付前对 bestText 做一次
+  // 只警告不修复的快审——+1 次调用，把"静默漏网"变"显式警告"，
+  // 守住「绝不静默带病交付」的底线（修复交给用户重跑，实测 LLM 修复编造成功率低）。
+  if (cfg.strictFidelity) {
+    try {
+      const fabs = await fabricationReview(text, bestText, cfg);
+      if (fabs.length) {
+        note =
+          (note ? `${note}；` : "") +
+          `⚠️ 收稿复核：交付稿仍存在 ${fabs.length} 项疑似新增（如「${fabs[0].slice(0, 24)}」），请人工核对——复核对首轮稿有漏判率，此为底线警告`;
+      }
+    } catch {
+      // 收稿快审通道异常不阻断交付
+    }
+  }
 
   // v0.8.8 评判锚点可见化：达标线被放宽时写进 note，用户知道为什么"分高也算达标"
   const targetUsed = effTarget();
