@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { localHardGate, processCandidate, coherenceIssues, fabricationIssues, truncationIssues, fabricationReview } from "./llm-quality";
+import { localHardGate, processCandidate, coherenceIssues, fabricationIssues, truncationIssues, fabricationReview, deletionStubIssues } from "./llm-quality";
 import { buildRevisionPrompt } from "./llm-prompts";
 import { ZHUQUE_DETECT_SYSTEM } from "./zhuque-semantic";
 import { humanizeViaApiDeep } from "./llm-humanize";
@@ -64,6 +64,26 @@ describe("localHardGate（本地指纹+忠实度硬门槛）", () => {
 
   it("truncationIssues：空候选直接报空稿", () => {
     expect(truncationIssues(sent(10), "   ").some((s) => s.includes("候选稿为空"))).toBe(true);
+  });
+
+  it("deletionStubIssues：删减残留孤词句（v0.9.5 P4）", () => {
+    const original = "数字化转型是构建企业核心竞争力的必由之路。这条路要走很久。";
+    // 直测：实测 s3 事故——修订轮把首句删剩「竞争力。」孤词
+    //（原文中「竞争力」前邻「心」非句读 = 被截断残片）
+    expect(deletionStubIssues(original, "竞争力。这条路要走很久。").length).toBe(1);
+    // 误伤检查：原文里本就独立的短句不报（「这条路要走很久」>6 字超限）；
+    // 原文没有的词（「别急」）不报
+    expect(deletionStubIssues(original, "这条路要走很久。别急。")).toHaveLength(0);
+  });
+
+  it("deletionStubIssues：删减残留孤词句（v0.9.5 P4）", () => {
+    const original = "数字化转型是构建企业核心竞争力的必由之路。这条路要走很久。";
+    // 实测 s3 事故：修订轮把首句删剩「竞争力。」孤词 → localHardGate 应报
+    const issues = localHardGate(original, "数字化这事要紧。竞争力。这条路要走很久。");
+    expect(issues.some((s) => s.includes("删减残留"))).toBe(true);
+    // 原文里本就独立的短句不误伤
+    const clean = localHardGate(original, "数字化转型是必由之路。这条路要走很久。别犹豫。");
+    expect(clean.some((s) => s.includes("删减残留"))).toBe(false);
   });
 });
 

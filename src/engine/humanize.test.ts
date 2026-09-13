@@ -67,6 +67,14 @@ describe("humanize 引擎", () => {
     }
   });
 
+  it("双语气词折叠：呀呀/嘛嗯式堆叠不复现（v0.9.5 P4）", () => {
+    const sample =
+      "值得注意的是，随着技术的发展，很多事物都在变化。综上所述，我们需要认真对待。这不仅关乎当下，也关乎未来。值得深思。";
+    const out = humanize(sample, { intensity: 0.9, seed: 20260905, zhuqueMode: true });
+    expect(out).not.toMatch(/([哦呵啧呣诶呀嘛呢吧啊嗯])\1/); // 相邻重复（呀呀/嘛嘛）
+    expect(out).not.toMatch(/([哦呵啧呣诶呀嘛呢吧啊嗯])[哦呵啧呣诶呀嘛呢吧啊嗯]+[。，]/); // 相邻异形（嘛嗯/呢呵）
+  });
+
   it("纯英文不崩溃且产出非空", () => {
     const out = humanize("This is a test. Notably, AI tools are important.", { seed: 1 });
     expect(out.length).toBeGreaterThan(0);

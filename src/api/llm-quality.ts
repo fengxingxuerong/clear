@@ -289,6 +289,28 @@ export async function fabricationReview(
   return fabs.filter((x): x is string => typeof x === "string" && x.trim().length > 0);
 }
 
+/** v0.9.5 P4 删减残留检测：修订轮把长句删到只剩一个名词性孤词独立成句。
+ *  实测 s3：原文「数字化转型是构建企业核心竞争力的必由之路」被删剩「竞争力。」——
+ *  主谓残缺且与前后文断裂，属于删改型损伤（非编造），既有质检维度未覆盖。
+ *  判定（刻意收窄防误伤）：2~6 字、无谓语动词/语气词/指示代词的纯名词性孤句，
+ *  且该词在原文中紧邻非句读字符（证明是被截断的残片而非原文的独立短句）。 */
+export function deletionStubIssues(original: string, rewritten: string): string[] {
+  const sents = rewritten.split(/[。！？!?；;\n]+/).map((s) => s.trim()).filter(Boolean);
+  const stubs = sents.filter((s) => {
+    if (s.length < 2 || s.length > 6) return false;
+    if (/[是有着在能会要得让把被和或与及的出现发生变得成为觉得知道]/.test(s)) return false;
+    if (/[哦呵啧呣诶呀嘛呢吧啊嗯这那他她它你我不]/.test(s)) return false;
+    const idx = original.indexOf(s);
+    if (idx < 0) return false;
+    const prevOk = idx === 0 || /[。！？!?；;\n]/.test(original[idx - 1]);
+    const nextOk =
+      idx + s.length >= original.length || /[。！？!?；;\n]/.test(original[idx + s.length]);
+    return !prevOk || !nextOk; // 原文里该词前后至少一侧连着更多内容 = 被截断
+  });
+  if (!stubs.length) return [];
+  return [`疑似删减残留：孤词成句「${stubs[0]}」在原文中是更长表述的一部分，主谓残缺`];
+}
+
 export function localHardGate(original: string, rewritten: string): string[] {
   const issues: string[] = [];
   const STAT_SOFT = new Set(["句长节奏过平", "句长标准差落入 AI 特征带"]);
@@ -299,6 +321,7 @@ export function localHardGate(original: string, rewritten: string): string[] {
   issues.push(...coherenceIssues(rewritten)); // v0.8.5：重排后的衔接断裂
   issues.push(...fabricationIssues(original, rewritten)); // v0.8.9：编造兜底
   issues.push(...truncationIssues(original, rewritten)); // v0.9.4：截断/严重缩水守卫（P0）
+  issues.push(...deletionStubIssues(original, rewritten)); // v0.9.5 P4：删减残留孤词句
   return issues;
 }
 

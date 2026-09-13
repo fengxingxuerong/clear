@@ -604,6 +604,16 @@ export function humanize(text: string, opts: HumanizeOptions = {}): string {
   const formalRegister = effectiveGenre === "main" || (opts.style ?? "casual") === "academic";
   result = guardFormalRegister(result, formalRegister);
   result = collapseDoubleConnectives(result);
+  //  C) v0.9.5 P4 双语气词折叠：多个注入 pass 叠加时句尾出现"呀呀""嘛嗯""呢呵"
+  //  式堆叠（Phase1 迭代实测），真人不会连发两个语气词。相邻重复折叠为一个，
+  //  相邻异形双语气词保留第一个；"好吧/行吧/哦对"等合法组合不受影响
+  //  （第二个字符非语气词时不匹配）。
+  result = result
+    .replace(/([哦呵啧呣诶呀嘛呢吧啊嗯])\1+/g, "$1")
+    .replace(
+      /([哦呵啧呣诶呀嘛呢吧啊嗯])[哦呵啧呣诶呀嘛呢吧啊嗯]+(?=[。，！？；、\n]|$)/g,
+      "$1",
+    );
   //  C) 残句开头守卫：句首独词连接词（并/而/且/但/亦/另）修复
   if (intensity >= 0.55) {
     result = fixOrphanConnectiveLeads(result);
