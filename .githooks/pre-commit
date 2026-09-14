@@ -10,20 +10,34 @@
 #
 # 紧急跳过：git commit --no-verify   （不建议——那正是坏 HEAD 的来源）
 
-# git 执行 hook 时的 PATH 可能不含 node，做两级兜底
-if [ -x "./node_modules/.bin/tsc" ]; then
+# 2026-09-14 补充：优先直调 tsc 的真实入口（node + tsc.js），
+# 不走 ./node_modules/.bin/tsc —— 那个 wrapper 依赖 sed/dirname/uname，
+# 在某些受限 shell（PATH 未初始化）下会 "command not found" 而假失败。
+if command -v node >/dev/null 2>&1 && [ -f "./node_modules/typescript/bin/tsc" ]; then
+  TSC="node ./node_modules/typescript/bin/tsc"
+elif [ -x "./node_modules/.bin/tsc" ]; then
   TSC="./node_modules/.bin/tsc"
 else
   TSC="npx tsc"
 fi
 
 echo "[pre-commit] 类型检查中…（约 7 秒）"
-if ! $TSC --noEmit; then
+$TSC --noEmit
+rc=$?
+if [ $rc -ne 0 ]; then
+  # 区分「工具链跑不起来」与「真有类型错误」：后者才该拦提交。
+  # 工具链缺失属于环境问题，放行并醒目提示，避免误挡。
+  if command -v node >/dev/null 2>&1; then
+    printf '\n'
+    echo "❌ 类型检查未通过，提交已阻止。"
+    echo "   → 修掉上面的报错后重试"
+    echo "   → 确需跳过：git commit --no-verify"
+    exit 1
+  fi
   printf '\n'
-  echo "❌ 类型检查未通过，提交已阻止。"
-  echo "   → 修掉上面的报错后重试"
-  echo "   → 确需跳过：git commit --no-verify"
-  exit 1
+  echo "⚠️  [pre-commit] 环境缺少 node，类型检查已跳过（未验证！）"
+  echo "   → 请手动确认：node node_modules/typescript/bin/tsc --noEmit"
+  exit 0
 fi
 echo "[pre-commit] ✅ 类型检查通过"
 exit 0
