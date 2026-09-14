@@ -124,3 +124,80 @@ describe("judgeByPanel 合议庭聚合", () => {
     expect(r.score).toBe(20);
   });
 });
+
+describe("痕迹归一与解析细节（v0.9.9 补深）", () => {
+  it("全票定罪：三席同桶时不加「N/M 席指出」标注，输出首席原文", async () => {
+    mockFetchBySeat({
+      "gw-a": { content: "对仗工整\n50" },
+      "gw-b": { content: "排比结构明显\n50" },
+      "gw-c": { content: "对仗过于工整\n50" },
+    });
+    const r = await judgeByPanel("测试文本", SEATS);
+    expect(r.critique).toHaveLength(1);
+    // 全票时输出首报席的原始表述（不改写为桶名）
+    expect(r.critique[0]).toBe("对仗工整");
+  });
+
+  it("两席重合：标注「2/3 席指出」，示例取首报席原文", async () => {
+    mockFetchBySeat({
+      "gw-a": { content: "句长均匀\n60" },
+      "gw-b": { content: "句子长度很一致\n60" },
+      "gw-c": { content: "标点过于规整\n60" },
+    });
+    const r = await judgeByPanel("测试文本", SEATS);
+    expect(r.critique).toHaveLength(1);
+    expect(r.critique[0]).toBe("句长均匀（2/3 席指出）");
+  });
+
+  it("超长未归一痕迹归入同一「其他痕迹」桶：不同表述也能交叉定罪", async () => {
+    mockFetchBySeat({
+      "gw-a": { content: "这是一个超过十二个字的自定义痕迹描述\n55" },
+      "gw-b": { content: "另一种完全不同样式的超长自定义痕迹\n55" },
+      "gw-c": { content: "句长过于均匀\n55" },
+    });
+    const r = await judgeByPanel("测试文本", SEATS);
+    // 两条 >12 字表述归入同一「其他痕迹」桶 → 2 票交叉定罪（输出首席原文）
+    expect(r.critique).toHaveLength(1);
+    expect(r.critique[0]).toBe("这是一个超过十二个字的自定义痕迹描述（2/3 席指出）");
+  });
+
+  it("≤12 字小众痕迹：两席字面重合即定罪，保留原文不改名", async () => {
+    mockFetchBySeat({
+      "gw-a": { content: "结尾模板化\n45" },
+      "gw-b": { content: "结尾模板化\n45" },
+      "gw-c": { content: "虚构人物事例\n45" },
+    });
+    const r = await judgeByPanel("测试文本", SEATS);
+    expect(r.critique).toContain("结尾模板化（2/3 席指出）");
+  });
+
+  it("单席有效：spread 为 null（无法计算分歧）", async () => {
+    mockFetchBySeat({
+      "gw-a": { content: "句长过于均匀\n33" },
+      "gw-b": { status: 404 },
+      "gw-c": { status: 404 },
+    });
+    const r = await judgeByPanel("测试文本", SEATS);
+    expect(r.validCount).toBe(1);
+    expect(r.score).toBe(33);
+    expect(r.spread).toBeNull();
+  });
+
+  it("装饰分数行解析与序号剥离：critique 不带编号、分数行不入清单", async () => {
+    mockFetchBySeat({
+      "gw-a": { content: "1. 句长过于均匀\n2. 对仗工整\n得分：85" },
+      "gw-b": { content: "一、句长过于均匀\n二、标点过于规整\n70" },
+      "gw-c": { content: "句长过于均匀\n62" },
+    });
+    const r = await judgeByPanel("测试文本", SEATS);
+    // 85/70/62 → 中位 70
+    expect(r.score).toBe(70);
+    // 「句长过于均匀」三席归一同桶 → 全票定罪
+    const changju = r.critique.find((c) => c.includes("句长"));
+    expect(changju).toBeTruthy();
+    expect(changju).not.toMatch(/^\d/); // 序号已剥离
+    // 席 a 的 critique：分数行「得分：85」不进清单，序号剥离后两条
+    const seatA = r.seats.find((s) => s.id === "a")!;
+    expect(seatA.critique).toEqual(["句长过于均匀", "对仗工整"]);
+  });
+});
