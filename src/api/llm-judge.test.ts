@@ -85,7 +85,13 @@ describe("judgeScoreStable（中位数 / 交叉均值聚合）", () => {
       // 第 1 次主模型 40，第 2 次交叉模型 70（带痕迹）
       return i === 1 ? { content: "40" } : { content: "对仗过于工整\n70" };
     });
-    const cfg = { ...DEFAULT_API, enabled: true, apiKey: "k", model: "main-m", judgeModel: "cross-m" };
+    const cfg = {
+      ...DEFAULT_API,
+      enabled: true,
+      apiKey: "k",
+      model: "main-m",
+      judgeModel: "cross-m",
+    };
     const r = await judgeScoreStable("测试文本", cfg);
     expect(r.score).toBe(55); // (40+70)/2
     expect(r.critique).toEqual(["对仗过于工整"]); // 交叉模型痕迹优先
@@ -104,7 +110,13 @@ describe("judgeScoreStable（中位数 / 交叉均值聚合）", () => {
         return okJson("50");
       }),
     );
-    const cfg = { ...DEFAULT_API, enabled: true, apiKey: "k", model: "main-m", judgeModel: "cross-m" };
+    const cfg = {
+      ...DEFAULT_API,
+      enabled: true,
+      apiKey: "k",
+      model: "main-m",
+      judgeModel: "cross-m",
+    };
     const r = await judgeScoreStable("测试文本", cfg);
     expect(r.score).toBe(50);
   });

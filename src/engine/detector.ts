@@ -90,7 +90,8 @@ const CONCRETE =
   /([0-9０-９]+[年月日%％元块个次万亿度公里分秒]|[一二三四五六七八九十百千万亿两几]{1,3}[块元个年月天次度岁遍]|[A-Za-z][A-Za-z0-9-]{2,}|第[一二三四五六七八九十]+[章节部])/g;
 
 // 判断句式与情态词密度（AI 写论述文的骨架动词）
-const MODAL = /(应该|应当|必须|需要|需要进一步|有助于|意味着|表明|说明|能够|可以|我们要|值得注意的是|不仅|而且|既要|也要)/g;
+const MODAL =
+  /(应该|应当|必须|需要|需要进一步|有助于|意味着|表明|说明|能够|可以|我们要|值得注意的是|不仅|而且|既要|也要)/g;
 
 // 四字格/对仗排比（AI 爱堆）
 const IDIOM_LIKE = /[\u4e00-\u9fa5]{4}(?:、[\u4e00-\u9fa5]{4}){1,}/g;
@@ -106,7 +107,10 @@ function splitSentences(text: string): string[] {
 }
 
 function splitParagraphs(text: string): string[] {
-  return text.split(/\n\s*\n|\n/).map((p) => p.trim()).filter(Boolean);
+  return text
+    .split(/\n\s*\n|\n/)
+    .map((p) => p.trim())
+    .filter(Boolean);
 }
 
 /** 中文二元切词（够用且零依赖：中文不分词也能算 TTR，用 bigram 近似词汇丰富度） */
@@ -304,7 +308,9 @@ function featureList(text: string, r: Raw, chars: number): FeatureItem[] {
   });
 
   // 13. 中英数字间空格（AI 训练语料指纹）
-  const spaceHits = (text.match(/[\u4e00-\u9fa5][ \t]+[A-Za-z0-9]|[A-Za-z0-9][ \t]+[\u4e00-\u9fa5]/g) || []).length;
+  const spaceHits = (
+    text.match(/[\u4e00-\u9fa5][ \t]+[A-Za-z0-9]|[A-Za-z0-9][ \t]+[\u4e00-\u9fa5]/g) || []
+  ).length;
   f.push({
     name: "中英数字间空格",
     value: norm(per(spaceHits), 0, 0.6),
@@ -341,24 +347,65 @@ function segmentRisk(sent: string): { risk: number; reason: string } {
   let risk = 0;
 
   for (const p of FORMULAIC) {
-    if (new RegExp(p).test(sent)) { risk += 34; reasons.push("含AI套话"); break; }
+    if (new RegExp(p).test(sent)) {
+      risk += 34;
+      reasons.push("含AI套话");
+      break;
+    }
   }
   for (const s of SKELETON) {
-    if (new RegExp("^" + s).test(sent.trim())) { risk += 30; reasons.push("提纲骨架开头"); break; }
+    if (new RegExp("^" + s).test(sent.trim())) {
+      risk += 30;
+      reasons.push("提纲骨架开头");
+      break;
+    }
   }
-  if (/^(然而|因此|此外|与此同时|更重要的是|不仅如此)/.test(sent.trim())) { risk += 22; reasons.push("书面连接词开头"); }
-  if (/(是.*?的。?$)/.test(sent) && sent.length > 22) { risk += 12; reasons.push("判断句式收尾"); }
-  if (/(性|化|度|机制|体系|格局)/.test(sent) && sent.length > 25) { risk += 10; reasons.push("抽象名词"); }
-  if (/[\u4e00-\u9fa5][ \t]+[A-Za-z0-9]/.test(sent)) { risk += 14; reasons.push("中英间空格"); }
-  if (sent.replace(/\s/g, "").length >= 38) { risk += 12; reasons.push("超长句"); }
-  if (/[\u4e00-\u9fa5]{4}(?:、[\u4e00-\u9fa5]{4}){2,}/.test(sent)) { risk += 12; reasons.push("四字排比"); }
+  if (/^(然而|因此|此外|与此同时|更重要的是|不仅如此)/.test(sent.trim())) {
+    risk += 22;
+    reasons.push("书面连接词开头");
+  }
+  if (/(是.*?的。?$)/.test(sent) && sent.length > 22) {
+    risk += 12;
+    reasons.push("判断句式收尾");
+  }
+  if (/(性|化|度|机制|体系|格局)/.test(sent) && sent.length > 25) {
+    risk += 10;
+    reasons.push("抽象名词");
+  }
+  if (/[\u4e00-\u9fa5][ \t]+[A-Za-z0-9]/.test(sent)) {
+    risk += 14;
+    reasons.push("中英间空格");
+  }
+  if (sent.replace(/\s/g, "").length >= 38) {
+    risk += 12;
+    reasons.push("超长句");
+  }
+  if (/[\u4e00-\u9fa5]{4}(?:、[\u4e00-\u9fa5]{4}){2,}/.test(sent)) {
+    risk += 12;
+    reasons.push("四字排比");
+  }
   // 真人特征（减风险）
-  if (/(我|我们|咱|那次|当时|记得|小时候|朋友)/.test(sent)) { risk -= 18; reasons.push("有主观视角"); }
-  if (CONCRETE.test(sent)) { risk -= 12; reasons.push("有具体细节"); }
-  if (sent.replace(/\s/g, "").length <= 10) { risk -= 14; reasons.push("短句"); }
-  if (/[？?]/.test(sent)) { risk -= 8; reasons.push("疑问句"); }
+  if (/(我|我们|咱|那次|当时|记得|小时候|朋友)/.test(sent)) {
+    risk -= 18;
+    reasons.push("有主观视角");
+  }
+  if (CONCRETE.test(sent)) {
+    risk -= 12;
+    reasons.push("有具体细节");
+  }
+  if (sent.replace(/\s/g, "").length <= 10) {
+    risk -= 14;
+    reasons.push("短句");
+  }
+  if (/[？?]/.test(sent)) {
+    risk -= 8;
+    reasons.push("疑问句");
+  }
 
-  return { risk: Math.max(0, Math.min(100, Math.round(risk + 20))), reason: reasons[0] || "无明显痕迹" };
+  return {
+    risk: Math.max(0, Math.min(100, Math.round(risk + 20))),
+    reason: reasons[0] || "无明显痕迹",
+  };
 }
 
 /* ----------------------------- 主入口 ----------------------------- */
@@ -367,7 +414,7 @@ function segmentRisk(sent: string): { risk: number; reason: string } {
 // 实测分布：AI 样本 39~60（均值 52）、真人样本 9~21（均值 12），安全可分区间 (21, 39)。
 // 取 48 / 32：典型 AI 论述文落 high（与朱雀对样本 D 的 high 判定对齐），真人全部落 human，
 // 公文类灰区落 medium（真人写的公文同样会落这档，属各检测器的共同行为，非误判）。
-const TH_HIGH = 48;   // ≥ 判 AI生成
+const TH_HIGH = 48; // ≥ 判 AI生成
 const TH_MEDIUM = 32; // ≥ 判 疑似AI辅助，否则 人工特征
 
 export function detectAI(raw: string): DetectReport {
@@ -388,10 +435,11 @@ export function detectAI(raw: string): DetectReport {
   // 加权求和 → 0~100
   const wSum = features.reduce((a, f) => a + f.weight, 0) || 1;
   const probability = Math.round(
-    Math.max(0, Math.min(100, features.reduce((a, f) => a + f.value * f.weight, 0) / wSum * 100))
+    Math.max(0, Math.min(100, (features.reduce((a, f) => a + f.value * f.weight, 0) / wSum) * 100)),
   );
 
-  const level: AiLevel = probability >= TH_HIGH ? "high" : probability >= TH_MEDIUM ? "medium" : "human";
+  const level: AiLevel =
+    probability >= TH_HIGH ? "high" : probability >= TH_MEDIUM ? "medium" : "human";
   const levelText = level === "high" ? "AI生成" : level === "medium" ? "疑似AI辅助" : "人工特征";
 
   // 置信度：离档位边界越远越自信（边界 ±12 分内视为摇摆）

@@ -3,10 +3,10 @@ import { chat } from "./llm-chat";
 import type { ApiConfig } from "./llm-config";
 
 function resp(status: number, content = "改写后的文本。"): Response {
-  return new Response(
-    JSON.stringify({ choices: [{ message: { content } }] }),
-    { status, headers: { "Content-Type": "application/json" } },
-  );
+  return new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
 afterEach(() => {
@@ -181,11 +181,12 @@ describe("错误详情透传（v0.8.7：网关响应体里的具体原因）", (
   it("OpenAI 风格 error 对象：404 带上「模型不存在」详情", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () =>
-        new Response(
-          JSON.stringify({ error: { message: "The model `xxx` does not exist" } }),
-          { status: 404, headers: { "Content-Type": "application/json" } },
-        ),
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: { message: "The model `xxx` does not exist" } }), {
+            status: 404,
+            headers: { "Content-Type": "application/json" },
+          }),
       ),
     );
     await expect(
@@ -202,10 +203,14 @@ describe("错误详情透传（v0.8.7：网关响应体里的具体原因）", (
       "fetch",
       vi.fn(async () => new Response(JSON.stringify({ detail: long }), { status: 402 })),
     );
-    const err = (await chat({ ...cfg, apiKey: "k1", apiKeys: undefined }, [{ role: "user", content: "原文" }], {
-      temperature: 0.9,
-      maxTokens: 100,
-    }).catch((e: unknown) => e)) as Error;
+    const err = (await chat(
+      { ...cfg, apiKey: "k1", apiKeys: undefined },
+      [{ role: "user", content: "原文" }],
+      {
+        temperature: 0.9,
+        maxTokens: 100,
+      },
+    ).catch((e: unknown) => e)) as Error;
     expect(err.message).toContain(long.slice(0, 200));
     expect(err.message).not.toContain(long.slice(0, 201));
   });

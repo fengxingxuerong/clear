@@ -32,11 +32,7 @@ export function LocalDetectPanel({
     <div className="bench">
       <div className="bench-head">
         本地 AI 检测（朱雀风格三档 · 离线启发式，非朱雀官方分）
-        <button
-          className="ghost sm"
-          style={{ marginLeft: 10 }}
-          onClick={onToggleFeatures}
-        >
+        <button className="ghost sm" style={{ marginLeft: 10 }} onClick={onToggleFeatures}>
           {showFeatures ? "收起特征" : "看特征明细"}
         </button>
       </div>
@@ -49,7 +45,9 @@ export function LocalDetectPanel({
             <div className="delta-label">降幅</div>
             <div
               className="delta-value"
-              style={{ color: detectOut.probability <= detectIn.probability ? "#3ddc97" : "#ff5d6c" }}
+              style={{
+                color: detectOut.probability <= detectIn.probability ? "#3ddc97" : "#ff5d6c",
+              }}
             >
               {detectIn.probability - detectOut.probability > 0 ? "−" : "+"}
               {Math.abs(detectIn.probability - detectOut.probability)}
@@ -77,7 +75,9 @@ export function LocalDetectPanel({
                 <div key={i} style={{ marginBottom: 6 }}>
                   <span style={{ color: c, fontSize: 12, marginRight: 6 }}>[{s.risk}]</span>
                   <span>{s.text}</span>
-                  <span style={{ color: "var(--muted)", fontSize: 11, marginLeft: 6 }}>（{s.reason}）</span>
+                  <span style={{ color: "var(--muted)", fontSize: 11, marginLeft: 6 }}>
+                    （{s.reason}）
+                  </span>
                 </div>
               );
             })}
@@ -88,11 +88,19 @@ export function LocalDetectPanel({
       {showFeatures && detectOut && (
         <>
           <div className="bench-row" style={{ justifyContent: "flex-start" }}>
-            <span style={{ color: "var(--muted)", fontSize: 12 }}>14 维特征（条越长越像 AI）：</span>
+            <span style={{ color: "var(--muted)", fontSize: 12 }}>
+              14 维特征（条越长越像 AI）：
+            </span>
           </div>
           {detectOut.features.map((f, i) => (
             <div className="bench-row" key={i} style={{ gap: 8 }}>
-              <span style={{ fontSize: 12, minWidth: 130, color: f.value > 0.55 ? "#ff5d6c" : "var(--muted)" }}>
+              <span
+                style={{
+                  fontSize: 12,
+                  minWidth: 130,
+                  color: f.value > 0.55 ? "#ff5d6c" : "var(--muted)",
+                }}
+              >
                 {f.name}
               </span>
               <span

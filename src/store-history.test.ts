@@ -13,8 +13,20 @@ import {
 } from "./store-history";
 import type { ScoreBreakdown } from "./engine/humanize";
 
-const before: ScoreBreakdown = { score: 80, formulaicHits: 9, burstiness: 0.2, avgLen: 30, sentenceCount: 4 };
-const after: ScoreBreakdown = { score: 25, formulaicHits: 2, burstiness: 0.5, avgLen: 18, sentenceCount: 3 };
+const before: ScoreBreakdown = {
+  score: 80,
+  formulaicHits: 9,
+  burstiness: 0.2,
+  avgLen: 30,
+  sentenceCount: 4,
+};
+const after: ScoreBreakdown = {
+  score: 25,
+  formulaicHits: 2,
+  burstiness: 0.5,
+  avgLen: 18,
+  sentenceCount: 3,
+};
 
 function entry(id: string, input = "原文" + id): HistoryEntry {
   return {
@@ -47,7 +59,9 @@ describe("makeHistoryEntry", () => {
   });
 
   it("连续生成的 id 不重复", () => {
-    const ids = new Set(Array.from({ length: 50 }, () => makeHistoryEntry("a", "b", before, after, 0.5, false).id));
+    const ids = new Set(
+      Array.from({ length: 50 }, () => makeHistoryEntry("a", "b", before, after, 0.5, false).id),
+    );
     expect(ids.size).toBe(50);
   });
 });

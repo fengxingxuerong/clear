@@ -56,7 +56,9 @@ export async function chat(
       afterBackoff = false;
       keyIdx = keys.findIndex((_, i) => !authDead.has(i));
       if (keyIdx < 0) {
-        throw new Error(`API 返回 401/403：Key 池 ${keys.length} 个全部鉴权失效，请检查 Key 有效性`);
+        throw new Error(
+          `API 返回 401/403：Key 池 ${keys.length} 个全部鉴权失效，请检查 Key 有效性`,
+        );
       }
     }
     let resp: Response;
@@ -67,7 +69,9 @@ export async function chat(
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${keys[keyIdx]}`,
-          ...(isOpenRouter ? { "HTTP-Referer": "https://github.com/quaiwei", "X-Title": "QuAiWei" } : {}),
+          ...(isOpenRouter
+            ? { "HTTP-Referer": "https://github.com/quaiwei", "X-Title": "QuAiWei" }
+            : {}),
         },
         body: JSON.stringify({
           model,
@@ -93,7 +97,10 @@ export async function chat(
     // 限流/鉴权失败：优先换 Key（立即，不等待）；池耗尽再退避等待，
     // 退避后从第一个未失效的 Key 重新试（限流窗口恢复后第一个 Key 往往最有效；
     // 401/403 鉴权已死的 Key 跳过，不浪费调用）
-    if ((resp.status === 429 || resp.status === 401 || resp.status === 403) && keyIdx < keys.length - 1) {
+    if (
+      (resp.status === 429 || resp.status === 401 || resp.status === 403) &&
+      keyIdx < keys.length - 1
+    ) {
       if (resp.status !== 429) authDead.add(keyIdx);
       keyIdx++;
       continue;
@@ -113,9 +120,9 @@ export async function chat(
         const body: unknown = await resp.json();
         const raw =
           typeof body === "object" && body !== null
-            ? (body as Record<string, unknown>).error ??
+            ? ((body as Record<string, unknown>).error ??
               (body as Record<string, unknown>).message ??
-              (body as Record<string, unknown>).detail
+              (body as Record<string, unknown>).detail)
             : body;
         const text = typeof raw === "string" ? raw : raw != null ? JSON.stringify(raw) : "";
         if (text) detail = `：${text.slice(0, 200)}`;
@@ -123,7 +130,9 @@ export async function chat(
         // 响应体非 JSON（如网关 HTML 错误页）→ 不附加
       }
       const dead = authDead.size ? `（失效 Key ${authDead.size}/${keys.length} 个已跳过重试）` : "";
-      throw new Error(`API 返回 ${resp.status}${resp.status === 429 ? "（网关限流，已轮换 Key 并退避重试仍失败，稍后再试或回退本地引擎）" : ""}${dead}${detail}`);
+      throw new Error(
+        `API 返回 ${resp.status}${resp.status === 429 ? "（网关限流，已轮换 Key 并退避重试仍失败，稍后再试或回退本地引擎）" : ""}${dead}${detail}`,
+      );
     }
     const data = await resp.json();
     const msg = data?.choices?.[0]?.message ?? {};

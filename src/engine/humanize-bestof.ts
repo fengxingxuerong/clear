@@ -39,13 +39,19 @@ export interface BestOfResult {
 
 export function humanizeBestOf(text: string, opts: BestOfOptions = {}): BestOfResult {
   const before = aiScore(text);
-  const base = opts.seed ?? (Date.now() & 0xffffffff);
+  const base = opts.seed ?? Date.now() & 0xffffffff;
   // 长文本收敛候选数：引擎是纯字符串操作，单候选 O(n)，长文跑太多种子会卡 UI
   const auto = text.length > 4000 ? 4 : text.length > 1500 ? 6 : 10;
   const n = Math.max(1, Math.min(30, Math.round(opts.candidates ?? auto)));
   const srcLen = text.replace(/\s/g, "").length || 1;
 
-  type Cand = { text: string; after: ScoreBreakdown; seed: number; fp: FingerprintReport; rank: number };
+  type Cand = {
+    text: string;
+    after: ScoreBreakdown;
+    seed: number;
+    fp: FingerprintReport;
+    rank: number;
+  };
   let best: Cand | null = null;
   let rejected = 0;
 
@@ -60,7 +66,10 @@ export function humanizeBestOf(text: string, opts: BestOfOptions = {}): BestOfRe
     // D 盘引擎的 FingerprintIssue 全部是硬把柄（无 warn/hint 分级），计数即高危指纹数
     const warns = fp.issues.length;
     const ratio = (out.replace(/\s/g, "").length || 1) / srcLen;
-    if (!fid.pass || ratio < 0.6 || ratio > 1.4) { rejected++; continue; }
+    if (!fid.pass || ratio < 0.6 || ratio > 1.4) {
+      rejected++;
+      continue;
+    }
 
     const after = aiScore(out);
     // 排序：高危指纹优先（把柄比分数更要命），其次本地分
@@ -72,9 +81,22 @@ export function humanizeBestOf(text: string, opts: BestOfOptions = {}): BestOfRe
     // 全部被淘汰：退回单次生成，保证一定有输出（不静默返回空）
     const out = humanize(text, opts);
     return {
-      text: out, before, after: aiScore(out),
-      tried: n, rejected, seed: base, fingerprint: fingerprintCheck(out),
+      text: out,
+      before,
+      after: aiScore(out),
+      tried: n,
+      rejected,
+      seed: base,
+      fingerprint: fingerprintCheck(out),
     };
   }
-  return { text: best.text, before, after: best.after, tried: n, rejected, seed: best.seed, fingerprint: best.fp };
+  return {
+    text: best.text,
+    before,
+    after: best.after,
+    tried: n,
+    rejected,
+    seed: best.seed,
+    fingerprint: best.fp,
+  };
 }

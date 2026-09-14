@@ -18,20 +18,16 @@ import {
   type AutoGenre,
   type GenreResult,
 } from "../engine/classify-genre.ts";
-import {
-  CALIB,
-  TRACK_ORDER,
-  type CalibTrack,
-  type CalibEntry,
-} from "../engine/zhuque-calib";
+import { CALIB, TRACK_ORDER, type CalibTrack, type CalibEntry } from "../engine/zhuque-calib";
 
 /** v3 徽章 & 建议（docs §3.7 规则 + 体裁联动 x40 提示 · v3 18 点 OLS 版） */
 function predictAdvice(
   predPct: number,
   score: number | undefined,
-  cur: Pick<CalibEntry, "satX" | "x40" | "x40Tag" | "humanWarn" | "advanced" | "label">
+  cur: Pick<CalibEntry, "satX" | "x40" | "x40Tag" | "humanWarn" | "advanced" | "label">,
 ) {
-  const saturated = !cur.humanWarn && typeof score === "number" && cur.satX < 1e9 && score >= cur.satX;
+  const saturated =
+    !cur.humanWarn && typeof score === "number" && cur.satX < 1e9 && score >= cur.satX;
   const pct = Math.max(0, Math.min(100, predPct));
   /** v3 2026-08-26：离过人线（≤40%）还差 X pp / 已经领先 X pp
    *  —— 正数 = 还差，越大约危险；0 或负数 = 已过（绝对值 = 缓冲安全边际）
@@ -42,17 +38,23 @@ function predictAdvice(
   // 建议行动卡
   let recAction: string;
   if (cur.humanWarn) {
-    recAction = "纯人写稿 → 关闭朱雀增强、强度拉到 ≤0.48，仅做轻微 shuffle，禁止注入错别字/自问自答/第一人称锚";
+    recAction =
+      "纯人写稿 → 关闭朱雀增强、强度拉到 ≤0.48，仅做轻微 shuffle，禁止注入错别字/自问自答/第一人称锚";
   } else if (pct <= 20) {
-    recAction = "已稳过。如果还想更稳：跑一轮 intensity 0.9 + 朱雀增强，再补 5pp 边际；或切换叙事/对话体裁公式放宽阈值。";
+    recAction =
+      "已稳过。如果还想更稳：跑一轮 intensity 0.9 + 朱雀增强，再补 5pp 边际；或切换叙事/对话体裁公式放宽阈值。";
   } else if (pct <= 40) {
-    recAction = "已过但离过线近。建议：① 强度调到 0.9+ 开朱雀增强（补 -7~-12pp）② 切换到叙事/对话体裁下拉看放宽后的值 ③ 再跑 1 轮深度闭环；";
+    recAction =
+      "已过但离过线近。建议：① 强度调到 0.9+ 开朱雀增强（补 -7~-12pp）② 切换到叙事/对话体裁下拉看放宽后的值 ③ 再跑 1 轮深度闭环；";
   } else if (pct <= 60) {
-    recAction = "压线 5pp 以上！核心瓶颈是结构（三部曲/编号列举/段首雷同）：① 开朱雀增强 + 强度 0.95 ② 若是论说文，P3 会自动注入第一人称经验锚 + 倒序拆解 ③ 换叙事视角改写";
+    recAction =
+      "压线 5pp 以上！核心瓶颈是结构（三部曲/编号列举/段首雷同）：① 开朱雀增强 + 强度 0.95 ② 若是论说文，P3 会自动注入第一人称经验锚 + 倒序拆解 ③ 换叙事视角改写";
   } else if (pct <= 80) {
-    recAction = "高危！词级已基本干净，请重点处理结构：① 把\"总分总\"的开头和结尾打散 ② \"首先/其次/最后\"三部曲改插叙颠倒 ③ \"1./2./3.\"编号改反问/括号/补充";
+    recAction =
+      '高危！词级已基本干净，请重点处理结构：① 把"总分总"的开头和结尾打散 ② "首先/其次/最后"三部曲改插叙颠倒 ③ "1./2./3."编号改反问/括号/补充';
   } else {
-    recAction = "接近饱和！先用 humanize-vocab 清套话连接词（套话命中 -8 个以上 ≈ -48pp），再走结构级拆解最后再跑 LLM 深度重写。";
+    recAction =
+      "接近饱和！先用 humanize-vocab 清套话连接词（套话命中 -8 个以上 ≈ -48pp），再走结构级拆解最后再跑 LLM 深度重写。";
   }
 
   let icon = "🔴";
@@ -108,18 +110,20 @@ function predictAdvice(
   // 2026-08-26 v3："还差 X pp / 领先 Y pp"
   const gapAbs = Math.abs(gapToPass).toFixed(1);
   const badge = {
-    text: gapToPass > 0
-      ? `⚠️ 离过人线还差 ${gapAbs} pp`
-      : gapToPass === 0
-        ? "🤏 刚好过人线"
-        : `✅ 领先过人线 ${gapAbs} pp 边际`,
-    color: gapToPass <= 0
-      ? "#22c55e"
-      : gapToPass <= 5
-        ? "#facc15"
-        : gapToPass <= 20
-          ? "#fb923c"
-          : "#ff5d6c",
+    text:
+      gapToPass > 0
+        ? `⚠️ 离过人线还差 ${gapAbs} pp`
+        : gapToPass === 0
+          ? "🤏 刚好过人线"
+          : `✅ 领先过人线 ${gapAbs} pp 边际`,
+    color:
+      gapToPass <= 0
+        ? "#22c55e"
+        : gapToPass <= 5
+          ? "#facc15"
+          : gapToPass <= 20
+            ? "#fb923c"
+            : "#ff5d6c",
   };
 
   // 进度条刻度：0 |-- 绿 --| 40(过人线白红分界) |-- 黄/橙/红 --| 100
@@ -158,7 +162,22 @@ function predictAdvice(
     boxShadow: "0 0 0 1px rgba(0,0,0,0.35)",
   };
 
-  return { icon, tip, tint, border, fg, banner, saturated, pct, gapToPass, badge, progressBg, progressCursor, passTick, recAction };
+  return {
+    icon,
+    tip,
+    tint,
+    border,
+    fg,
+    banner,
+    saturated,
+    pct,
+    gapToPass,
+    badge,
+    progressBg,
+    progressCursor,
+    passTick,
+    recAction,
+  };
 }
 
 interface BenchmarkPanelProps {
@@ -212,7 +231,7 @@ export function BenchmarkPanel({
   // 自动识别完成后，如果用户未手动 override，把轨道同步为识别结果
   useEffect(() => {
     if (!auto || trackOverrideByUser) return;
-    const mapped = (auto.genre as AutoGenre);
+    const mapped = auto.genre as AutoGenre;
     setTrack((prev) => (prev === mapped ? prev : mapped));
   }, [auto, trackOverrideByUser]);
 
@@ -253,305 +272,346 @@ export function BenchmarkPanel({
   }
 
   return (
-<div className="bench">
-  <div className="bench-head">对标评分（真实通道，非本地代理分）</div>
-  {roundScores.length > 0 && (
-    <div className="bench-row">
-      <span>
-        深度去味各轮 LLM 评分：
-        <b>{roundScores.map((s) => (s < 0 ? "失败" : s)).join(" → ")}</b>（目标 ≤
-        {DEEP_TARGET_SCORE}）
-      </span>
-    </div>
-  )}
-  <div className="bench-row">
-    <span>
-      本地代理分（去味后）：<b>{after?.score}</b>
-    </span>
-    <button
-      className="ghost sm"
-      onClick={onJudge}
-      disabled={!api.enabled || !api.apiKey || judging}
-    >
-      {judging ? "评判中…" : "用 LLM 评判"}
-    </button>
-    {judgeScore !== null && <span className="tag">LLM 评判：{judgeScore}</span>}
-  </div>
-  {judgeScore !== null && judgeCritique.length > 0 && (
-    <div className="bench-row" style={{ flexWrap: "wrap" }}>
-      <span style={{ color: "var(--muted)", fontSize: 12 }}>
-        残留痕迹：{judgeCritique.join("；")}
-      </span>
-    </div>
-  )}
-  <div className="bench-row">
-    <button
-      className="ghost sm"
-      onClick={onDetect}
-      disabled={!detector.enabled || !detector.url || detecting}
-    >
-      {detecting ? "检测中…" : "用外部检测器"}
-    </button>
-    {detectorScore !== null && <span className="tag">检测器：{detectorScore}</span>}
-  </div>
-
-  {/* ========= v3 四体裁分层 · 官方朱雀%预测（18 点 OLS） ========= */}
-  {predPct !== null && adv && (
-    <div
-      className="bench-row"
-      style={{
-        flexWrap: "wrap",
-        gap: 8,
-        alignItems: "center",
-        background: adv.tint,
-        border: `1px solid ${adv.border}`,
-        borderRadius: 10,
-        padding: "8px 10px",
-      }}
-    >
-      {adv.banner && (
-        <div
-          style={{
-            width: "100%",
-            fontSize: 12,
-            fontWeight: 600,
-            padding: "4px 6px",
-            borderRadius: 6,
-            marginBottom: 2,
-            background: adv.banner.startsWith("🚩")
-              ? "rgba(251,146,60,0.12)"
-              : "rgba(148,163,184,0.12)",
-            color: adv.banner.startsWith("🚩") ? "#fb923c" : "var(--muted)",
-            border: adv.banner.startsWith("🚩")
-              ? "1px solid rgba(251,146,60,0.35)"
-              : "1px solid var(--border)",
-          }}
-        >
-          {adv.banner}
+    <div className="bench">
+      <div className="bench-head">对标评分（真实通道，非本地代理分）</div>
+      {roundScores.length > 0 && (
+        <div className="bench-row">
+          <span>
+            深度去味各轮 LLM 评分：
+            <b>{roundScores.map((s) => (s < 0 ? "失败" : s)).join(" → ")}</b>（目标 ≤
+            {DEEP_TARGET_SCORE}）
+          </span>
         </div>
       )}
-      <span style={{ fontSize: 12, color: "var(--muted)" }}>
-        官方朱雀%预测（v3 四体裁分层 18 点 OLS）：
-      </span>
-      <b style={{ color: adv.fg }}>
-        {adv.icon} {adv.pct.toFixed(1)}%
-      </b>
-      {/* 2026-08-26 v3：「离过人线还差 X pp」进度徽章 */}
-      <span
-        className="tag"
-        style={{
-          color: adv.badge.color,
-          background: adv.badge.color + "20",
-          border: `1px solid ${adv.badge.color}70`,
-          fontSize: 12,
-          fontWeight: 700,
-          padding: "3px 8px",
-          borderRadius: 999,
-          whiteSpace: "nowrap",
-        }}
-      >
-        {adv.badge.text}
-      </span>
-      <span style={{ fontSize: 12, color: adv.fg }}>{adv.tip}</span>
-      {/* P6-C 自动识别徽章（放在下拉前，marginLeft:auto 推送到最右和下拉并排）*/}
-      {auto && (
-        <span
-          className="tag"
-          title={`自动识别详情 · 规则 R${auto.ruleHit}：对话dQ=${auto.features.dlgQuoteRatio.toFixed(3)}/dC=${auto.features.dlgColonRatio.toFixed(2)} · 论说分=${auto.features.expoScore.toFixed(2)} · 叙事past=${auto.features.narPastRatio.toFixed(3)}/scene=${auto.features.narSceneRatio.toFixed(3)} · 短句占比=${(auto.features.dlgShortTurn*100).toFixed(0)}%`}
+      <div className="bench-row">
+        <span>
+          本地代理分（去味后）：<b>{after?.score}</b>
+        </span>
+        <button
+          className="ghost sm"
+          onClick={onJudge}
+          disabled={!api.enabled || !api.apiKey || judging}
+        >
+          {judging ? "评判中…" : "用 LLM 评判"}
+        </button>
+        {judgeScore !== null && <span className="tag">LLM 评判：{judgeScore}</span>}
+      </div>
+      {judgeScore !== null && judgeCritique.length > 0 && (
+        <div className="bench-row" style={{ flexWrap: "wrap" }}>
+          <span style={{ color: "var(--muted)", fontSize: 12 }}>
+            残留痕迹：{judgeCritique.join("；")}
+          </span>
+        </div>
+      )}
+      <div className="bench-row">
+        <button
+          className="ghost sm"
+          onClick={onDetect}
+          disabled={!detector.enabled || !detector.url || detecting}
+        >
+          {detecting ? "检测中…" : "用外部检测器"}
+        </button>
+        {detectorScore !== null && <span className="tag">检测器：{detectorScore}</span>}
+      </div>
+
+      {/* ========= v3 四体裁分层 · 官方朱雀%预测（18 点 OLS） ========= */}
+      {predPct !== null && adv && (
+        <div
+          className="bench-row"
           style={{
-            fontSize: 11,
-            padding: "2px 8px",
-            borderRadius: 999,
-            border: trackOverrideByUser
-              ? "1px solid rgba(250,204,21,0.55)"
-              : `1px solid ${auto.confidence >= 0.7 ? "rgba(34,197,94,0.5)" : "rgba(148,163,184,0.5)"}`,
-            background: trackOverrideByUser
-              ? "rgba(250,204,21,0.1)"
-              : auto.confidence >= 0.7
-                ? "rgba(34,197,94,0.09)"
-                : "rgba(148,163,184,0.08)",
-            color: trackOverrideByUser
-              ? "#facc15"
-              : auto.confidence >= 0.7 ? "#3ddc97" : "var(--muted)",
-            whiteSpace: "nowrap",
-            marginLeft: 6,
+            flexWrap: "wrap",
+            gap: 8,
+            alignItems: "center",
+            background: adv.tint,
+            border: `1px solid ${adv.border}`,
+            borderRadius: 10,
+            padding: "8px 10px",
           }}
         >
-          {trackOverrideByUser ? "⚙️ 手动轨道" : "🤖 自动识别"}
-          {!trackOverrideByUser && `：${GENRE_ZH[auto.genre]} ${(auto.confidence * 100).toFixed(0)}%`}
-          {trackOverrideByUser && auto && (
-            <button
-              className="ghost sm"
-              onClick={resetToAuto}
-              title="根据当前文本，按自动识别结果切回轨道（v3 18点 OLS 公式）"
+          {adv.banner && (
+            <div
               style={{
-                marginLeft: 6,
-                padding: "1px 8px",
-                fontSize: 11,
-                color: "#facc15",
-                border: "1px solid rgba(250,204,21,0.45)",
-                background: "rgba(250,204,21,0.08)",
-                borderRadius: 999,
+                width: "100%",
+                fontSize: 12,
+                fontWeight: 600,
+                padding: "4px 6px",
+                borderRadius: 6,
+                marginBottom: 2,
+                background: adv.banner.startsWith("🚩")
+                  ? "rgba(251,146,60,0.12)"
+                  : "rgba(148,163,184,0.12)",
+                color: adv.banner.startsWith("🚩") ? "#fb923c" : "var(--muted)",
+                border: adv.banner.startsWith("🚩")
+                  ? "1px solid rgba(251,146,60,0.35)"
+                  : "1px solid var(--border)",
               }}
             >
-              回到自动
-            </button>
+              {adv.banner}
+            </div>
           )}
-        </span>
+          <span style={{ fontSize: 12, color: "var(--muted)" }}>
+            官方朱雀%预测（v3 四体裁分层 18 点 OLS）：
+          </span>
+          <b style={{ color: adv.fg }}>
+            {adv.icon} {adv.pct.toFixed(1)}%
+          </b>
+          {/* 2026-08-26 v3：「离过人线还差 X pp」进度徽章 */}
+          <span
+            className="tag"
+            style={{
+              color: adv.badge.color,
+              background: adv.badge.color + "20",
+              border: `1px solid ${adv.badge.color}70`,
+              fontSize: 12,
+              fontWeight: 700,
+              padding: "3px 8px",
+              borderRadius: 999,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {adv.badge.text}
+          </span>
+          <span style={{ fontSize: 12, color: adv.fg }}>{adv.tip}</span>
+          {/* P6-C 自动识别徽章（放在下拉前，marginLeft:auto 推送到最右和下拉并排）*/}
+          {auto && (
+            <span
+              className="tag"
+              title={`自动识别详情 · 规则 R${auto.ruleHit}：对话dQ=${auto.features.dlgQuoteRatio.toFixed(3)}/dC=${auto.features.dlgColonRatio.toFixed(2)} · 论说分=${auto.features.expoScore.toFixed(2)} · 叙事past=${auto.features.narPastRatio.toFixed(3)}/scene=${auto.features.narSceneRatio.toFixed(3)} · 短句占比=${(auto.features.dlgShortTurn * 100).toFixed(0)}%`}
+              style={{
+                fontSize: 11,
+                padding: "2px 8px",
+                borderRadius: 999,
+                border: trackOverrideByUser
+                  ? "1px solid rgba(250,204,21,0.55)"
+                  : `1px solid ${auto.confidence >= 0.7 ? "rgba(34,197,94,0.5)" : "rgba(148,163,184,0.5)"}`,
+                background: trackOverrideByUser
+                  ? "rgba(250,204,21,0.1)"
+                  : auto.confidence >= 0.7
+                    ? "rgba(34,197,94,0.09)"
+                    : "rgba(148,163,184,0.08)",
+                color: trackOverrideByUser
+                  ? "#facc15"
+                  : auto.confidence >= 0.7
+                    ? "#3ddc97"
+                    : "var(--muted)",
+                whiteSpace: "nowrap",
+                marginLeft: 6,
+              }}
+            >
+              {trackOverrideByUser ? "⚙️ 手动轨道" : "🤖 自动识别"}
+              {!trackOverrideByUser &&
+                `：${GENRE_ZH[auto.genre]} ${(auto.confidence * 100).toFixed(0)}%`}
+              {trackOverrideByUser && auto && (
+                <button
+                  className="ghost sm"
+                  onClick={resetToAuto}
+                  title="根据当前文本，按自动识别结果切回轨道（v3 18点 OLS 公式）"
+                  style={{
+                    marginLeft: 6,
+                    padding: "1px 8px",
+                    fontSize: 11,
+                    color: "#facc15",
+                    border: "1px solid rgba(250,204,21,0.45)",
+                    background: "rgba(250,204,21,0.08)",
+                    borderRadius: 999,
+                  }}
+                >
+                  回到自动
+                </button>
+              )}
+            </span>
+          )}
+          <select
+            value={track}
+            onChange={(e) => onTrackChange(e.target.value as CalibTrack)}
+            title="体裁切换：按当前文本实际体裁选对应的分层公式（docs §3.3 四体裁分线）。系统默认自动选择，手动切换后显示「手动轨道」可按按钮回到自动。"
+            style={{
+              marginLeft: 8,
+              fontSize: 12,
+              background: "rgba(8,12,22,0.6)",
+              color: "var(--text)",
+              border: "1px solid var(--border)",
+              borderRadius: 6,
+              padding: "4px 6px",
+              outline: "none",
+            }}
+          >
+            <optgroup label="体裁（v3 四分层 · 18 点 OLS · 2026-08-26）">
+              {TRACK_ORDER.filter((k) => CALIB[k].group === "体裁(v3)").map((k) => (
+                <option key={k} value={k}>
+                  {CALIB[k].label}
+                </option>
+              ))}
+            </optgroup>
+            <optgroup label="高级（副线/存档）">
+              {TRACK_ORDER.filter((k) => CALIB[k].group === "高级(副线)").map((k) => (
+                <option key={k} value={k}>
+                  {CALIB[k].label}
+                </option>
+              ))}
+            </optgroup>
+          </select>
+
+          {/* 2026-08-26 v3：过人线进度条（0→深绿，40%白红分界）*/}
+          <div style={{ width: "100%" }}>
+            <div style={adv.progressBg}>
+              <div style={adv.passTick} title="过人线 = 40%" />
+              <div style={adv.progressCursor} title={`当前预测朱雀 ${adv.pct.toFixed(1)}%`} />
+            </div>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                fontSize: 10,
+                color: "var(--muted)",
+                marginTop: 2,
+              }}
+            >
+              <span>0% (深绿)</span>
+              <span style={{ color: "#ffffff" }}>▌过人线 40%</span>
+              <span>100% (深红)</span>
+            </div>
+          </div>
+
+          {/* 2026-08-26 v3：建议行动卡片 */}
+          <div
+            style={{
+              width: "100%",
+              fontSize: 12,
+              color: "var(--text)",
+              padding: "6px 10px",
+              background: "rgba(15, 23, 42, 0.45)",
+              border: "1px solid var(--border)",
+              borderRadius: 8,
+              lineHeight: 1.55,
+            }}
+          >
+            <span style={{ color: "var(--muted)", fontSize: 11 }}>
+              💡 建议行动 · 基于当前预测分 {adv.pct.toFixed(1)}% 的下一次操作：
+            </span>
+            <div style={{ marginTop: 3 }}>{adv.recAction}</div>
+          </div>
+
+          <div
+            style={{
+              width: "100%",
+              fontSize: 11,
+              color: "var(--muted)",
+              marginTop: 2,
+              display: "flex",
+              flexWrap: "wrap",
+              alignItems: "center",
+              gap: 6,
+            }}
+          >
+            <span>
+              公式：朱雀% ≈ clamp({cur.a.toFixed(3)} × aiScore + {cur.b.toFixed(2)}, 0, 100)
+              &nbsp;·&nbsp;
+              {cur.x40 >= 0 ? `${cur.x40Tag}` : cur.x40Tag}
+              &nbsp;·&nbsp;
+              {cur.note}
+            </span>
+            {/* P6-C 快捷：当系统判断像「纯人写稿（past 极高+论说分低+无对话特征）」时提示一键切 human 负斜率轨道 */}
+            {auto &&
+              auto.features.narPastRatio >= 0.04 &&
+              auto.features.expoScore < 0.35 &&
+              auto.features.dlgColonRatio < 0.03 &&
+              auto.genre === "narrative" &&
+              track !== "human" && (
+                <button
+                  className="ghost sm"
+                  onClick={() => onTrackChange("human")}
+                  title="系统检测到极多过去时(口述回忆) + 低论说分 + 无对话，疑似纯人写原稿 → 切换到负斜率轨道 (朱雀%不随去味下降，H0=15% 天然过人)"
+                  style={{
+                    fontSize: 11,
+                    padding: "2px 10px",
+                    color: "#fb923c",
+                    border: "1px solid rgba(251,146,60,0.5)",
+                    background: "rgba(251,146,60,0.1)",
+                    borderRadius: 999,
+                  }}
+                >
+                  🚩 疑似纯人写原稿 → 切负斜率轨道(H0 官=15%)
+                </button>
+              )}
+            {auto && track === "human" && (
+              <button
+                className="ghost sm"
+                onClick={resetToAuto}
+                style={{
+                  fontSize: 11,
+                  padding: "2px 10px",
+                  color: "#3ddc97",
+                  border: "1px solid rgba(61,220,151,0.5)",
+                  background: "rgba(61,220,151,0.1)",
+                  borderRadius: 999,
+                }}
+              >
+                ↩️ 已确认有 AI 参与生成 → 回到三分自动识别
+              </button>
+            )}
+          </div>
+        </div>
       )}
-      <select
-        value={track}
-        onChange={(e) => onTrackChange(e.target.value as CalibTrack)}
-        title="体裁切换：按当前文本实际体裁选对应的分层公式（docs §3.3 四体裁分线）。系统默认自动选择，手动切换后显示「手动轨道」可按按钮回到自动。"
-        style={{
-          marginLeft: 8,
-          fontSize: 12,
-          background: "rgba(8,12,22,0.6)",
-          color: "var(--text)",
-          border: "1px solid var(--border)",
-          borderRadius: 6,
-          padding: "4px 6px",
-          outline: "none",
-        }}
-      >
-        <optgroup label="体裁（v3 四分层 · 18 点 OLS · 2026-08-26）">
-          {TRACK_ORDER.filter((k) => CALIB[k].group === "体裁(v3)").map((k) => (
-            <option key={k} value={k}>
-              {CALIB[k].label}
-            </option>
-          ))}
-        </optgroup>
-        <optgroup label="高级（副线/存档）">
-          {TRACK_ORDER.filter((k) => CALIB[k].group === "高级(副线)").map((k) => (
-            <option key={k} value={k}>
-              {CALIB[k].label}
-            </option>
-          ))}
-        </optgroup>
-      </select>
 
-      {/* 2026-08-26 v3：过人线进度条（0→深绿，40%白红分界）*/}
-      <div style={{ width: "100%" }}>
-        <div style={adv.progressBg}>
-          <div style={adv.passTick} title="过人线 = 40%" />
-          <div style={adv.progressCursor} title={`当前预测朱雀 ${adv.pct.toFixed(1)}%`} />
-        </div>
-        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "var(--muted)", marginTop: 2 }}>
-          <span>0% (深绿)</span>
-          <span style={{ color: "#ffffff" }}>▌过人线 40%</span>
-          <span>100% (深红)</span>
-        </div>
-      </div>
-
-      {/* 2026-08-26 v3：建议行动卡片 */}
-      <div
-        style={{
-          width: "100%",
-          fontSize: 12,
-          color: "var(--text)",
-          padding: "6px 10px",
-          background: "rgba(15, 23, 42, 0.45)",
-          border: "1px solid var(--border)",
-          borderRadius: 8,
-          lineHeight: 1.55,
-        }}
-      >
-        <span style={{ color: "var(--muted)", fontSize: 11 }}>
-          💡 建议行动 · 基于当前预测分 {adv.pct.toFixed(1)}% 的下一次操作：
-        </span>
-        <div style={{ marginTop: 3 }}>{adv.recAction}</div>
-      </div>
-
-      <div style={{ width: "100%", fontSize: 11, color: "var(--muted)", marginTop: 2, display:"flex", flexWrap:"wrap", alignItems:"center", gap:6 }}>
-        <span>公式：朱雀% ≈ clamp({cur.a.toFixed(3)} × aiScore + {cur.b.toFixed(2)}, 0, 100)
-        &nbsp;·&nbsp;
-        {cur.x40 >= 0 ? `${cur.x40Tag}` : cur.x40Tag}
-        &nbsp;·&nbsp;
-        {cur.note}</span>
-        {/* P6-C 快捷：当系统判断像「纯人写稿（past 极高+论说分低+无对话特征）」时提示一键切 human 负斜率轨道 */}
-        {auto && auto.features.narPastRatio >= 0.04 && auto.features.expoScore < 0.35 && auto.features.dlgColonRatio < 0.03 && auto.genre === "narrative" && track !== "human" && (
-          <button
-            className="ghost sm"
-            onClick={() => onTrackChange("human")}
-            title="系统检测到极多过去时(口述回忆) + 低论说分 + 无对话，疑似纯人写原稿 → 切换到负斜率轨道 (朱雀%不随去味下降，H0=15% 天然过人)"
+      {/* 朱雀免费版：半自动送检——复制文本 + 打开网页，用户手动检测后回填分 */}
+      <div className="bench-row">
+        <button
+          className="ghost sm"
+          onClick={() => {
+            if (!output) return;
+            navigator.clipboard?.writeText(output);
+            window.open("https://matrix.tencent.com/ai-detect/ai_gen_txt/", "_blank");
+            onNote("已复制去味文本并打开朱雀检测页——粘贴检测后，在下方填入朱雀分");
+          }}
+          disabled={!output}
+        >
+          🔍 朱雀送检（免费网页版）
+        </button>
+        <input
+          type="number"
+          min={0}
+          max={100}
+          value={zhuqueManualScore}
+          onChange={(e) => onManualScore(e.target.value)}
+          placeholder="朱雀分"
+          style={{
+            width: 80,
+            background: "rgba(8,12,22,0.7)",
+            color: "var(--text)",
+            border: "1px solid var(--border)",
+            borderRadius: 8,
+            padding: "6px 8px",
+            outline: "none",
+          }}
+        />
+        {zhuqueManualScore && (
+          <span
+            className="tag"
             style={{
-              fontSize: 11,
-              padding: "2px 10px",
-              color: "#fb923c",
-              border: "1px solid rgba(251,146,60,0.5)",
-              background: "rgba(251,146,60,0.1)",
-              borderRadius: 999,
+              color: Number(zhuqueManualScore) < 30 ? "#3ddc97" : "#ff5d6c",
+              borderColor:
+                Number(zhuqueManualScore) < 30 ? "rgba(61,220,151,0.3)" : "rgba(255,93,108,0.3)",
+              background:
+                Number(zhuqueManualScore) < 30 ? "rgba(61,220,151,0.1)" : "rgba(255,93,108,0.1)",
             }}
           >
-            🚩 疑似纯人写原稿 → 切负斜率轨道(H0 官=15%)
-          </button>
-        )}
-        {auto && track === "human" && (
-          <button
-            className="ghost sm"
-            onClick={resetToAuto}
-            style={{
-              fontSize: 11,
-              padding: "2px 10px",
-              color: "#3ddc97",
-              border: "1px solid rgba(61,220,151,0.5)",
-              background: "rgba(61,220,151,0.1)",
-              borderRadius: 999,
-            }}
-          >
-            ↩️ 已确认有 AI 参与生成 → 回到三分自动识别
-          </button>
+            朱雀：{zhuqueManualScore} {Number(zhuqueManualScore) < 30 ? "✅" : "❌"}
+          </span>
         )}
       </div>
+      {!api.enabled && !detector.enabled && (
+        <div className="bench-tip">
+          对标检测两条路径：<b>① 免费</b>
+          ——点上方「朱雀送检」自动复制文本并打开朱雀网页，手动检测后回填分数；
+          <b>② 自动</b>——在「设置」里配 EdgeOne 朱雀 API 网关（企业版），去味后自动送检。
+          <br />
+          显示的「官方朱雀%预测」仅为本地代理分对标估算，真实结果以官方网页或企业 API 直接返回为准。
+          <br />
+          📌 <b>v3 新（2026-08-26 · 18 点 OLS）</b>：按文本实际体裁切换下拉（论说默认 / 叙事 / 对话
+          / 纯人写），阈值会联动重算。本轮 6 点新检最大预测误差仅 +1.8pp。
+        </div>
+      )}
     </div>
-  )}
-
-  {/* 朱雀免费版：半自动送检——复制文本 + 打开网页，用户手动检测后回填分 */}
-  <div className="bench-row">
-    <button
-      className="ghost sm"
-      onClick={() => {
-        if (!output) return;
-        navigator.clipboard?.writeText(output);
-        window.open("https://matrix.tencent.com/ai-detect/ai_gen_txt/", "_blank");
-        onNote("已复制去味文本并打开朱雀检测页——粘贴检测后，在下方填入朱雀分");
-      }}
-      disabled={!output}
-    >
-      🔍 朱雀送检（免费网页版）
-    </button>
-    <input
-      type="number"
-      min={0}
-      max={100}
-      value={zhuqueManualScore}
-      onChange={(e) => onManualScore(e.target.value)}
-      placeholder="朱雀分"
-      style={{ width: 80, background: "rgba(8,12,22,0.7)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: "6px 8px", outline: "none" }}
-    />
-    {zhuqueManualScore && (
-      <span
-        className="tag"
-        style={{
-          color: Number(zhuqueManualScore) < 30 ? "#3ddc97" : "#ff5d6c",
-          borderColor: Number(zhuqueManualScore) < 30 ? "rgba(61,220,151,0.3)" : "rgba(255,93,108,0.3)",
-          background: Number(zhuqueManualScore) < 30 ? "rgba(61,220,151,0.1)" : "rgba(255,93,108,0.1)",
-        }}
-      >
-        朱雀：{zhuqueManualScore} {Number(zhuqueManualScore) < 30 ? "✅" : "❌"}
-      </span>
-    )}
-  </div>
-  {!api.enabled && !detector.enabled && (
-    <div className="bench-tip">
-      对标检测两条路径：<b>① 免费</b>——点上方「朱雀送检」自动复制文本并打开朱雀网页，手动检测后回填分数；
-      <b>② 自动</b>——在「设置」里配 EdgeOne 朱雀 API 网关（企业版），去味后自动送检。
-      <br />
-      显示的「官方朱雀%预测」仅为本地代理分对标估算，真实结果以官方网页或企业 API 直接返回为准。
-      <br />
-      📌 <b>v3 新（2026-08-26 · 18 点 OLS）</b>：按文本实际体裁切换下拉（论说默认 / 叙事 / 对话 / 纯人写），阈值会联动重算。本轮 6 点新检最大预测误差仅 +1.8pp。
-    </div>
-  )}
-</div>
   );
 }

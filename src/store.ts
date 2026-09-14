@@ -74,11 +74,27 @@ export function loadApi(): ApiConfig {
       o.style === "casual" || o.style === "plain" || o.style === "academic"
         ? o.style
         : DEFAULT_API.style,
-    reasoningEffort: ["low", "medium", "high", "max", "x-high"].includes(o.reasoningEffort as string)
+    reasoningEffort: ["low", "medium", "high", "max", "x-high"].includes(
+      o.reasoningEffort as string,
+    )
       ? (o.reasoningEffort as ApiConfig["reasoningEffort"])
       : undefined,
-    maxWaitSeconds: typeof o.maxWaitSeconds === "number" && o.maxWaitSeconds >= 0 ? o.maxWaitSeconds : 0,
+    maxWaitSeconds:
+      typeof o.maxWaitSeconds === "number" && o.maxWaitSeconds >= 0 ? o.maxWaitSeconds : 0,
     maxApiCalls: typeof o.maxApiCalls === "number" && o.maxApiCalls >= 0 ? o.maxApiCalls : 0,
+    // v0.9：首轮多候选竞争采样数（1=关闭）。白名单逐字段解析，漏读会导致刷新后配置丢失
+    contestSamples:
+      typeof o.contestSamples === "number" && o.contestSamples >= 1
+        ? Math.min(5, Math.floor(o.contestSamples))
+        : 1,
+    // v0.9.5 补读：这两个字段此前被白名单漏掉，用户在面板里勾了「严格保真」/
+    // 选了「人味人格」，刷新页面即静默回默认。strictFidelity 是编造复核开关，
+    // 静默失效等于防编造防线漏空——同类漏读已第三次复发（apiKeys / contestSamples）。
+    strictFidelity: bool(o, "strictFidelity", DEFAULT_API.strictFidelity ?? false),
+    persona:
+      o.persona === "netgen" || o.persona === "classic"
+        ? o.persona
+        : (DEFAULT_API.persona ?? "default"),
     // Key 池透传（v0.8.7 修复：此前 loadApi 漏读该字段，刷新页面后 Key 池丢失）
     ...(typeof o.apiKeys === "string" && o.apiKeys ? { apiKeys: o.apiKeys } : {}),
   };

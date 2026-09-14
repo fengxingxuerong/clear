@@ -40,5 +40,8 @@ jobs:
       - name: Quality gate (verify-quality)
         run: npx tsx scripts/verify-quality.ts
 
+      - name: Calibration sanity (标定数据源/参数/漂移自检)
+        run: npx tsx scripts/calib-sanity.ts
+
       - name: Production build
         run: npm run build

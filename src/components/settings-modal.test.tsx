@@ -62,14 +62,20 @@ describe("SettingsModal（设置弹窗）", () => {
     fireEvent.blur(temp);
 
     // 朱雀增强
-    const zhuque = Array.from(container.querySelectorAll('input[type="checkbox"]')).find(
-      (el) => (el as HTMLInputElement).closest("label")?.textContent?.includes("朱雀增强模式"),
+    const zhuque = Array.from(container.querySelectorAll('input[type="checkbox"]')).find((el) =>
+      (el as HTMLInputElement).closest("label")?.textContent?.includes("朱雀增强模式"),
     ) as HTMLInputElement;
     fireEvent.click(zhuque);
 
     fireEvent.click(getByText("保存"));
     expect(onSave).toHaveBeenCalledTimes(1);
-    const [api, , zhuqueMode] = onSave.mock.calls[0] as [ApiConfig, DetectorConfig, boolean, boolean, LocalSettings];
+    const [api, , zhuqueMode] = onSave.mock.calls[0] as [
+      ApiConfig,
+      DetectorConfig,
+      boolean,
+      boolean,
+      LocalSettings,
+    ];
     expect(api.apiKey).toBe("sk-new-key");
     expect(api.enabled).toBe(true);
     expect(api.temperature).toBe(2);

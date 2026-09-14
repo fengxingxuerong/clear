@@ -63,8 +63,13 @@ const inParas = (t: string) => t.split(/\n+/).filter((p) => p.trim()).length;
 const outParas = (t: string) => t.split(/\n\n+/).filter((p) => p.trim()).length;
 
 const QA_MARKERS = [
-  "为啥这么说", "真的假的", "你可能会问", "这不是理所当然的吗",
-  "不信？那你自己试试", "例子呢", "有人要抬杠",
+  "为啥这么说",
+  "真的假的",
+  "你可能会问",
+  "这不是理所当然的吗",
+  "不信？那你自己试试",
+  "例子呢",
+  "有人要抬杠",
 ];
 
 /* ----------------------------- A. 段落守恒 ----------------------------- */
@@ -102,7 +107,9 @@ describe("B. 对话剧本场景块保护（postmortem 缺陷一固化）", () =>
   it("高强度+朱雀：【场景：…】块头逐字守恒（多种子）", () => {
     for (let seed = 1; seed <= 30; seed++) {
       const out = humanize(DIALOG_MULTI, {
-        intensity: 0.9, zhuqueMode: true, seed,
+        intensity: 0.9,
+        zhuqueMode: true,
+        seed,
       });
       expect(out).toContain("【场景：公司会议室，下午三点】");
       expect(out).toContain("【场景：测试工位，第二天上午】");
@@ -112,7 +119,9 @@ describe("B. 对话剧本场景块保护（postmortem 缺陷一固化）", () =>
   it("台词区不注入自问自答语料（多种子 × 负向）", () => {
     for (let seed = 1; seed <= 30; seed++) {
       const out = humanize(DIALOG_MULTI, {
-        intensity: 0.9, zhuqueMode: true, seed,
+        intensity: 0.9,
+        zhuqueMode: true,
+        seed,
       });
       for (const m of QA_MARKERS) expect(out).not.toContain(m);
     }
@@ -121,7 +130,9 @@ describe("B. 对话剧本场景块保护（postmortem 缺陷一固化）", () =>
   it("applyZhuqueFeatures 直调：skipSceneInject 全文跳过，无场景块普通文本注入仍存活（双向对照）", () => {
     // 负向：剧本 + skipSceneInject → 不出现 QA，且块头逐字守恒（P8）
     for (let seed = 1; seed <= 20; seed++) {
-      const skipped = applyZhuqueFeatures(DIALOG_MULTI, 0.9, seed, "casual", { skipSceneInject: true });
+      const skipped = applyZhuqueFeatures(DIALOG_MULTI, 0.9, seed, "casual", {
+        skipSceneInject: true,
+      });
       expect(skipped).toContain("【场景：公司会议室，下午三点】");
       expect(skipped).toContain("【场景：测试工位，第二天上午】");
       for (const m of QA_MARKERS) expect(skipped).not.toContain(m);
@@ -163,14 +174,29 @@ describe("D. 人写体裁多段守恒与可复现", () => {
   it("humanHand 多段：强度 0.9 仍段落守恒（强度被钳制，但结构不破坏）", () => {
     const before = inParas(HUMAN_MULTI);
     for (const seed of [1, 5, 42, 99]) {
-      const out = humanize(HUMAN_MULTI, { intensity: 0.9, zhuqueMode: true, genre: "humanHand", seed });
+      const out = humanize(HUMAN_MULTI, {
+        intensity: 0.9,
+        zhuqueMode: true,
+        genre: "humanHand",
+        seed,
+      });
       expect(outParas(out)).toBeGreaterThanOrEqual(before);
     }
   });
 
   it("humanHand：同种子可复现", () => {
-    const a = humanize(HUMAN_MULTI, { intensity: 0.9, zhuqueMode: true, genre: "humanHand", seed: 42 });
-    const b = humanize(HUMAN_MULTI, { intensity: 0.9, zhuqueMode: true, genre: "humanHand", seed: 42 });
+    const a = humanize(HUMAN_MULTI, {
+      intensity: 0.9,
+      zhuqueMode: true,
+      genre: "humanHand",
+      seed: 42,
+    });
+    const b = humanize(HUMAN_MULTI, {
+      intensity: 0.9,
+      zhuqueMode: true,
+      genre: "humanHand",
+      seed: 42,
+    });
     expect(a).toBe(b);
   });
 });

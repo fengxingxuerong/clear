@@ -164,9 +164,24 @@ export function styleDirective(style: RewriteStyle): string {
   }
 }
 
+/** v0.9.5 P4 人味人格：同一 casual 语体下的风格分档。
+ *  动机：单一「人味模板」本身会被检测器针对性统计（实测三组范例教学后
+ *  产出风格趋同），多套人格既是真实需求（不同平台读者口味不同），
+ *  也是对抗「模板被针对」的根本手段。仅微调句法偏好，范例组不动
+ *  （范例教人味共性，人格管风格差异）。 */
+export function personaDirective(persona?: "default" | "netgen" | "classic"): string {
+  switch (persona) {
+    case "netgen":
+      return `\n\n人味人格（网络世代）：句子更短更碎，一句一个信息点，判断句干脆利落（"这事儿没跑。""就图个新鲜。"）。可以有一点点夸张，但严禁网络烂梗——"绝绝子/yyds/家人们谁懂啊"这类表演式网络语是 AI 模仿人类的最大破绽，用了直接判负。语气词按主提示词的总量限制执行，不许因为人格年轻就加密。`;
+    case "classic":
+      return `\n\n人味人格（老派文青）：书面骨架 + 人味态度。垫词浓度减半（"说白了/你懂的"几乎不用），改用更沉稳的过渡（"说实话/细想之下/话说回来"）。句子可以有长度和从句，但要有呼吸感——长句之后必跟一个短句落脚。判断内敛不夸张，结尾允许留一点余韵（半开放，不把话说满），但同样不许用"综上所述"式收束。`;
+    default:
+      return ""; // default：现行范例教学的那套自然口语
+  }
+}
+
 /** 强度指令：滑块对 LLM 模式同样生效（竞品标配） */
-export function intensityDirective(intensity: number): string {
-  if (intensity < 0.35) {
+export function intensityDirective(intensity: number): string {  if (intensity < 0.35) {
     return `\n\n本次为轻度模式：保持原句顺序与段落结构，只处理最刺眼的痕迹（连接词、AI套话、标点规整、垫词复读），不做大幅重构。中英数字间空格跟随原文，不要增删。`;
   }
   if (intensity >= 0.75) {

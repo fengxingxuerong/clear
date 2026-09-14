@@ -17,9 +17,27 @@ import type { HistoryEntry } from "../store-history";
 
 afterEach(() => cleanup());
 
-const hi: ScoreBreakdown = { score: 82, formulaicHits: 9, burstiness: 0.2, avgLen: 30, sentenceCount: 4 };
-const lo: ScoreBreakdown = { score: 22, formulaicHits: 1, burstiness: 0.5, avgLen: 15, sentenceCount: 2 };
-const mid: ScoreBreakdown = { score: 45, formulaicHits: 4, burstiness: 0.3, avgLen: 22, sentenceCount: 3 };
+const hi: ScoreBreakdown = {
+  score: 82,
+  formulaicHits: 9,
+  burstiness: 0.2,
+  avgLen: 30,
+  sentenceCount: 4,
+};
+const lo: ScoreBreakdown = {
+  score: 22,
+  formulaicHits: 1,
+  burstiness: 0.5,
+  avgLen: 15,
+  sentenceCount: 2,
+};
+const mid: ScoreBreakdown = {
+  score: 45,
+  formulaicHits: 4,
+  burstiness: 0.3,
+  avgLen: 22,
+  sentenceCount: 3,
+};
 
 describe("ScoreBadge（评分徽章）", () => {
   it("渲染标签、分数与三项明细", () => {
@@ -30,11 +48,17 @@ describe("ScoreBadge（评分徽章）", () => {
   });
 
   it("高危红（≥60）/ 中档橙（≥35）/ 低危绿（<35）三档配色", () => {
-    const red = render(<ScoreBadge label="a" s={hi} tone="before" />).getByText("82") as HTMLElement;
+    const red = render(<ScoreBadge label="a" s={hi} tone="before" />).getByText(
+      "82",
+    ) as HTMLElement;
     expect(red.style.color).toBe("#ff5d6c");
-    const orange = render(<ScoreBadge label="b" s={mid} tone="before" />).getByText("45") as HTMLElement;
+    const orange = render(<ScoreBadge label="b" s={mid} tone="before" />).getByText(
+      "45",
+    ) as HTMLElement;
     expect(orange.style.color).toBe("#ffb454");
-    const green = render(<ScoreBadge label="c" s={lo} tone="after" />).getByText("22") as HTMLElement;
+    const green = render(<ScoreBadge label="c" s={lo} tone="after" />).getByText(
+      "22",
+    ) as HTMLElement;
     expect(green.style.color).toBe("#3ddc97");
   });
 });
@@ -63,7 +87,9 @@ describe("TextPane（受控输入面板）", () => {
   });
 
   it("字数统计随 value 更新（受控）", () => {
-    const { getByText, rerender } = render(<TextPane label="" value="ab" placeholder="" onChange={() => {}} />);
+    const { getByText, rerender } = render(
+      <TextPane label="" value="ab" placeholder="" onChange={() => {}} />,
+    );
     expect(getByText("2 字")).toBeTruthy();
     rerender(<TextPane label="" value="abcde" placeholder="" onChange={() => {}} />);
     expect(getByText("5 字")).toBeTruthy();
@@ -84,7 +110,9 @@ describe("DiffView（去味前后对比）", () => {
   });
 
   it("无改动时显示「无改动」", () => {
-    const { getByText } = render(<DiffView before="一样的话。" after="一样的话。" onClose={() => {}} />);
+    const { getByText } = render(
+      <DiffView before="一样的话。" after="一样的话。" onClose={() => {}} />,
+    );
     expect(getByText(/无改动/)).toBeTruthy();
   });
 
@@ -115,7 +143,12 @@ describe("HistoryPanel（去味历史）", () => {
     usedApi: false,
     timestamp: Date.now() - 5 * 60 * 1000,
   };
-  const e2: HistoryEntry = { ...e1, id: "h2", usedApi: true, timestamp: Date.now() - 3 * 60 * 60 * 1000 };
+  const e2: HistoryEntry = {
+    ...e1,
+    id: "h2",
+    usedApi: true,
+    timestamp: Date.now() - 3 * 60 * 60 * 1000,
+  };
 
   function props(overrides: Partial<Parameters<typeof HistoryPanel>[0]> = {}) {
     return {
@@ -228,11 +261,7 @@ describe("FingerprintPanel（指纹体检面板）", () => {
     const { getByText, rerender } = render(<FingerprintPanel {...base({ fingerprint: fp })} />);
     expect(getByText(/检查原文/)).toBeTruthy();
     expect(getByText(/句长CV 0.42 \/ 标准差 6.2/)).toBeTruthy();
-    rerender(
-      <FingerprintPanel
-        {...base({ fingerprint: fp, checkingOutput: true })}
-      />,
-    );
+    rerender(<FingerprintPanel {...base({ fingerprint: fp, checkingOutput: true })} />);
     expect(getByText(/检查去味结果/)).toBeTruthy();
   });
 
@@ -283,7 +312,9 @@ describe("FingerprintPanel（指纹体检面板）", () => {
     c.unmount();
 
     const d = render(
-      <FingerprintPanel {...base({ fingerprint: fp, pplEnabled: true, pplState: "unsupported" })} />,
+      <FingerprintPanel
+        {...base({ fingerprint: fp, pplEnabled: true, pplState: "unsupported" })}
+      />,
     );
     expect(d.getByText(/当前环境不支持困惑度检查/)).toBeTruthy();
   });
@@ -325,7 +356,9 @@ describe("FingerprintPanel（指纹体检面板）", () => {
   it("pplEnabled=false 时困惑度区域整块不出现", () => {
     const fp = { pass: true, issues: [], sentenceCV: 0.4 };
     const { queryByText } = render(
-      <FingerprintPanel {...base({ fingerprint: fp, pplEnabled: false, pplState: "need-download" })} />,
+      <FingerprintPanel
+        {...base({ fingerprint: fp, pplEnabled: false, pplState: "need-download" })}
+      />,
     );
     expect(queryByText(/下载模型/)).toBeNull();
   });

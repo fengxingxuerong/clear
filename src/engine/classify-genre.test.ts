@@ -39,29 +39,64 @@ describe("P6 classifyGenre 自动体裁识别", () => {
 
 describe("P7 引擎级体裁联动", () => {
   it("opts.genre=humanHand：强度被钳制且输出可复现", () => {
-    const a = humanize(EXPO_TEXT, { intensity: 0.9, zhuqueMode: true, genre: "humanHand", seed: 42 });
-    const b = humanize(EXPO_TEXT, { intensity: 0.9, zhuqueMode: true, genre: "humanHand", seed: 42 });
+    const a = humanize(EXPO_TEXT, {
+      intensity: 0.9,
+      zhuqueMode: true,
+      genre: "humanHand",
+      seed: 42,
+    });
+    const b = humanize(EXPO_TEXT, {
+      intensity: 0.9,
+      zhuqueMode: true,
+      genre: "humanHand",
+      seed: 42,
+    });
     expect(a).toBe(b);
     expect(a.length).toBeGreaterThan(0);
   });
 
   it("humanHand 与普通档输出不同（降级行为可区分）", () => {
-    const clamped = humanize(EXPO_TEXT, { intensity: 0.9, zhuqueMode: true, genre: "humanHand", seed: 42 });
+    const clamped = humanize(EXPO_TEXT, {
+      intensity: 0.9,
+      zhuqueMode: true,
+      genre: "humanHand",
+      seed: 42,
+    });
     const normal = humanize(EXPO_TEXT, { intensity: 0.48, zhuqueMode: false, seed: 42 });
     expect(clamped).not.toBe(normal);
   });
 
   it("mechanicalShuffle 独立入口也吃 genre 联动", () => {
-    const out = mechanicalShuffle(EXPO_TEXT, { intensity: 0.9, zhuqueMode: true, genre: "main", seed: 7 });
+    const out = mechanicalShuffle(EXPO_TEXT, {
+      intensity: 0.9,
+      zhuqueMode: true,
+      genre: "main",
+      seed: 7,
+    });
     expect(out.length).toBeGreaterThan(0);
-    const hh = mechanicalShuffle(HUMAN_TEXT, { intensity: 0.9, zhuqueMode: true, genre: "humanHand", seed: 7 });
+    const hh = mechanicalShuffle(HUMAN_TEXT, {
+      intensity: 0.9,
+      zhuqueMode: true,
+      genre: "humanHand",
+      seed: 7,
+    });
     expect(hh.length).toBeGreaterThan(0);
   });
 
   it("对话体剧本场景块：skipSceneInject=true 台词区永不注入自问自答", () => {
-    const QA_MARKERS = ["为啥这么说", "真的假的", "你可能会问", "这不是理所当然的吗", "不信？那你自己试试", "例子呢", "有人要抬杠"];
+    const QA_MARKERS = [
+      "为啥这么说",
+      "真的假的",
+      "你可能会问",
+      "这不是理所当然的吗",
+      "不信？那你自己试试",
+      "例子呢",
+      "有人要抬杠",
+    ];
     for (let seed = 1; seed <= 30; seed++) {
-      const skipped = applyZhuqueFeatures(DIALOG_SCRIPT, 0.9, seed, "casual", { skipSceneInject: true });
+      const skipped = applyZhuqueFeatures(DIALOG_SCRIPT, 0.9, seed, "casual", {
+        skipSceneInject: true,
+      });
       expect(skipped).toMatch(/【场景：[^】]*下午三点[^】]*】/);
       for (const m of QA_MARKERS) expect(skipped).not.toContain(m);
     }
@@ -85,7 +120,15 @@ describe("P7 引擎级体裁联动", () => {
   });
 
   it("humanize 主入口联动：自动识别 dialogue 全文跳过自问自答，普通论说机制仍在", () => {
-    const QA_MARKERS = ["为啥这么说", "真的假的", "你可能会问", "这不是理所当然的吗", "不信？那你自己试试", "例子呢", "有人要抬杠"];
+    const QA_MARKERS = [
+      "为啥这么说",
+      "真的假的",
+      "你可能会问",
+      "这不是理所当然的吗",
+      "不信？那你自己试试",
+      "例子呢",
+      "有人要抬杠",
+    ];
     for (let seed = 1; seed <= 20; seed++) {
       const out = humanize(DIALOG_SCRIPT, { intensity: 0.9, zhuqueMode: true, seed });
       for (const m of QA_MARKERS) expect(out).not.toContain(m);

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { pickExemplarBlock } from "./llm-prompts";
+import { pickExemplarBlock, personaDirective } from "./llm-prompts";
 
 /** v0.9.5 P3 范例条件注入：按体裁选范例组（议论默认 / 叙事判体 / 科普启发式 / academic 跳过） */
 describe("pickExemplarBlock（范例条件注入）", () => {
@@ -32,5 +32,27 @@ describe("pickExemplarBlock（范例条件注入）", () => {
   it("academic 文风跳过全部范例（省 token 且避免口语干扰）", () => {
     const text = "本研究提出了一种基于注意力机制的模型架构，实验结果表明方法有效。";
     expect(pickExemplarBlock(text, "academic")).toBe("");
+  });
+});
+
+describe("personaDirective（人味人格分档，v0.9.5 P4）", () => {
+  it("default 不追加任何人格指令（现行范例即该套）", () => {
+    expect(personaDirective("default")).toBe("");
+    expect(personaDirective(undefined)).toBe("");
+  });
+
+  it("netgen：短句导向 + 严禁网络烂梗", () => {
+    const d = personaDirective("netgen");
+    expect(d).toContain("网络世代");
+    expect(d).toContain("严禁网络烂梗");
+    expect(d).toContain("绝绝子");
+  });
+
+  it("classic：垫词减半 + 沉稳过渡 + 结尾留余韵", () => {
+    const d = personaDirective("classic");
+    expect(d).toContain("老派文青");
+    expect(d).toContain("垫词浓度减半");
+    expect(d).toContain("余韵");
+    expect(d).toContain('不许用"综上所述"式收束'); // 明确禁用（示例形式出现）
   });
 });

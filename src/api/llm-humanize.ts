@@ -8,10 +8,11 @@ import {
   pickExemplarBlock,
   buildRevisionPrompt,
   intensityDirective,
+  personaDirective,
   styleDirective,
 } from "./llm-prompts";
 import { chat, resetApiCallCount, getApiCallCount } from "./llm-chat";
-import { processCandidate } from "./llm-quality";
+import { processCandidate, fabricationReview } from "./llm-quality";
 import { restoreMixedSpacing } from "../engine/humanize-shuffle.ts";
 import { errMsg } from "./llm-judge";
 
@@ -25,12 +26,17 @@ import { errMsg } from "./llm-judge";
  *  "改写稿显著优于底稿"的语义带内，且不需要按模型硬编码宽严表。 */
 const RELATIVE_TARGET_RATIO = 0.35;
 
-/** 组装改写用的 system 提示词（基础战术 + 按体裁选范例 + 文风预设 + 强度档位） */
-export function buildSystemPrompt(cfg: ApiConfig, intensity: number, sourceText?: string): string {
+/** 组装改写用的 system 提示词（基础战术 + 按体裁选范例 + 文风预设 + 人味人格 + 强度档位） */
+export function buildSystemPrompt(
+  cfg: ApiConfig,
+  intensity: number,
+  sourceText?: string,
+): string {
   return (
     SYSTEM_PROMPT +
     pickExemplarBlock(sourceText ?? "", cfg.style) +
     styleDirective(cfg.style) +
+    personaDirective(cfg.persona) +
     intensityDirective(intensity)
   );
 }

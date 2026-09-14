@@ -70,7 +70,7 @@ export const CALIB: Record<CalibTrack, CalibEntry> = {
     b: 18.0,
     note: "v3 人写线 · n=4 · R²=0.77 · 斜率为负：越去味反而越像 AI！H0=15% 天然过线（docs §3.5.3）；本轮 H2 新检=18% 再次验证",
     satX: Number.POSITIVE_INFINITY, // 斜率为负 → x 越大越安全，不存在饱和
-    x40: -1,                        // 负值 → 代表无论如何都天然过 40% 线
+    x40: -1, // 负值 → 代表无论如何都天然过 40% 线
     x40Tag: "纯人写天然过人：H0官=15%",
     humanWarn: true,
     group: "体裁(v3)",

@@ -27,7 +27,8 @@ class FakeWorker {
   /** getWorker 通过 addEventListener 等 ready 消息——须真实记录 listener */
   private listeners: Array<(ev: MessageEvent) => void> = [];
   /** 每条收到的消息 → 响应；默认 download/score 都成功，用例可覆写 */
-  handler: (msg: unknown) => { type: string; result?: unknown; error?: string } | null = defaultHandler;
+  handler: (msg: unknown) => { type: string; result?: unknown; error?: string } | null =
+    defaultHandler;
 
   constructor(_url: URL | string, _opts?: { type?: string }) {
     // eslint-disable-next-line @typescript-eslint/no-this-alias -- 测试桩需要全局引用当前实例

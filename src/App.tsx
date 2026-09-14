@@ -86,7 +86,13 @@ import { BenchmarkPanel } from "./components/BenchmarkPanel";
 import { ZhuquePanel } from "./components/ZhuquePanel";
 import { CalibLabModal } from "./components/CalibLabModal";
 import { LocalDetectPanel } from "./components/LocalDetectPanel";
-import { loadHistory, saveHistory, clearHistory, makeHistoryEntry, type HistoryEntry } from "./store-history";
+import {
+  loadHistory,
+  saveHistory,
+  clearHistory,
+  makeHistoryEntry,
+  type HistoryEntry,
+} from "./store-history";
 
 type Score = ScoreBreakdown;
 
@@ -111,7 +117,9 @@ export default function App({
   const [output, setOutput] = useState("");
   const [intensity, setIntensity] = useState<number>(loadIntensity());
   const [zhuqueMode, setZhuqueMode] = useState<boolean>(loadZhuqueMode());
-  const [genreOverride, setGenreOverride] = useState<"main" | "narrative" | "dialogue" | "humanHand" | null>(null);
+  const [genreOverride, setGenreOverride] = useState<
+    "main" | "narrative" | "dialogue" | "humanHand" | null
+  >(null);
   const [api, setApi] = useState<ApiConfig>(initialApi ?? loadApi());
   const [detector, setDetector] = useState<DetectorConfig>(initialDetector ?? loadDetector());
   const [judgeScore, setJudgeScore] = useState<number | null>(null);
@@ -382,7 +390,7 @@ export default function App({
     if (!sub.chars) return;
     const ok = await copyText(sub.text);
     setZqMsg(
-      `${submissionAdvice(sub.chars)}｜${ok ? "已复制，去官方页面粘贴即可" : "复制失败，请手动复制"}`
+      `${submissionAdvice(sub.chars)}｜${ok ? "已复制，去官方页面粘贴即可" : "复制失败，请手动复制"}`,
     );
   }
 
@@ -400,7 +408,9 @@ export default function App({
     setZqCalib(cal);
     setZq(detectZhuque(zqText || zqTarget(), zhuqueOpts(cal)));
     setZqPaste("");
-    setZqMsg(`已记录：本地综合分 ${zq.composite} → 官方 ${p.probability}%（${p.labelText}），现有 ${cal.n} 个校准点`);
+    setZqMsg(
+      `已记录：本地综合分 ${zq.composite} → 官方 ${p.probability}%（${p.labelText}），现有 ${cal.n} 个校准点`,
+    );
   }
 
   async function handleZqSemantic(bypassCache = false) {
@@ -414,7 +424,9 @@ export default function App({
       setZqSem({ score: r.score, critique: r.critique, source: r.source });
     } catch (e: unknown) {
       setZqMsg(
-        "语义层评判失败：" + (e instanceof Error ? e.message : String(e)) + "（本地表层结果不受影响）"
+        "语义层评判失败：" +
+          (e instanceof Error ? e.message : String(e)) +
+          "（本地表层结果不受影响）",
       );
     } finally {
       setZqSemLoading(false);
@@ -447,7 +459,9 @@ export default function App({
     if (!batch.length) return;
     setLabSamples(loadSamples());
     setLabText("");
-    setLabMsg(`已生成 ${batch.length} 条样本（原文 + 本地引擎 0.3/0.6/0.9），逐条「复制」去官方送检`);
+    setLabMsg(
+      `已生成 ${batch.length} 条样本（原文 + 本地引擎 0.3/0.6/0.9），逐条「复制」去官方送检`,
+    );
   }
 
   function handleLabFill(id: string, input: string) {
@@ -479,7 +493,9 @@ export default function App({
 
   function handleLabApplyWeight(w: number) {
     handleZqWeight(w);
-    setLabMsg(`已把语义层权重默认值设为 ${Math.round(w * 100)}%（拟合自 ${labStats().filled} 条回填样本）`);
+    setLabMsg(
+      `已把语义层权重默认值设为 ${Math.round(w * 100)}%（拟合自 ${labStats().filled} 条回填样本）`,
+    );
   }
 
   function handleLabSeed() {
@@ -491,11 +507,17 @@ export default function App({
     setLabMsg(
       r.added
         ? `已预置 ${r.added} 条样本D官方真值锚点（surface 按当前引擎重算）；注意：锚点参与拟合属自证，真评估靠后续留出样本`
-        : `真值锚点已存在（共 ${r.total} 条样本）`
+        : `真值锚点已存在（共 ${r.total} 条样本）`,
     );
   }
 
-  function handleSaveSettings(a: ApiConfig, d: DetectorConfig, z: boolean, ppl: boolean, l: LocalSettings) {
+  function handleSaveSettings(
+    a: ApiConfig,
+    d: DetectorConfig,
+    z: boolean,
+    ppl: boolean,
+    l: LocalSettings,
+  ) {
     // 桌面版：主 API Key 与外部检测器 Key 都通过 safeStorage 加密存储；Web 版仍走 localStorage
     if (hasSecureStore()) {
       void saveApiKeySecure(a.apiKey);
@@ -695,27 +717,23 @@ export default function App({
         <button className="ghost" onClick={handleLocalDetect} disabled={!inputHasText}>
           AI 检测
         </button>
-        <button
-          className="ghost"
-          onClick={handleZhuque}
-          disabled={!inputHasText && !outputHasText}
-        >
+        <button className="ghost" onClick={handleZhuque} disabled={!inputHasText && !outputHasText}>
           朱雀检测
         </button>
       </div>
 
-          <FingerprintPanel
-            fingerprint={fingerprint}
-            fidelity={fidelity}
-            checkingOutput={outputHasText}
-            pplEnabled={pplEnabled}
-            pplState={pplState}
-            pplFeature={pplFeature}
-            pplIssues={pplIssues}
-            pplProgress={pplProgress}
-            pplNote={pplNote}
-            onDownloadPpl={() => void ensurePpl()}
-          />
+      <FingerprintPanel
+        fingerprint={fingerprint}
+        fidelity={fidelity}
+        checkingOutput={outputHasText}
+        pplEnabled={pplEnabled}
+        pplState={pplState}
+        pplFeature={pplFeature}
+        pplIssues={pplIssues}
+        pplProgress={pplProgress}
+        pplNote={pplNote}
+        onDownloadPpl={() => void ensurePpl()}
+      />
 
       {before && after && (
         <div className="scores">
@@ -734,24 +752,24 @@ export default function App({
         </div>
       )}
 
-          <BenchmarkPanel
-            output={output}
-            after={after}
-            roundScores={roundScores}
-            judging={judging}
-            detecting={detecting}
-            api={api}
-            detector={detector}
-            judgeScore={judgeScore}
-            judgeCritique={judgeCritique}
-            detectorScore={detectorScore}
-            zhuqueManualScore={zhuqueManualScore}
-            onJudge={handleJudge}
-            onDetect={handleDetect}
-            onManualScore={setZhuqueManualScore}
-            onGenreChange={setGenreOverride}
-            onNote={setNote}
-          />
+      <BenchmarkPanel
+        output={output}
+        after={after}
+        roundScores={roundScores}
+        judging={judging}
+        detecting={detecting}
+        api={api}
+        detector={detector}
+        judgeScore={judgeScore}
+        judgeCritique={judgeCritique}
+        detectorScore={detectorScore}
+        zhuqueManualScore={zhuqueManualScore}
+        onJudge={handleJudge}
+        onDetect={handleDetect}
+        onManualScore={setZhuqueManualScore}
+        onGenreChange={setGenreOverride}
+        onNote={setNote}
+      />
 
       {(detectIn || detectOut) && (
         <LocalDetectPanel

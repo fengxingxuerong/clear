@@ -15,8 +15,12 @@
  */
 
 import {
-  fitCalibration, fuseLayers, DEFAULT_SEMANTIC_WEIGHT,
-  type CalibPoint, type Calibration, type ZhuqueLabel,
+  fitCalibration,
+  fuseLayers,
+  DEFAULT_SEMANTIC_WEIGHT,
+  type CalibPoint,
+  type Calibration,
+  type ZhuqueLabel,
 } from "../engine/zhuque.ts";
 import { humanizeWithScore } from "../engine/humanize.ts";
 import { detectZhuque } from "../engine/zhuque.ts";
@@ -102,7 +106,13 @@ export function generateBatch(raw: string): CalibSample[] {
   });
   const out = [mk("original", "原文", text)];
   for (const it of [0.3, 0.6, 0.9] as const) {
-    out.push(mk(`local-${it}` as SampleSource, `本地强度${it}`, humanizeWithScore(text, { intensity: it, seed: 7 }).text));
+    out.push(
+      mk(
+        `local-${it}` as SampleSource,
+        `本地强度${it}`,
+        humanizeWithScore(text, { intensity: it, seed: 7 }).text,
+      ),
+    );
   }
   const all = [...loadSamples(), ...out];
   saveSamples(all);
@@ -133,7 +143,7 @@ export function addManualSample(text: string, name: string, semantic: number | n
 /** 给样本回填官方结果：粘贴官方整行文本自动解析，或直接给数字 */
 export function fillOfficial(
   sampleId: string,
-  input: string
+  input: string,
 ): { ok: boolean; note: string; sample?: CalibSample } {
   const all = loadSamples();
   const idx = all.findIndex((s) => s.id === sampleId);
@@ -251,7 +261,11 @@ export function collectPoints(): CalibPoint[] {
       if (Array.isArray(arr)) {
         legacy = arr
           .filter((p) => p && isFinite(Number(p.local)) && isFinite(Number(p.official)))
-          .map((p) => ({ local: Number(p.local), official: Number(p.official), ts: Number(p.ts) || 0 }));
+          .map((p) => ({
+            local: Number(p.local),
+            official: Number(p.official),
+            ts: Number(p.ts) || 0,
+          }));
       }
     }
   } catch {
@@ -267,7 +281,9 @@ export function collectPoints(): CalibPoint[] {
 }
 
 /** 网格搜索最优语义层权重：让 fuseLayers(surface, sem, w) 最贴近官方分 */
-function fitBestWeight(pointsWithSem: Array<{ surface: number; semantic: number; official: number }>): number | null {
+function fitBestWeight(
+  pointsWithSem: Array<{ surface: number; semantic: number; official: number }>,
+): number | null {
   if (pointsWithSem.length < 2) return null;
   let best = DEFAULT_SEMANTIC_WEIGHT;
   let bestErr = Infinity;
@@ -278,7 +294,10 @@ function fitBestWeight(pointsWithSem: Array<{ surface: number; semantic: number;
       if (!f) continue;
       err += (f.composite - p.official) ** 2;
     }
-    if (err < bestErr) { bestErr = err; best = Math.round(w * 100) / 100; }
+    if (err < bestErr) {
+      bestErr = err;
+      best = Math.round(w * 100) / 100;
+    }
   }
   return best;
 }
@@ -303,7 +322,11 @@ export function labStats(): LabStats {
 
   const withSem = filled
     .filter((s) => s.semantic !== null)
-    .map((s) => ({ surface: s.surface, semantic: s.semantic as number, official: s.official as number }));
+    .map((s) => ({
+      surface: s.surface,
+      semantic: s.semantic as number,
+      official: s.official as number,
+    }));
   const bestWeight = fitBestWeight(withSem);
 
   // 留出验证：≥8 条时留 1/4（至少 2 条），其余拟合、留出算 MAE

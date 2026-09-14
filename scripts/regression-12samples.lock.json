@@ -8,15 +8,15 @@
     "note": "seed=20260826, intensity=0.9, zhuque=true, genre=叙事文"
   },
   "D1_e2e": {
-    "score": 0,
+    "score": 2,
     "note": "seed=20260826, intensity=0.6, zhuque=false, genre=对话体"
   },
   "D2_e2e": {
-    "score": 0,
+    "score": 6,
     "note": "seed=20260826, intensity=0.9, zhuque=true, genre=对话体"
   },
   "H1_e2e": {
-    "score": 0,
+    "score": 4,
     "note": "seed=20260826, intensity=0.6, zhuque=false, genre=纯人写稿"
   },
   "H2_e2e": {
@@ -24,11 +24,11 @@
     "note": "seed=20260826, intensity=0.9, zhuque=true, genre=纯人写稿"
   },
   "O2_e2e": {
-    "score": 0,
+    "score": 7,
     "note": "seed=20260826, intensity=0.7, zhuque=false, genre=论说文"
   },
   "O3_e2e": {
-    "score": 0,
+    "score": 4,
     "note": "seed=20260826, intensity=0.9, zhuque=true, genre=论说文"
   }
 }

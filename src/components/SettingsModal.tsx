@@ -273,6 +273,23 @@ export function SettingsModal({
           </select>
         </label>
         <label className="row">
+          <span>人味人格</span>
+          <select
+            value={draftApi.persona ?? "default"}
+            onChange={(e) =>
+              updateApi({ persona: e.target.value as "default" | "netgen" | "classic" })
+            }
+          >
+            <option value="default">自然口语（默认）</option>
+            <option value="netgen">网络世代（句碎判断直接）</option>
+            <option value="classic">老派文青（书面骨架留余韵）</option>
+          </select>
+        </label>
+        <p className="modal-tip" style={{ marginTop: -6 }}>
+          人味人格：同一口语语体下的风格分档——不同平台读者口味不同，也避免单一模板被检测器
+          针对性统计。仅对 LLM 改写生效。
+        </p>
+        <label className="row">
           <span>深度模式</span>
           <input
             type="checkbox"

@@ -29,7 +29,7 @@ function ZhuqueHighlight({ text, spans }: { text: string; spans: ZhuqueSpan[] })
         title={`${LABEL_TEXT[s.label]} · 风险 ${s.risk} · ${s.reasons.join("、")}`}
       >
         {text.slice(s.start, s.end)}
-      </mark>
+      </mark>,
     );
     pos = s.end;
   });
@@ -38,10 +38,26 @@ function ZhuqueHighlight({ text, spans }: { text: string; spans: ZhuqueSpan[] })
 }
 
 export function ZhuquePanel({
-  text, rep, calib, paste, msg, showFeatures,
-  sem, semLoading, weight, canRunSemantic, genreEstimate,
-  onPaste, onSaveCalib, onClearCalib, onCopySubmit, onOpenOfficial, onOpenLab,
-  onToggleFeatures, onRunSemantic, onWeight,
+  text,
+  rep,
+  calib,
+  paste,
+  msg,
+  showFeatures,
+  sem,
+  semLoading,
+  weight,
+  canRunSemantic,
+  genreEstimate,
+  onPaste,
+  onSaveCalib,
+  onClearCalib,
+  onCopySubmit,
+  onOpenOfficial,
+  onOpenLab,
+  onToggleFeatures,
+  onRunSemantic,
+  onWeight,
 }: {
   text: string;
   rep: ZhuqueReport;
@@ -98,30 +114,43 @@ export function ZhuquePanel({
           <div className="zq-sub" style={{ marginTop: 4 }}>
             {fused ? (
               <>
-                融合 AI 度 {fused.composite}%（表层 {rep.composite} × {Math.round((1 - weight) * 100)}% +
-                语义 {sem?.score} × {Math.round(weight * 100)}%） · 置信 {fused.confidence}%
+                融合 AI 度 {fused.composite}%（表层 {rep.composite} ×{" "}
+                {Math.round((1 - weight) * 100)}% + 语义 {sem?.score} × {Math.round(weight * 100)}
+                %） · 置信 {fused.confidence}%
               </>
             ) : (
               <>
                 AI 特征占比 {rep.probability}% · 综合 {rep.composite}% · 置信 {rep.confidence}%
               </>
             )}
-            {rep.officialEstimate !== null && <> · 校准后估官方分 <b>{rep.officialEstimate}%</b></>}
+            {rep.officialEstimate !== null && (
+              <>
+                {" "}
+                · 校准后估官方分 <b>{rep.officialEstimate}%</b>
+              </>
+            )}
           </div>
           <div className="zq-sub">
-            {rep.stats.chars} 字 / {rep.stats.sentences} 句 · 命中 {rep.stats.aiSentences} 句 AI 特征
+            {rep.stats.chars} 字 / {rep.stats.sentences} 句 · 命中 {rep.stats.aiSentences} 句 AI
+            特征
           </div>
           {fused && fused.divergence >= 30 && (
             <div className="zq-sub" style={{ color: "#ffb454" }}>
-              两层分歧 {fused.divergence} 分（表层 {rep.composite} vs 语义 {sem?.score}）——分歧越大越不可信，
-              建议以官方送检为准
+              两层分歧 {fused.divergence} 分（表层 {rep.composite} vs 语义 {sem?.score}
+              ）——分歧越大越不可信， 建议以官方送检为准
             </div>
           )}
         </div>
 
         <div className="zq-bar">
-          <span style={{ width: `${r.human}%`, background: ZQ_COLOR.human }} title={`人工特征 ${r.human}%`} />
-          <span style={{ width: `${r.suspected}%`, background: ZQ_COLOR.suspected }} title={`疑似AI ${r.suspected}%`} />
+          <span
+            style={{ width: `${r.human}%`, background: ZQ_COLOR.human }}
+            title={`人工特征 ${r.human}%`}
+          />
+          <span
+            style={{ width: `${r.suspected}%`, background: ZQ_COLOR.suspected }}
+            title={`疑似AI ${r.suspected}%`}
+          />
           <span style={{ width: `${r.ai}%`, background: ZQ_COLOR.ai }} title={`AI特征 ${r.ai}%`} />
         </div>
       </div>
@@ -153,10 +182,20 @@ export function ZhuquePanel({
         <div className="bench-row" style={{ justifyContent: "flex-start" }}>
           <span style={{ color: "var(--muted)", fontSize: 12 }}>
             📐 体裁线预测（v3 18 点 OLS · 官方实测校准）：
-            <b style={{ color: genreEstimate.pct >= 60 ? "#ff5d6c" : genreEstimate.pct >= 30 ? "#ffb454" : "#3ddc97" }}>
-              {" "}{genreEstimate.pct}%
-            </b>
-            {" "}· {genreEstimate.tag}
+            <b
+              style={{
+                color:
+                  genreEstimate.pct >= 60
+                    ? "#ff5d6c"
+                    : genreEstimate.pct >= 30
+                      ? "#ffb454"
+                      : "#3ddc97",
+              }}
+            >
+              {" "}
+              {genreEstimate.pct}%
+            </b>{" "}
+            · {genreEstimate.tag}
           </span>
         </div>
       )}
@@ -190,22 +229,35 @@ export function ZhuquePanel({
       {showFeatures && (
         <>
           <div className="bench-row" style={{ justifyContent: "flex-start" }}>
-            <span style={{ color: "var(--muted)", fontSize: 12 }}>12 维特征（条越长越像 AI）：</span>
+            <span style={{ color: "var(--muted)", fontSize: 12 }}>
+              12 维特征（条越长越像 AI）：
+            </span>
           </div>
           {rep.features.map((f, i) => (
             <div className="bench-row" key={i} style={{ gap: 8 }}>
-              <span style={{ fontSize: 12, minWidth: 150, color: f.value > 0.55 ? "#ff5d6c" : "var(--muted)" }}>
+              <span
+                style={{
+                  fontSize: 12,
+                  minWidth: 150,
+                  color: f.value > 0.55 ? "#ff5d6c" : "var(--muted)",
+                }}
+              >
                 {f.name}
               </span>
               <span
                 style={{
-                  flex: 1, height: 6, background: "rgba(120,160,255,0.12)",
-                  borderRadius: 3, overflow: "hidden",
+                  flex: 1,
+                  height: 6,
+                  background: "rgba(120,160,255,0.12)",
+                  borderRadius: 3,
+                  overflow: "hidden",
                 }}
               >
                 <span
                   style={{
-                    display: "block", width: `${Math.round(f.value * 100)}%`, height: "100%",
+                    display: "block",
+                    width: `${Math.round(f.value * 100)}%`,
+                    height: "100%",
                     background: f.value > 0.55 ? "#ff5d6c" : f.value > 0.3 ? "#ffb454" : "#3ddc97",
                   }}
                 />
@@ -216,7 +268,9 @@ export function ZhuquePanel({
         </>
       )}
 
-      <div className="modal-divider" style={{ marginTop: 14 }}>语义层（朱雀检测员 · 补本地盲区）</div>
+      <div className="modal-divider" style={{ marginTop: 14 }}>
+        语义层（朱雀检测员 · 补本地盲区）
+      </div>
       <div className="bench-tip">
         本地引擎只看得见词汇/句法/格式，而朱雀主要看语义与篇章（论点骨架、指代链、因果推进、
         段落节奏）。这一层用按官方实测抓法定制的「朱雀检测员」篇章层提示词让 LLM 补位——
@@ -255,7 +309,11 @@ export function ZhuquePanel({
           语义层权重 <b style={{ color: "var(--accent)" }}>{Math.round(weight * 100)}%</b>
         </span>
         <input
-          type="range" min={0} max={1} step={0.05} value={weight}
+          type="range"
+          min={0}
+          max={1}
+          step={0.05}
+          value={weight}
           onChange={(e) => onWeight(parseFloat(e.target.value))}
           style={{ flex: 1, minWidth: 160, accentColor: "var(--accent)" }}
         />
@@ -264,15 +322,26 @@ export function ZhuquePanel({
         </span>
       </div>
 
-      <div className="modal-divider" style={{ marginTop: 14 }}>官方送检与校准</div>
+      <div className="modal-divider" style={{ marginTop: 14 }}>
+        官方送检与校准
+      </div>
       <div className="bench-tip">
         朱雀没有公开 API，官方结果只能走网页：{ZHUQUE_URL}（≥350 字，建议 ≤2000 字）。
-        把官方回来的一行结果粘到下面，就能把本地分校准到官方分（存本机 localStorage，样本越多越准）。
+        把官方回来的一行结果粘到下面，就能把本地分校准到官方分（存本机
+        localStorage，样本越多越准）。
       </div>
       <div className="bench-row">
-        <button className="ghost sm" onClick={onCopySubmit}>复制送检文本</button>
-        <button className="ghost sm" onClick={onOpenOfficial}>打开朱雀官网</button>
-        <button className="ghost sm" onClick={onOpenLab} title="批量生成样本、逐条回填官方结果、自动重拟映射与权重">
+        <button className="ghost sm" onClick={onCopySubmit}>
+          复制送检文本
+        </button>
+        <button className="ghost sm" onClick={onOpenOfficial}>
+          打开朱雀官网
+        </button>
+        <button
+          className="ghost sm"
+          onClick={onOpenLab}
+          title="批量生成样本、逐条回填官方结果、自动重拟映射与权重"
+        >
           校准实验室（攒真值）
         </button>
         <input
@@ -280,11 +349,19 @@ export function ZhuquePanel({
           onChange={(e) => onPaste(e.target.value)}
           placeholder="粘贴官方结果，如「AI生成 99.99%」"
           style={{
-            flex: 1, minWidth: 220, background: "rgba(8,12,22,0.7)", color: "var(--text)",
-            border: "1px solid var(--border)", borderRadius: 8, padding: "7px 10px", fontSize: 12,
+            flex: 1,
+            minWidth: 220,
+            background: "rgba(8,12,22,0.7)",
+            color: "var(--text)",
+            border: "1px solid var(--border)",
+            borderRadius: 8,
+            padding: "7px 10px",
+            fontSize: 12,
           }}
         />
-        <button className="primary sm" onClick={onSaveCalib} disabled={!parsed?.ok}>记为校准点</button>
+        <button className="primary sm" onClick={onSaveCalib} disabled={!parsed?.ok}>
+          记为校准点
+        </button>
         <button className="ghost sm" onClick={onClearCalib} disabled={calib.n === 0}>
           清空校准（{calib.n}）
         </button>
@@ -297,11 +374,16 @@ export function ZhuquePanel({
         </div>
       )}
       <div className="bench-tip">
-        当前映射：{calib.n === 0
+        当前映射：
+        {calib.n === 0
           ? "未校准（本地分与官方分不是同一把尺子，误差可能很大）"
           : `官方分 ≈ ${calib.a} × 本地综合分 ${calib.b >= 0 ? "+" : "−"} ${Math.abs(calib.b)}（${calib.n} 个实测点，最小二乘拟合）`}
       </div>
-      {msg && <div className="bench-tip" style={{ color: "var(--accent)" }}>{msg}</div>}
+      {msg && (
+        <div className="bench-tip" style={{ color: "var(--accent)" }}>
+          {msg}
+        </div>
+      )}
     </div>
   );
 }

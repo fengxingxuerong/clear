@@ -71,14 +71,17 @@ function splitSentencesLight(text: string): string[] {
     if ("。！？!?".includes(ch) || ch === "…") {
       // 再吸收可能的叠词（……、！！、？？）
       let j = i + 1;
-      while (j < text.length && "。！？!?…".includes(text[j])) { buf += text[j]; j++; }
+      while (j < text.length && "。！？!?…".includes(text[j])) {
+        buf += text[j];
+        j++;
+      }
       i = j - 1;
       pieces.push(buf);
       buf = "";
     }
   }
   if (buf.trim().length > 0) pieces.push(buf);
-  return pieces.filter(s => s.trim().length > 0);
+  return pieces.filter((s) => s.trim().length > 0);
 }
 
 function pureLen(s: string): number {
@@ -87,9 +90,15 @@ function pureLen(s: string): number {
 
 export function classifyGenre(text: string): GenreResult {
   const empty = (): GenreFeatures => ({
-    dlgQuoteRatio: 0, dlgColonRatio: 0, dlgShortTurn: 0, dlgSceneBlockRatio: 0,
-    expoScore: 0, narPastRatio: 0, narSceneRatio: 0,
-    pureChars: 0, sentCount: 0,
+    dlgQuoteRatio: 0,
+    dlgColonRatio: 0,
+    dlgShortTurn: 0,
+    dlgSceneBlockRatio: 0,
+    expoScore: 0,
+    narPastRatio: 0,
+    narSceneRatio: 0,
+    pureChars: 0,
+    sentCount: 0,
   });
   if (!text || text.trim().length < 30) {
     return { genre: "main", confidence: 0.3, ruleHit: 4, features: empty() };
@@ -98,10 +107,15 @@ export function classifyGenre(text: string): GenreResult {
   const sents = splitSentencesLight(text);
   const pure = pureLen(text);
   const f: GenreFeatures = {
-    dlgQuoteRatio: 0, dlgColonRatio: 0, dlgShortTurn: 0, dlgSceneBlockRatio: 0,
+    dlgQuoteRatio: 0,
+    dlgColonRatio: 0,
+    dlgShortTurn: 0,
+    dlgSceneBlockRatio: 0,
     expoScore: classifyExpositionScore(text),
-    narPastRatio: 0, narSceneRatio: 0,
-    pureChars: pure, sentCount: sents.length,
+    narPastRatio: 0,
+    narSceneRatio: 0,
+    pureChars: pure,
+    sentCount: sents.length,
   };
 
   if (pure < 20) return { genre: "main", confidence: 0.35, ruleHit: 4, features: f };
@@ -109,7 +123,7 @@ export function classifyGenre(text: string): GenreResult {
   // —— (A) Dialogue 特征 ——
   // 「…」发言匹配 + "…"发言（英文双引号内中文 ≥2 字）
   const cornerQuotes = (text.match(/「[^」]{2,60}」/g) ?? []).length;
-  const dblQuotes    = (text.match(/"[^"]{2,60}"/g) ?? []).length;
+  const dblQuotes = (text.match(/"[^"]{2,60}"/g) ?? []).length;
   f.dlgQuoteRatio = (cornerQuotes + dblQuotes) / Math.max(1, pure);
 
   // 冒号台词开头：
@@ -136,12 +150,19 @@ export function classifyGenre(text: string): GenreResult {
 
   // —— (C) Narrative 特征 ——
   // 过去时指示词：作为独立特征做中文词级计数，避免双计"已经了"之类
-  const pastRe = /(了|曾|曾经|已经|方才|刚刚|刚才|此前|先前|后来|之后|以前|从前|去年|昨天|前天|前几日|上周|上个月|去年)(?!的话)/g;
+  // v0.9.1：补"过"——中文两大过去时核心助词是"了"和"过"，原正则漏了"过"，
+  // 导致"透过/翻过/驶过/过去了"这类典型叙事过去时不计入，叙事文被误判为论说文。
+  // （"过"在"通过/过程/过度"等非过去时用法会产生少量误报，但叙事检测有
+  // narSceneRatio 双证据门控，单特征误报不会导致误分类。）
+  const pastRe =
+    /(过了|过|了|曾|曾经|已经|方才|刚刚|刚才|此前|先前|后来|之后|以前|从前|去年|昨天|前天|前几日|上周|上个月)(?!的话)/g;
   const pastHits = (text.match(pastRe) ?? []).length;
   f.narPastRatio = pastHits / Math.max(1, pure);
 
   // 场景指示：以「在 / 到 / 从 / 来到」+ 地点结尾词 为骨架
-  const sceneRe = /(?:在|到|从|来到|去到|去了|回了)[\u4e00-\u9fa5A-Za-z0-9]{1,12}?(?:里|外|旁|中|上|下|家|学校|教室|公司|办公室|房间|客厅|卧室|厨房|路上|街|城市|小镇|村庄|国|省|市|区|机场|车站|码头|医院|商店|餐厅|公园|学校|山|河|海边|森林|草原|沙漠|楼|门|口|前|后)/g;
+  // v0.9.1：补"边/处/头/角"等常见位置词，并放宽字符上限 12→14（"在客厅里"4字、"在办公室里"5字都应匹配）
+  const sceneRe =
+    /(?:在|到|从|来到|去到|去了|回了)[\u4e00-\u9fa5A-Za-z0-9]{1,14}?(?:里|外|旁|中|上|下|家|学校|教室|公司|办公室|房间|客厅|卧室|厨房|路上|街|城市|小镇|村庄|国|省|市|区|机场|车站|码头|医院|商店|餐厅|公园|山|河|海边|森林|草原|沙漠|楼|门|口|前|后|边|处|头|角)/g;
   const sceneHits = (text.match(sceneRe) ?? []).length;
   f.narSceneRatio = sceneHits / Math.max(1, pure);
 
@@ -150,39 +171,69 @@ export function classifyGenre(text: string): GenreResult {
   //   · 【剧本场景块】出现 → 对话概率极高（只有剧本/访谈才写【场景：X】【人物：Y】）
   //   · 冒号开头 ≥ 6% 或 引号 ≥ 5%（单特征足够）
   //   · 综合得分：四个对话特征累积加权 ≥ 0.28 也判对话（覆盖短对话碎片）
-  const dlgComboScore = Math.min(1,
-      (f.dlgSceneBlockRatio > 0      ? 0.35 : 0)
-    + (f.dlgColonRatio      >= 0.06 ? 0.30 : (f.dlgColonRatio / 0.06) * 0.30)
-    + (f.dlgQuoteRatio      >= 0.05 ? 0.25 : (f.dlgQuoteRatio / 0.05) * 0.25)
-    + (f.dlgShortTurn       >= 0.25 ? 0.12 : (f.dlgShortTurn / 0.25) * 0.12)
+  const dlgComboScore = Math.min(
+    1,
+    (f.dlgSceneBlockRatio > 0 ? 0.35 : 0) +
+      (f.dlgColonRatio >= 0.06 ? 0.3 : (f.dlgColonRatio / 0.06) * 0.3) +
+      (f.dlgQuoteRatio >= 0.05 ? 0.25 : (f.dlgQuoteRatio / 0.05) * 0.25) +
+      (f.dlgShortTurn >= 0.25 ? 0.12 : (f.dlgShortTurn / 0.25) * 0.12),
   );
-  if (f.dlgSceneBlockRatio > 0 || f.dlgQuoteRatio >= 0.05 || f.dlgColonRatio >= 0.06 || dlgComboScore >= 0.28) {
+  if (
+    f.dlgSceneBlockRatio > 0 ||
+    f.dlgQuoteRatio >= 0.05 ||
+    f.dlgColonRatio >= 0.06 ||
+    dlgComboScore >= 0.28
+  ) {
     const conf = Math.min(0.95, dlgComboScore > 0 ? 0.45 + dlgComboScore * 0.55 : 0.6);
     return { genre: "dialogue", confidence: conf, ruleHit: 1, features: f };
   }
 
   // Rule 2：论说文：用已有 classifyExpositionScore ≥ 0.55（P3 门控阈值，已验证）
   if (f.expoScore >= 0.55) {
-    const conf = Math.min(0.92, 0.5 + (f.expoScore - 0.55) * 2 + (f.narPastRatio < 0.012 ? 0.08 : 0));
+    const conf = Math.min(
+      0.92,
+      0.5 + (f.expoScore - 0.55) * 2 + (f.narPastRatio < 0.012 ? 0.08 : 0),
+    );
     return { genre: "main", confidence: conf, ruleHit: 2, features: f };
   }
 
   // Rule 3：叙事文：有"过去时 + 场景"联合证据，且论说分不高
-  if (f.narPastRatio >= 0.025 && f.narSceneRatio >= 0.018 && f.expoScore < 0.50) {
-    const conf = Math.min(0.9, 0.35
-      + Math.min(0.25, (f.narPastRatio - 0.025) * 6)
-      + Math.min(0.2,  (f.narSceneRatio - 0.018) * 8)
-      + (f.dlgQuoteRatio < 0.02 ? 0.08 : 0)
+  // v0.9.1：场景阈值 0.018→0.015（115 字叙事文"在地板上/在书中"只凑到 0.0174，差 0.0006 就漏判）
+  if (f.narPastRatio >= 0.025 && f.narSceneRatio >= 0.015 && f.expoScore < 0.5) {
+    const conf = Math.min(
+      0.9,
+      0.35 +
+        Math.min(0.25, (f.narPastRatio - 0.025) * 6) +
+        Math.min(0.2, (f.narSceneRatio - 0.015) * 8) +
+        (f.dlgQuoteRatio < 0.02 ? 0.08 : 0),
     );
     return { genre: "narrative", confidence: conf, ruleHit: 3, features: f };
   }
 
   // Rule 4：回落——论说分偏低 (<0.35) 且 过去时略多 → 叙事，否则默认论说（最安全的选择）
-  const fallNarrative = f.expoScore < 0.35 && f.narPastRatio >= 0.012;
+  //
+  // v0.9.5 修：正式公文会被这条规则误判为叙事文。原因是公文里大量出现
+  // 「完成了 / 提高了 / 推动了 / 下降了」这类**完成体**"了"，被 narPastRatio
+  // （中文"了/过"同时承担完成体与过去时，无法靠单字区分）计成叙事过去时；
+  // 而公文几乎不含论说特征词，expoScore 又偏低 —— 两个条件同时满足，回落到了叙事。
+  //
+  // 后果是会连锁的：humanize.ts 的正式语体门控按 genre==="main" 判定
+  // （formalRegister = effectiveGenre === "main" || style === "academic"），
+  // 公文一旦被判成叙事，FORMAL_RESTORE 整层就完全不生效 —— 实测一份公文
+  // 被注入了「死磕以问题为导向」「根本摆平」「不断完善→一直弄全吧」。
+  //
+  // 这里用公文体自身的特征（正式套语 + 分条序数）作为否决条件：命中足够密度时
+  // 回落改判论说。叙事文不含这类套语，不受影响（s6 故事样本 officialRatio = 0）。
+  const OFFICIAL_RE =
+    /(现将|根据[《\w]|按照|为了|关于|特此|各单位|各部门|上级部门|认真贯彻|工作目标|工作总结|总结如下|汇报如下|报告如下|主责主业|狠抓|筑牢|下一步|工作总基调|在肯定成绩的同时|清醒地认识到)/g;
+  const officialRatio = (text.match(OFFICIAL_RE) ?? []).length / Math.max(1, pure);
+  const fallNarrative =
+    f.expoScore < 0.35 && f.narPastRatio >= 0.012 && officialRatio < 0.006;
   const genre: AutoGenre = fallNarrative ? "narrative" : "main";
-  const confBase = genre === "main"
-    ? Math.max(0.4, 0.35 + f.expoScore * 0.4)
-    : Math.max(0.4, 0.35 + (f.narPastRatio * 8) + (f.narSceneRatio * 6));
+  const confBase =
+    genre === "main"
+      ? Math.max(0.4, 0.35 + f.expoScore * 0.4)
+      : Math.max(0.4, 0.35 + f.narPastRatio * 8 + f.narSceneRatio * 6);
   return { genre, confidence: Math.min(0.75, confBase), ruleHit: 4, features: f };
 }
 

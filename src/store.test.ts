@@ -62,6 +62,45 @@ describe("loadApi / saveApi（逐字段清洗）", () => {
     expect(loadApi()).toEqual(cfg);
   });
 
+  /**
+   * v0.9.5 回归守卫：此前 DEFAULT_API 与 loadApi 各自漏掉字段时，
+   * 「往返一致」用例抓不到——因为 cfg 是 `{...DEFAULT_API}` 展开的，
+   * 缺失字段在两边都是 undefined，而 toEqual 又忽略 undefined 属性。
+   * 该模式已让漏读三次溜进发布（apiKeys / contestSamples / strictFidelity+persona）。
+   * 这里改用「每个字段都设成非默认值 + 逐字段严格比对」来钉死。
+   */
+  it("DEFAULT_API 声明的每个字段都能被 loadApi 读回（防白名单漏读复发）", () => {
+    const probe = {
+      enabled: true,
+      baseUrl: "https://probe.invalid/v1",
+      apiKey: "sk-probe",
+      apiKeys: "sk-pool-a\nsk-pool-b",
+      model: "probe-model",
+      temperature: 0.42,
+      deepMode: false,
+      judgeModel: "probe-judge",
+      altModel: "probe-alt",
+      style: "academic" as const,
+      reasoningEffort: "high" as const,
+      maxWaitSeconds: 77,
+      maxApiCalls: 33,
+      contestSamples: 3,
+      strictFidelity: true,
+      persona: "netgen" as const,
+    };
+    saveApi(probe);
+    const back = loadApi();
+
+    // 逐字段严格比对：漏读的字段会回退成默认值，当场暴露
+    for (const k of Object.keys(probe) as (keyof typeof probe)[]) {
+      expect(back[k], `字段 ${String(k)} 未被 loadApi 读回（白名单漏读）`).toBe(probe[k]);
+    }
+
+    // 反向守卫：DEFAULT_API 将来新增字段时，若忘了同步 loadApi，本断言会红
+    const missing = Object.keys(DEFAULT_API).filter((k) => !(k in back));
+    expect(missing, `loadApi 未覆盖 DEFAULT_API 的字段：${missing.join(", ")}`).toEqual([]);
+  });
+
   it("非法字段逐个回退默认：温度非有限数、style 越界、reasoningEffort 越界、负预算", () => {
     localStorage.setItem(
       "aihumanizer.api",
@@ -97,10 +136,29 @@ describe("loadApi / saveApi（逐字段清洗）", () => {
   });
 });
 
+// v0.9：loadApi 是逐字段白名单解析，新增字段漏读会导致刷新后配置静默丢失
+//（v0.8.7 的 apiKeys 就踩过这个坑）
+it("contestSamples 持久化并做范围收敛", () => {
+  saveApi({ ...DEFAULT_API, contestSamples: 3 });
+  expect(loadApi().contestSamples).toBe(3);
+
+  localStorage.setItem("aihumanizer.api", JSON.stringify({ ...DEFAULT_API, contestSamples: 99 }));
+  expect(loadApi().contestSamples).toBe(5); // 上限 5，防手改配置炸掉调用预算
+
+  localStorage.setItem("aihumanizer.api", JSON.stringify({ ...DEFAULT_API, contestSamples: 0 }));
+  expect(loadApi().contestSamples).toBe(1); // 非法值回落默认
+});
+
 describe("loadDetector / saveDetector", () => {
   it("空库返回默认；往返一致", () => {
     expect(loadDetector()).toEqual(DEFAULT_DETECTOR);
-    const cfg = { ...DEFAULT_DETECTOR, enabled: true, url: "https://x/api", scorePath: "p", scale: "0-1" as const };
+    const cfg = {
+      ...DEFAULT_DETECTOR,
+      enabled: true,
+      url: "https://x/api",
+      scorePath: "p",
+      scale: "0-1" as const,
+    };
     saveDetector(cfg);
     expect(loadDetector()).toEqual(cfg);
   });

@@ -49,6 +49,11 @@ export interface ApiConfig {
    *  （如现编「我见过不少例子」）会随最优稿交付。开启后：收稿前做一轮预算外
    *  定向补偿修订（只修事实错误不追分数），修不掉则保留原稿并在 note 显式警告。 */
   strictFidelity?: boolean;
+  /** v0.9.5 P4 人味人格：同一 casual 语体下的风格分档（对抗单一模板被针对）。
+   *  default=自然口语（现行范例教学的那套）；netgen=网络世代（句更碎、判断更直接，
+   *  禁网络烂梗——绝绝子/yyds 式表演反而是 AI 模仿人类的破绽）；
+   *  classic=老派文青（书面骨架+人味态度，垫词降浓度，句有呼吸，结尾留余韵）。 */
+  persona?: "default" | "netgen" | "classic";
 }
 
 /* ---------------------- SenseNova 常驻预置 ----------------------
@@ -157,6 +162,11 @@ export const DEFAULT_API: ApiConfig = {
   maxWaitSeconds: 0,
   maxApiCalls: 0,
   contestSamples: 1,
+  // v0.9.5 补默认值：此前 DEFAULT_API 与 store.loadApi 均漏这两个字段，
+  // 导致设置面板里勾了「严格保真」/选了「人味人格」，刷新后静默回默认——
+  // 而 strictFidelity 正是编造复核的开关，静默失效等于防线漏空。
+  strictFidelity: false,
+  persona: "default",
 };
 
 /** 解析 Key 池：apiKey 与 apiKeys 合并去重（换行/逗号/分号分隔均可） */

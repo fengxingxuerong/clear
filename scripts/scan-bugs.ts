@@ -135,7 +135,9 @@ console.log(
 const spacey = `随着 AI 技术的发展，模型参数已达到 1750 亿规模。实测显示准确率为 92.5 %，比 GPT-3 高出 10 个点。这种 AI 写作工具应运而生。虽然成本很高，但是效果不错。虽然门槛不低，但是值得投入。`;
 let v4 = 0;
 for (const seed of SEEDS_20) {
-  const out = mechanicalShuffle(spacey, { intensity: 0.3, seed });
+  // v0.8.9：空格剥离已改为「尊重原文排版」（默认不再无条件删），
+  // 本探针校验的正是旧剥离能力，故显式开启，保证该能力仍被回归覆盖。
+  const out = mechanicalShuffle(spacey, { intensity: 0.3, seed, stripCJKSpaces: true });
   if (
     /[\u4e00-\u9fa5，。；：、][ \t]+[A-Za-z0-9]/.test(out) ||
     /[A-Za-z0-9%）)\]][ \t]+[\u4e00-\u9fa5]/.test(out)
@@ -191,7 +193,7 @@ if (dirtyReport.pass) {
   pushV("fp-check", "脏文本误判通过", null, null, { input: dirty.slice(0, 200) });
 }
 for (const seed of SEEDS_10) {
-  const cleaned = mechanicalShuffle(dirty, { intensity: 0.6, seed });
+  const cleaned = mechanicalShuffle(dirty, { intensity: 0.6, seed, stripCJKSpaces: true });
   const rep = fingerprintCheck(cleaned);
   if (!rep.pass && rep.issues.some((i) => mustCatch.includes(i.name))) {
     console.log(`❌ 清洗后仍残留（seed${seed}）: ${rep.issues.map((i) => i.name).join("、")}`);

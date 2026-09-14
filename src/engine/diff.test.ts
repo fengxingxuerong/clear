@@ -18,7 +18,10 @@ describe("diffSentences（句级 LCS）", () => {
   });
 
   it("单句被替换：左 del 右 ins，未变句保持 same", () => {
-    const { left, right } = diffSentences("甲句不变。乙句要换。丙句不变。", "甲句不变。乙句换了。丙句不变。");
+    const { left, right } = diffSentences(
+      "甲句不变。乙句要换。丙句不变。",
+      "甲句不变。乙句换了。丙句不变。",
+    );
     expect(left.some((p) => p.type === "del")).toBe(true);
     expect(right.some((p) => p.type === "ins")).toBe(true);
     // LCS 保证未变句两侧都保留

@@ -138,7 +138,8 @@ const TH_SUSPECTED = 38;
  */
 
 // 泛指主语（AI 爱写"我们/人们/大家"，真人常写"我/你+具体情境"）
-const VAGUE_SUBJECT = /(我们每个人|我们应当|我们要|人们|大家|每个人|一个人|任何人都|双方均|各方应)/g;
+const VAGUE_SUBJECT =
+  /(我们每个人|我们应当|我们要|人们|大家|每个人|一个人|任何人都|双方均|各方应)/g;
 const PERSONAL = /(我|我们|咱|你|您|我觉得|个人|身边|记得|那次|当时|小时候|昨天|上周|我家|朋友)/g;
 const CONCRETE =
   /([0-9０-９]+[年月日%％元块个次万亿度公里分秒]|[一二三四五六七八九十百千万亿两几]{1,3}[块元个年月天次度岁遍]|[A-Za-z][A-Za-z0-9-]{2,}|第[一二三四五六七八九十]+[章节部])/g;
@@ -146,7 +147,8 @@ const NOMINAL_SUFFIX = /(性|化|度|感|力|型|式|机制|体系|格局|举措
 const MODAL = /(应该|应当|必须|需要|有助于|意味着|表明|说明|能够|可以|我们要|既要|也要|不仅|而且)/g;
 const IDIOM_LIKE = /[\u4e00-\u9fa5]{4}(?:、[\u4e00-\u9fa5]{4}){1,}/g;
 // 真人痕迹：语气词、口癖、破折号省略号、口语短词
-const COLLOQUIAL = /(吧|啊|呢|嘛|呗|啦|呗儿|说实话|其实|反正|倒是|压根|就这么|怎么说|那会儿|挺|贼|忒)/g;
+const COLLOQUIAL =
+  /(吧|啊|呢|嘛|呗|啦|呗儿|说实话|其实|反正|倒是|压根|就这么|怎么说|那会儿|挺|贼|忒)/g;
 
 /* ----------------------------- 工具 ----------------------------- */
 
@@ -186,7 +188,8 @@ function splitSentences(text: string): Sent[] {
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
     const seg = text.slice(last, m.index + 1);
-    if (seg.replace(/[\s。！？!?；;，,、]/g, "")) out.push({ text: seg, start: last, end: m.index + 1 });
+    if (seg.replace(/[\s。！？!?；;，,、]/g, ""))
+      out.push({ text: seg, start: last, end: m.index + 1 });
     last = m.index + 1;
   }
   const tail = text.slice(last);
@@ -211,50 +214,107 @@ function scoreSentence(s: string): SentenceScore {
 
   // 1. 套话/模板
   for (const p of FORMULAIC) {
-    if (new RegExp(p).test(s)) { risk += 30; reasons.push("AI 套话/模板句"); break; }
+    if (new RegExp(p).test(s)) {
+      risk += 30;
+      reasons.push("AI 套话/模板句");
+      break;
+    }
   }
   // 2. 公文黑话
   for (const p of OFFICIAL) {
-    if (new RegExp(p).test(s)) { risk += 16; reasons.push("公文/黑话用词"); break; }
+    if (new RegExp(p).test(s)) {
+      risk += 16;
+      reasons.push("公文/黑话用词");
+      break;
+    }
   }
   // 3. 提纲骨架开头
   for (const p of SKELETON) {
-    if (new RegExp("^\\s*" + p).test(s)) { risk += 28; reasons.push("提纲骨架开头"); break; }
+    if (new RegExp("^\\s*" + p).test(s)) {
+      risk += 28;
+      reasons.push("提纲骨架开头");
+      break;
+    }
   }
   // 4. 书面连接词开头
   if (/^\s*(然而|因此|此外|与此同时|更重要的是|不仅如此|换言之|事实上|实际上)/.test(s)) {
-    risk += 18; reasons.push("书面连接词开头");
+    risk += 18;
+    reasons.push("书面连接词开头");
   }
   // 5. 抽象名词/名物化
-  if (/(性|化|度|机制|体系|格局)/.test(s) && visibleLen(s) > 22) { risk += 12; reasons.push("抽象名词堆砌"); }
+  if (/(性|化|度|机制|体系|格局)/.test(s) && visibleLen(s) > 22) {
+    risk += 12;
+    reasons.push("抽象名词堆砌");
+  }
   // 6. 超长句
   const len = visibleLen(s);
-  if (len >= 38) { risk += 14; reasons.push(`超长句（${len} 字）`); }
-  else if (len >= 28) { risk += 6; reasons.push("偏长句"); }
+  if (len >= 38) {
+    risk += 14;
+    reasons.push(`超长句（${len} 字）`);
+  } else if (len >= 28) {
+    risk += 6;
+    reasons.push("偏长句");
+  }
   // 7. 四字排比
-  if (/[\u4e00-\u9fa5]{4}(?:、[\u4e00-\u9fa5]{4}){2,}/.test(s)) { risk += 14; reasons.push("四字排比"); }
+  if (/[\u4e00-\u9fa5]{4}(?:、[\u4e00-\u9fa5]{4}){2,}/.test(s)) {
+    risk += 14;
+    reasons.push("四字排比");
+  }
   // 8. 中英数字间空格（AI 语料指纹）
-  if (/[\u4e00-\u9fa5][ \t]+[A-Za-z0-9]|[A-Za-z0-9][ \t]+[\u4e00-\u9fa5]/.test(s)) { risk += 12; reasons.push("中英间空格"); }
+  if (/[\u4e00-\u9fa5][ \t]+[A-Za-z0-9]|[A-Za-z0-9][ \t]+[\u4e00-\u9fa5]/.test(s)) {
+    risk += 12;
+    reasons.push("中英间空格");
+  }
   // 9. 判断句式收尾（是……的）
-  if (/(是.*?的)[。！？!?；;]?\s*$/.test(s) && len > 20) { risk += 10; reasons.push("判断句式收尾"); }
+  if (/(是.*?的)[。！？!?；;]?\s*$/.test(s) && len > 20) {
+    risk += 10;
+    reasons.push("判断句式收尾");
+  }
   // 10. 三段并列（既要…也要…）
-  if (/(既要.{2,12}也要|不仅.{2,12}而且.{2,12}还|一方面.{2,12}另一方面)/.test(s)) { risk += 14; reasons.push("三段并列句式"); }
+  if (/(既要.{2,12}也要|不仅.{2,12}而且.{2,12}还|一方面.{2,12}另一方面)/.test(s)) {
+    risk += 14;
+    reasons.push("三段并列句式");
+  }
   // 11. 泛指主语
-  if (countRe(s, VAGUE_SUBJECT) > 0) { risk += 10; reasons.push("泛指主语（我们/人们）"); }
+  if (countRe(s, VAGUE_SUBJECT) > 0) {
+    risk += 10;
+    reasons.push("泛指主语（我们/人们）");
+  }
   // 12. 情态词密集
   const modalHits = countRe(s, MODAL);
-  if (modalHits >= 2) { risk += 8; reasons.push("情态词密集"); }
+  if (modalHits >= 2) {
+    risk += 8;
+    reasons.push("情态词密集");
+  }
 
   // —— 真人痕迹（减风险）——
   // 注意：泛指主语（我们要/人们/大家…）不算主观视角，AI 论述文里最常见，
   // 若这里减分会把典型 AI 句误判成真人句（实测踩到，故先判泛指再加减分）
   const vague = countRe(s, VAGUE_SUBJECT) > 0;
-  if (!vague && countRe(s, PERSONAL) > 0) { risk -= 20; reasons.push("有第一人称/主观视角"); }
-  if (countRe(s, CONCRETE) > 0) { risk -= 12; reasons.push("有具体细节/数字"); }
-  if (countRe(s, COLLOQUIAL) > 0) { risk -= 10; reasons.push("有口语语气词"); }
-  if (len <= 12) { risk -= 16; reasons.push("短句（真人节奏）"); }
-  if (/[？?]/.test(s)) { risk -= 8; reasons.push("疑问句"); }
-  if (/[…—]/.test(s)) { risk -= 6; reasons.push("省略号/破折号"); }
+  if (!vague && countRe(s, PERSONAL) > 0) {
+    risk -= 20;
+    reasons.push("有第一人称/主观视角");
+  }
+  if (countRe(s, CONCRETE) > 0) {
+    risk -= 12;
+    reasons.push("有具体细节/数字");
+  }
+  if (countRe(s, COLLOQUIAL) > 0) {
+    risk -= 10;
+    reasons.push("有口语语气词");
+  }
+  if (len <= 12) {
+    risk -= 16;
+    reasons.push("短句（真人节奏）");
+  }
+  if (/[？?]/.test(s)) {
+    risk -= 8;
+    reasons.push("疑问句");
+  }
+  if (/[…—]/.test(s)) {
+    risk -= 6;
+    reasons.push("省略号/破折号");
+  }
 
   return { risk: Math.max(0, Math.min(100, Math.round(risk + 22))), reasons };
 }
@@ -271,10 +331,16 @@ function featureList(text: string, sents: Sent[], chars: number): ZhuqueFeature[
   const push = (name: string, value: number, hint: string) =>
     f.push({ name, value: clamp01(value), hint });
 
-  push("词汇分布·套话密度", norm(per(countHits(text, FORMULAIC)), 0, 1.0),
-    `每百字 ${per(countHits(text, FORMULAIC)).toFixed(2)} 处（值得注意的是/综上所述/赋能）`);
-  push("词汇分布·公文黑话", norm(per(countHits(text, OFFICIAL)), 0, 2.0),
-    `每百字 ${per(countHits(text, OFFICIAL)).toFixed(2)} 处（顶层设计/抓手/护城河）`);
+  push(
+    "词汇分布·套话密度",
+    norm(per(countHits(text, FORMULAIC)), 0, 1.0),
+    `每百字 ${per(countHits(text, FORMULAIC)).toFixed(2)} 处（值得注意的是/综上所述/赋能）`,
+  );
+  push(
+    "词汇分布·公文黑话",
+    norm(per(countHits(text, OFFICIAL)), 0, 2.0),
+    `每百字 ${per(countHits(text, OFFICIAL)).toFixed(2)} 处（顶层设计/抓手/护城河）`,
+  );
   // 句长节奏（v0.8.3 双判据）：CV 相对判据 + 句长标准差绝对判据（朱雀官方口径：
   // 实测 AI 文本句长标准差多落在 5~8 区间，humanize-metrics.fingerprintCheck 同款阈值）。
   // std 命中特征带时即使 CV 达标也按疑似 AI 计——CV 低≠安全，句长集中才是本质。
@@ -282,28 +348,71 @@ function featureList(text: string, sents: Sent[], chars: number): ZhuqueFeature[
   const std = stdOf(lens);
   const cvVal = norm(cvOf(lens), 0.28, 0.62, true);
   const stdInBand = sents.length >= 6 && std >= 4.5 && std <= 8.5;
-  push("句法结构·句长节奏", stdInBand ? Math.max(cvVal, 0.75) : cvVal,
+  push(
+    "句法结构·句长节奏",
+    stdInBand ? Math.max(cvVal, 0.75) : cvVal,
     `句长 CV ${cvOf(lens).toFixed(2)}（真人随笔常 0.35~0.7）` +
-    (sents.length >= 6 ? `，标准差 ${std.toFixed(1)}${stdInBand ? "（落入 AI 特征带 4.5~8.5）" : ""}` : ""));
-  push("句法结构·长句占比",
-    norm(sents.length ? sents.filter((s) => visibleLen(s.text) >= 38).length / sents.length : 0, 0.05, 0.45),
-    `${sents.filter((s) => visibleLen(s.text) >= 38).length}/${sents.length} 句超 38 字`);
-  push("语义连贯·骨架词", norm(per(countHits(text, SKELETON)), 0, 0.5),
-    `每百字 ${per(countHits(text, SKELETON)).toFixed(2)} 个（首先/其次/综上所述）`);
-  push("语义连贯·连接词", norm(per(countHits(text, CONNECTIVES)), 0, 2.2),
-    `每百字 ${per(countHits(text, CONNECTIVES)).toFixed(2)} 个（然而/因此/与此同时）`);
-  push("句法结构·抽象名词", norm(per(nominalCount(text)), 0.5, 4.0),
-    `每百字 ${per(nominalCount(text)).toFixed(2)} 个（性/化/度/机制/体系）`);
-  push("句法结构·三段并列", norm(per(countRe(text, /(既要.{2,12}也要|不仅.{2,12}而且.{2,12}还|一方面.{2,12}另一方面)/g)), 0, 0.6),
-    `每百字 ${per(countRe(text, /(既要.{2,12}也要|不仅.{2,12}而且.{2,12}还|一方面.{2,12}另一方面)/g)).toFixed(2)} 组`);
-  push("人文特征·缺主观视角", norm(per(countRe(text, PERSONAL)), 0.15, 1.2, true),
-    `每百字 ${per(countRe(text, PERSONAL)).toFixed(2)} 处（我/那次/我家）`);
-  push("人文特征·缺具体细节", norm(per(countRe(text, CONCRETE)), 0.2, 1.8, true),
-    `每百字 ${per(countRe(text, CONCRETE)).toFixed(2)} 处（数字/专名/时间地点）`);
-  push("格式指纹·中英空格", norm(per(countRe(text, /[\u4e00-\u9fa5][ \t]+[A-Za-z0-9]|[A-Za-z0-9][ \t]+[\u4e00-\u9fa5]/g)), 0, 0.6),
-    `${countRe(text, /[\u4e00-\u9fa5][ \t]+[A-Za-z0-9]|[A-Za-z0-9][ \t]+[\u4e00-\u9fa5]/g)} 处`);
-  push("格式指纹·四字排比", norm(per(countRe(text, IDIOM_LIKE)), 0, 1.2),
-    `每百字 ${per(countRe(text, IDIOM_LIKE)).toFixed(2)} 组`);
+      (sents.length >= 6
+        ? `，标准差 ${std.toFixed(1)}${stdInBand ? "（落入 AI 特征带 4.5~8.5）" : ""}`
+        : ""),
+  );
+  push(
+    "句法结构·长句占比",
+    norm(
+      sents.length ? sents.filter((s) => visibleLen(s.text) >= 38).length / sents.length : 0,
+      0.05,
+      0.45,
+    ),
+    `${sents.filter((s) => visibleLen(s.text) >= 38).length}/${sents.length} 句超 38 字`,
+  );
+  push(
+    "语义连贯·骨架词",
+    norm(per(countHits(text, SKELETON)), 0, 0.5),
+    `每百字 ${per(countHits(text, SKELETON)).toFixed(2)} 个（首先/其次/综上所述）`,
+  );
+  push(
+    "语义连贯·连接词",
+    norm(per(countHits(text, CONNECTIVES)), 0, 2.2),
+    `每百字 ${per(countHits(text, CONNECTIVES)).toFixed(2)} 个（然而/因此/与此同时）`,
+  );
+  push(
+    "句法结构·抽象名词",
+    norm(per(nominalCount(text)), 0.5, 4.0),
+    `每百字 ${per(nominalCount(text)).toFixed(2)} 个（性/化/度/机制/体系）`,
+  );
+  push(
+    "句法结构·三段并列",
+    norm(
+      per(countRe(text, /(既要.{2,12}也要|不仅.{2,12}而且.{2,12}还|一方面.{2,12}另一方面)/g)),
+      0,
+      0.6,
+    ),
+    `每百字 ${per(countRe(text, /(既要.{2,12}也要|不仅.{2,12}而且.{2,12}还|一方面.{2,12}另一方面)/g)).toFixed(2)} 组`,
+  );
+  push(
+    "人文特征·缺主观视角",
+    norm(per(countRe(text, PERSONAL)), 0.15, 1.2, true),
+    `每百字 ${per(countRe(text, PERSONAL)).toFixed(2)} 处（我/那次/我家）`,
+  );
+  push(
+    "人文特征·缺具体细节",
+    norm(per(countRe(text, CONCRETE)), 0.2, 1.8, true),
+    `每百字 ${per(countRe(text, CONCRETE)).toFixed(2)} 处（数字/专名/时间地点）`,
+  );
+  push(
+    "格式指纹·中英空格",
+    norm(
+      per(countRe(text, /[\u4e00-\u9fa5][ \t]+[A-Za-z0-9]|[A-Za-z0-9][ \t]+[\u4e00-\u9fa5]/g)),
+      0,
+      0.6,
+    ),
+    `${countRe(text, /[\u4e00-\u9fa5][ \t]+[A-Za-z0-9]|[A-Za-z0-9][ \t]+[\u4e00-\u9fa5]/g)} 处`,
+  );
+  push(
+    "格式指纹·四字排比",
+    norm(per(countRe(text, IDIOM_LIKE)), 0, 1.2),
+    `每百字 ${per(countRe(text, IDIOM_LIKE)).toFixed(2)} 组`,
+  );
 
   return f.slice(0, 12);
 }
@@ -396,7 +505,9 @@ export function detectZhuque(raw: string, opts: ZhuqueOptions = {}): ZhuqueRepor
     warnings.push(`当前 ${chars} 字，朱雀官方要求不少于 ${ZHUQUE_MIN_CHARS} 字，占比仅供参考`);
   }
   if (chars > ZHUQUE_SUGGEST_MAX) {
-    warnings.push(`当前 ${chars} 字，超过官方建议的单次 ${ZHUQUE_SUGGEST_MAX} 字，送检建议分批或上传文档`);
+    warnings.push(
+      `当前 ${chars} 字，超过官方建议的单次 ${ZHUQUE_SUGGEST_MAX} 字，送检建议分批或上传文档`,
+    );
   }
   if (sents.length < 4) {
     warnings.push("句子太少，节奏类特征不可靠");
@@ -409,12 +520,17 @@ export function detectZhuque(raw: string, opts: ZhuqueOptions = {}): ZhuqueRepor
   });
 
   // 三占比按可见字符数统计（官方是占比圆环，按字符长度加权最贴近体感）
-  let aiChars = 0, susChars = 0, humChars = 0, aiSentences = 0;
+  let aiChars = 0,
+    susChars = 0,
+    humChars = 0,
+    aiSentences = 0;
   const total = scored.reduce((a, s) => a + Math.max(1, visibleLen(s.text)), 0) || 1;
   for (const s of scored) {
     const w = Math.max(1, visibleLen(s.text));
-    if (s.label === "ai") { aiChars += w; aiSentences++; }
-    else if (s.label === "suspected") susChars += w;
+    if (s.label === "ai") {
+      aiChars += w;
+      aiSentences++;
+    } else if (s.label === "suspected") susChars += w;
     else humChars += w;
   }
   const rawAi = (aiChars / total) * 100;
@@ -450,7 +566,7 @@ export function detectZhuque(raw: string, opts: ZhuqueOptions = {}): ZhuqueRepor
   const charFactor = clamp01((chars - 100) / (ZHUQUE_MIN_CHARS - 100));
   const concentration = Math.max(ratios.ai, ratios.suspected, ratios.human) / 100;
   const confidence = Math.round(
-    Math.max(40, Math.min(97, 45 + charFactor * 30 + concentration * 22)) * (eligible ? 1 : 0.85)
+    Math.max(40, Math.min(97, 45 + charFactor * 30 + concentration * 22)) * (eligible ? 1 : 0.85),
   );
 
   // 片段：连续同档句合并成一段（红/黄），人工档不标
@@ -458,7 +574,8 @@ export function detectZhuque(raw: string, opts: ZhuqueOptions = {}): ZhuqueRepor
   let buf: typeof scored = [];
   const flush = () => {
     if (!buf.length) return;
-    const first = buf[0], last = buf[buf.length - 1];
+    const first = buf[0],
+      last = buf[buf.length - 1];
     const lbl = first.label;
     if (lbl !== "human") {
       const allReasons = Array.from(new Set(buf.flatMap((b) => b.reasons))).slice(0, 3);
@@ -563,7 +680,7 @@ export const DEFAULT_SEMANTIC_WEIGHT = 0.8;
 export function fuseLayers(
   surface: number,
   sem: SemanticLayer | null,
-  wSemantic: number = DEFAULT_SEMANTIC_WEIGHT
+  wSemantic: number = DEFAULT_SEMANTIC_WEIGHT,
 ): FusedResult | null {
   if (!sem) return null;
   const w = Math.max(0, Math.min(1, wSemantic));
@@ -602,7 +719,8 @@ export function fitCalibration(points: CalibPoint[]): Calibration {
   const n = pts.length;
   const mx = pts.reduce((a, p) => a + p.local, 0) / n;
   const my = pts.reduce((a, p) => a + p.official, 0) / n;
-  let num = 0, den = 0;
+  let num = 0,
+    den = 0;
   for (const p of pts) {
     num += (p.local - mx) * (p.official - my);
     den += (p.local - mx) ** 2;

@@ -27,7 +27,10 @@ const K_CALIB = "quaiwei.zhuque.calib";
 /* ----------------------------- 送检 ----------------------------- */
 
 /** 构造送检文本：按句子边界截断到 limit 字，不切碎句子 */
-export function buildSubmission(raw: string, limit = ZHUQUE_SUGGEST_MAX): {
+export function buildSubmission(
+  raw: string,
+  limit = ZHUQUE_SUGGEST_MAX,
+): {
   text: string;
   truncated: boolean;
   chars: number;
@@ -113,7 +116,11 @@ export function parseOfficialResult(raw: string): OfficialResult {
   let label: ZhuqueLabel | null = null;
   let labelText = "";
   for (const L of LABELED) {
-    if (L.re.test(s)) { label = L.label; labelText = L.text; break; }
+    if (L.re.test(s)) {
+      label = L.label;
+      labelText = L.text;
+      break;
+    }
   }
 
   // 2. 概率：优先取"档位词附近"的百分比（如"AI生成 99.99%"），否则取第一个百分比
@@ -123,7 +130,10 @@ export function parseOfficialResult(raw: string): OfficialResult {
   ];
   for (const re of near) {
     const m = s.match(re);
-    if (m) { probability = clampPct(parseFloat(m[2])); break; }
+    if (m) {
+      probability = clampPct(parseFloat(m[2]));
+      break;
+    }
   }
   if (probability === null) {
     const all = s.match(/(\d+(?:\.\d+)?)\s*%/g);
@@ -142,9 +152,16 @@ export function parseOfficialResult(raw: string): OfficialResult {
 
   // 3. 二者互证：只有档位没有分数时给一个档位中值；只有分数没有档位时按官方口径定档
   if (probability !== null && label === null) {
-    if (probability >= 60) { label = "ai"; labelText = "AI生成"; }
-    else if (probability >= 30) { label = "suspected"; labelText = "疑似AI辅助"; }
-    else { label = "human"; labelText = "人工特征"; }
+    if (probability >= 60) {
+      label = "ai";
+      labelText = "AI生成";
+    } else if (probability >= 30) {
+      label = "suspected";
+      labelText = "疑似AI辅助";
+    } else {
+      label = "human";
+      labelText = "人工特征";
+    }
   }
   if (probability === null && label !== null) {
     probability = label === "ai" ? 90 : label === "suspected" ? 50 : 10;
@@ -178,7 +195,11 @@ function readLegacyPoints(): CalibPoint[] {
     if (!Array.isArray(arr)) return [];
     return arr
       .filter((p) => p && isFinite(Number(p.local)) && isFinite(Number(p.official)))
-      .map((p) => ({ local: Number(p.local), official: Number(p.official), ts: Number(p.ts) || Date.now() }))
+      .map((p) => ({
+        local: Number(p.local),
+        official: Number(p.official),
+        ts: Number(p.ts) || Date.now(),
+      }))
       .slice(-50);
   } catch {
     return [];

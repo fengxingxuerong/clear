@@ -61,10 +61,18 @@ describe("crossChunkCleanup（跨块反指纹清理）", () => {
     expect(out.split("……").length - 1).toBe(1);
   });
 
-  it("中英数字间空格指纹被清理", () => {
+  // v0.8.9 P0 行为变更：中英/中数空格改为「尊重原文排版习惯」——
+  // 原文带空格说明作者有排版意识，剥离只会毁掉技术文档可读性
+  // （"从 Webpack 迁移到 Vite" → "从Webpack迁移到Vite"），而空格并非可靠的 AI 语义特征。
+  it("中英数字间空格按原文排版习惯保留", () => {
     const text = "共 100 次调用，AI 模型很重要。";
     const out = crossChunkCleanup(text);
-    expect(/[\u4e00-\u9fa5][ \t]+[A-Za-z0-9]/.test(out)).toBe(false);
+    expect(/[\u4e00-\u9fa5][ \t]+[A-Za-z0-9]/.test(out)).toBe(true);
+  });
+
+  it("原文无中英空格时不做无谓改动", () => {
+    const text = "共100次调用，AI模型很重要。";
+    expect(crossChunkCleanup(text)).toBe(text);
   });
 
   it("幂等：清理两遍与一遍结果一致", () => {

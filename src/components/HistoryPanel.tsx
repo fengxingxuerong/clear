@@ -21,7 +21,11 @@ function timeAgo(ts: number): string {
 export function HistoryPanel({ entries, onLoad, onClear, onClose }: HistoryPanelProps) {
   return (
     <div className="modal-mask" onClick={onClose}>
-      <div className="modal diff-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 600 }}>
+      <div
+        className="modal diff-modal"
+        onClick={(e) => e.stopPropagation()}
+        style={{ maxWidth: 600 }}
+      >
         <div className="modal-head">
           <span>去味历史 · 最近 {entries.length} 条</span>
           <button onClick={onClose}>✕</button>
@@ -43,21 +47,40 @@ export function HistoryPanel({ entries, onLoad, onClear, onClose }: HistoryPanel
                   border: "1px solid var(--border)",
                   flexWrap: "wrap",
                 }}
-                onClick={() => { onLoad(e); onClose(); }}
+                onClick={() => {
+                  onLoad(e);
+                  onClose();
+                }}
               >
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 2 }}>
-                    {timeAgo(e.timestamp)} · 强度 {Math.round(e.intensity * 100)}% · {e.usedApi ? "API" : "本地引擎"}
+                    {timeAgo(e.timestamp)} · 强度 {Math.round(e.intensity * 100)}% ·{" "}
+                    {e.usedApi ? "API" : "本地引擎"}
                   </div>
-                  <div style={{ fontSize: 13, lineHeight: 1.5, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  <div
+                    style={{
+                      fontSize: 13,
+                      lineHeight: 1.5,
+                      color: "var(--text)",
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
                     {e.input.slice(0, 80)}…
                   </div>
                   <div style={{ fontSize: 12, marginTop: 4 }}>
                     <span style={{ color: "var(--muted)" }}>评分 </span>
-                    <span style={{ color: e.beforeScore >= 60 ? "#ff5d6c" : "#ffb454" }}>{e.beforeScore}</span>
+                    <span style={{ color: e.beforeScore >= 60 ? "#ff5d6c" : "#ffb454" }}>
+                      {e.beforeScore}
+                    </span>
                     <span style={{ color: "var(--muted)" }}> → </span>
-                    <span style={{ color: e.afterScore < 35 ? "#3ddc97" : "#ffb454" }}>{e.afterScore}</span>
-                    <span style={{ color: "var(--muted)", marginLeft: 8 }}>降 {e.beforeScore - e.afterScore} 分</span>
+                    <span style={{ color: e.afterScore < 35 ? "#3ddc97" : "#ffb454" }}>
+                      {e.afterScore}
+                    </span>
+                    <span style={{ color: "var(--muted)", marginLeft: 8 }}>
+                      降 {e.beforeScore - e.afterScore} 分
+                    </span>
                   </div>
                 </div>
                 <span style={{ fontSize: 18, color: "var(--accent)", marginLeft: 8 }}>→</span>

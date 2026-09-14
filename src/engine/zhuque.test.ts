@@ -10,8 +10,11 @@ import {
   DEFAULT_SEMANTIC_WEIGHT,
   type CalibPoint,
 } from "./zhuque";
-import { predictOfficialPct, trackForGenre } from "./zhuque-calib";
+import { predictOfficialPct, trackForGenre, CALIB } from "./zhuque-calib";
 import { parseOfficialResult, buildSubmission } from "../api/zhuque";
+// 标定单一数据源：锚点守卫与参数一致性都以它为唯一真值
+// （scripts/calibration-data.json，含全部官方送检点与体裁线参数）
+import calibrationData from "../../scripts/calibration-data.json";
 
 /** 典型 AI 议论文（朱雀官方实测 99.99% 的样本 D 节选，特征密集） */
 const AI_TEXT = `随着信息技术的不断发展，数字化阅读逐渐走进人们的日常生活。值得注意的是，数字化阅读不仅改变了人们获取知识的方式，还显著提升了阅读的便捷性。然而，数字化阅读也面临着一系列挑战，诸如注意力分散、深度思考能力下降等问题。因此，我们需要在享受技术便利的同时，保持对阅读质量的关注。
@@ -152,7 +155,9 @@ describe("fuseLayers（表层 × 语义层融合）", () => {
 
 describe("pplLayerScore（困惑度层 · 隐层特征近似）", () => {
   it("字数不足不参与判定", () => {
-    expect(pplLayerScore({ meanNll: 0.2, winStd: 0.05, scoredChars: 30, windowCount: 2 })).toBeNull();
+    expect(
+      pplLayerScore({ meanNll: 0.2, winStd: 0.05, scoredChars: 30, windowCount: 2 }),
+    ).toBeNull();
   });
 
   it("AI 生成特征（NLL 低 + 曲线平）得高分", () => {
@@ -183,7 +188,10 @@ describe("detectZhuque × 困惑度层融合", () => {
     expect(fused.pplLayer).not.toBeNull();
     expect(fused.composite).toBeGreaterThan(base.composite);
     // 融合公式：表层 × (1−w) + ppl × w
-    const expectComposite = Math.round((base.composite * (1 - PPL_FUSE_WEIGHT) + fused.pplLayer!.score * PPL_FUSE_WEIGHT) * 100) / 100;
+    const expectComposite =
+      Math.round(
+        (base.composite * (1 - PPL_FUSE_WEIGHT) + fused.pplLayer!.score * PPL_FUSE_WEIGHT) * 100,
+      ) / 100;
     expect(fused.composite).toBeCloseTo(expectComposite, 2);
   });
 
@@ -214,29 +222,40 @@ describe("zhuque-calib（v3 四体裁 18 点 OLS 体裁线）", () => {
     expect(trackForGenre(null)).toBe("main");
   });
 
-  it("校准锚点完整性：9 个官方真值点的预测误差 ≤ 8pp（引擎词表改动导致 x 漂移时此处亮红，须同步重拟合体裁线）", () => {
-    // 锚点来自 docs/fingerprint-and-zhuque-calibration.md §3.2 的 v2 12 点
-    // （D2/D3 的 x 为 2026-09-05 漂移体检后的当前引擎重算值，见 scripts/recheck-calib.ts）。
-    // y = 官方朱雀% 是文本真值，不受引擎改动影响；x 漂移 = 校准线过期信号。
-    const anchors: Array<{ id: string; x: number; y: number; track: "main" | "narrative" | "dialogue" | "human" }> = [
-      { id: "O1", x: 33, y: 85, track: "main" },
-      { id: "O2", x: 10, y: 45, track: "main" },
-      { id: "O3", x: 8, y: 30, track: "main" },
-      { id: "N1", x: 47, y: 99, track: "narrative" },
-      { id: "N2", x: 0, y: 22, track: "narrative" },
-      { id: "N3", x: 0, y: 18, track: "narrative" },
-      { id: "D1", x: 81, y: 98, track: "dialogue" },
-      { id: "D2", x: 0, y: 28, track: "dialogue" },
-      { id: "D3", x: 0, y: 25, track: "dialogue" },
-      { id: "H0", x: 10, y: 15, track: "human" },
-      { id: "H1", x: 0, y: 19, track: "human" },
-      { id: "H2", x: 0, y: 17, track: "human" },
-    ];
+  it("校准锚点完整性：18 个官方真值点的预测误差 ≤ 8pp（数据源驱动）", () => {
+    // 锚点来自 scripts/calibration-data.json（v2 12 点 + v3 6 点）
+    // y = 官方朱雀% 是文本真值，不受引擎改动影响；x 漂移 = 校准线过期信号
+    // （漂移检测见 scripts/calib-sanity.ts：当前引擎重建文本重算 x 对比）
+    const genreTrack: Record<string, "main" | "narrative" | "dialogue" | "human"> = {
+      expository: "main",
+      narrative: "narrative",
+      dialogue: "dialogue",
+      humanHand: "human",
+    };
     const failures: string[] = [];
-    for (const a of anchors) {
-      const pred = predictOfficialPct(a.x, a.track);
+    for (const a of calibrationData.points) {
+      const pred = predictOfficialPct(a.x, genreTrack[a.genre]);
       const err = Math.abs(pred - a.y);
-      if (err > 8) failures.push(`${a.id}: 官方=${a.y}% 预测=${pred.toFixed(1)}% 误差=${err.toFixed(1)}pp`);
+      if (err > 8)
+        failures.push(`${a.id}: 官方=${a.y}% 预测=${pred.toFixed(1)}% 误差=${err.toFixed(1)}pp`);
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it("标定参数一致性：数据源 tracks 与 zhuque-calib.ts 参数必须同步", () => {
+    // 防止改了一处忘同步：数据源是唯一真值，代码参数必须与它一致
+    const failures: string[] = [];
+    for (const [tk, tr] of Object.entries(calibrationData.tracks) as [string, any][]) {
+      const cur = CALIB[tk as keyof typeof CALIB];
+      if (!cur) {
+        failures.push(`${tk}: 代码缺少该 track`);
+        continue;
+      }
+      const da = Math.abs(cur.a - tr.a);
+      const db = Math.abs(cur.b - tr.b);
+      if (da > 0.001 || db > 0.01) {
+        failures.push(`${tk}: 数据源(a=${tr.a},b=${tr.b}) ≠ 代码(a=${cur.a},b=${cur.b})`);
+      }
     }
     expect(failures).toEqual([]);
   });

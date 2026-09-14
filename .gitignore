@@ -1,29 +1,41 @@
-# 依赖
+# 依赖与包缓存
 node_modules/
 node_modules.zip
-electron-app/node_modules/
+electron-app/node_modules/.pnpm-store/
 
 # 构建产物
 dist/
-electron-app/assets/
-*.tsbuildinfo
-
-# 打包产物
 electron-dist/
+*.tsbuildinfo
+electron-app/assets/
+electron-app/index.html
 
-# 编辑器 / 系统
+# 编辑器 / 系统文件
 .vscode/
 .idea/
 *.log
 .DS_Store
 Thumbs.db
 
-# API Key（本地非托管，v0.8.6 安全改造）
+# 敏感信息（v0.8.6 起，Key 池明文，勿提交）
 scripts/.sensenova-keys
-# 校准点回填数据（个人实测真值，按需决定是否入库）
+
+# 标定数据（含真实调用记录）
 scripts/calib-lab-points.jsonl
-# 调试/评测产物（可再生成，不入库）
+
+# v4 标定送检产物（文本包可随时用 pipeline 重新生成）
+scripts/zhuque-v4-out/
+scripts/calibration-input-v4.tsv
+
+# 扫描输出 / 临时测试目录
 _scan_out.txt
 artifacts/
 .tmp-p1/
 .tmp-submit/
+.tmp-ppl-cache/
+.tmp-ppl-model/
+endpoints.local.json
+
+# git �Eb4��Uv0.9.5 b(�bФ	
+.git-restored/
+.git-restored2/

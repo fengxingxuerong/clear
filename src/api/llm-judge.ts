@@ -27,7 +27,8 @@ export async function judgeWithCritique(
     [
       {
         role: "system",
-        content: systemOverride ||
+        content:
+          systemOverride ||
           "你是 AI 文本检测员。第一步：逐条列出这段中文文本残留的 AI 写作痕迹（如：句长过于均匀/过渡词残留/对仗工整/词汇书面化/标点过于规整/虚构人物事例/口语化模仿痕迹等），最多 5 条，每条不超过 15 个字，一行一条。第二步：最后一行单独输出一个 0 到 100 的整数，表示这段文本有多像 AI 写的（100=绝对是AI生成，0=绝对是人写的）。按真实判断打分，不要刻意从严或从宽。除了痕迹清单和最后的数字，不要输出任何其他内容。",
       },
       { role: "user", content: text },

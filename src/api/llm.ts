@@ -241,7 +241,7 @@ export async function runHumanize(
   // v0.9.4 P2 迭代收益提示：实测深度模式对已去味文本（AI 味 <35 分）再处理
   // 收益趋零（31→30）且白烧 5~10 分钟——信息提示不拦截，用户自行决定
   const tip =
-    before.probability < 35 && usedApi
+    before.score < 35 && usedApi
       ? "（提示：输入 AI 味已较低，本轮收益有限；重复/串联去味不建议）"
       : "";
   return {

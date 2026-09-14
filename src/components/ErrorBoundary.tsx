@@ -29,8 +29,13 @@ export class ErrorBoundary extends Component<Props, State> {
       return (
         <div style={{ padding: 40, color: "#e6e8f0", fontFamily: "system-ui, sans-serif" }}>
           <h2>界面出了点问题</h2>
-          <p style={{ color: "#ff5d6c", whiteSpace: "pre-wrap" }}>{String(error?.message ?? error)}</p>
-          <button onClick={() => location.reload()} style={{ padding: "8px 20px", cursor: "pointer" }}>
+          <p style={{ color: "#ff5d6c", whiteSpace: "pre-wrap" }}>
+            {String(error?.message ?? error)}
+          </p>
+          <button
+            onClick={() => location.reload()}
+            style={{ padding: "8px 20px", cursor: "pointer" }}
+          >
             重载应用
           </button>
         </div>

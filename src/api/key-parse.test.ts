@@ -13,13 +13,7 @@ describe("parseKeyList", () => {
   });
 
   it("半角/全角逗号与分号混排", () => {
-    expect(parseKeyList("aaa,bbb；ccc，ddd;eee")).toEqual([
-      "aaa",
-      "bbb",
-      "ccc",
-      "ddd",
-      "eee",
-    ]);
+    expect(parseKeyList("aaa,bbb；ccc，ddd;eee")).toEqual(["aaa", "bbb", "ccc", "ddd", "eee"]);
   });
 
   it("去空项与首尾空白", () => {

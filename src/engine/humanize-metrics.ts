@@ -127,8 +127,12 @@ export function fingerprintCheck(text: string): FingerprintReport {
   const ALL_FORMULAIC_FP = Array.from(new Set([...FORMULAIC, ...FORMULAIC_EXTRA]));
   for (const p of ALL_FORMULAIC_FP) if (text.includes(p)) formulaic++;
   const FP_EXTRA_HARD = [
-    "展望未来", "面向未来", "按下了快进键", "迈上了新的台阶",
-    "交出了一份满意的答卷", "具有里程碑意义",
+    "展望未来",
+    "面向未来",
+    "按下了快进键",
+    "迈上了新的台阶",
+    "交出了一份满意的答卷",
+    "具有里程碑意义",
     // v0.8.5: 关键在于/核心在于/本质在于/根本在于 已是 VOCAB 源词（概率式替换），
     // 列入硬签名会导致"概率跳过替换"与"探针零残留"自相矛盾——移除，计分走 FORMULAIC
   ];
@@ -160,7 +164,7 @@ export function fingerprintCheck(text: string): FingerprintReport {
       hint: `句长标准差 ${std}（实测 AI 文本多在 5~8 区间），长短句交错可拉开`,
     });
   }
-// 7) 半角逗号过多（反向检查：过度混入也是新指纹）
+  // 7) 半角逗号过多（反向检查：过度混入也是新指纹）
   // 阈值 15%：人类手打文本偶尔有 5-15% 半角逗号（输入法切换失误），
   // 注入层控制在 ≤5%，15% 足够安全且不误报短文本
   const halfC = (text.match(/,/g) || []).length;

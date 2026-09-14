@@ -11,12 +11,7 @@
  * 打分数学与 Electron 主进程引擎一致：MLM 多位置掩码 + logsumexp，
  * 选点/求值逻辑复用共享内核 scorer-core.ts。
  */
-import {
-  MASK_GROUPS,
-  maskGroups,
-  maskedMeanNll,
-  selectTargets,
-} from "./scorer-core.ts";
+import { MASK_GROUPS, maskGroups, maskedMeanNll, selectTargets } from "./scorer-core.ts";
 
 type Transformers = typeof import("@huggingface/transformers");
 
@@ -57,9 +52,7 @@ function toList(x: unknown): number[] | null {
   const obj = x as { tolist?: () => unknown[]; data?: ArrayLike<number> };
   if (typeof obj.tolist === "function") {
     const v = obj.tolist();
-    return Array.isArray(v)
-      ? (v.flat(Number.POSITIVE_INFINITY) as unknown[]).map(Number)
-      : null;
+    return Array.isArray(v) ? (v.flat(Number.POSITIVE_INFINITY) as unknown[]).map(Number) : null;
   }
   if (obj.data != null) return Array.from(obj.data, (n) => Number(n));
   return Array.isArray(x)
@@ -87,11 +80,10 @@ async function scoreWindow(c: Ctx, chars: string[]) {
     const masked = ids.slice();
     for (const tg of g) masked[tg.pos] = maskId;
     const seqLen = masked.length;
-    const inputTensor = new TensorCtor(
-      "int64",
-      BigInt64Array.from(masked.map((v) => BigInt(v))),
-      [1, seqLen],
-    );
+    const inputTensor = new TensorCtor("int64", BigInt64Array.from(masked.map((v) => BigInt(v))), [
+      1,
+      seqLen,
+    ]);
     const attnTensor = new TensorCtor(
       "int64",
       BigInt64Array.from({ length: seqLen }, () => 1n),

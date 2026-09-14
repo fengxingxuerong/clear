@@ -34,12 +34,8 @@ type ScoreResult = { meanNll: number | null; scoredCount: number };
 
 interface ElectronPplBridge {
   status(): Promise<PplStatus>;
-  download(
-    onProgress?: (p: PplProgressInfo) => void,
-  ): Promise<{ ok: boolean; error?: string }>;
-  score(
-    windows: string[],
-  ): Promise<{ ok: boolean; results?: ScoreResult[]; error?: string }>;
+  download(onProgress?: (p: PplProgressInfo) => void): Promise<{ ok: boolean; error?: string }>;
+  score(windows: string[]): Promise<{ ok: boolean; results?: ScoreResult[]; error?: string }>;
 }
 
 function electronBridge(): ElectronPplBridge | null {
@@ -151,10 +147,10 @@ export async function computePplFeature(text: string): Promise<PplFeature> {
     raw = r.results;
   } else {
     const w = await getWorker();
-    const r = await workerCall<{ ok: boolean; results: ScoreResult[] }>(
-      w,
-      { type: "score", windows: windowStrings },
-    );
+    const r = await workerCall<{ ok: boolean; results: ScoreResult[] }>(w, {
+      type: "score",
+      windows: windowStrings,
+    });
     if (!r.ok || !r.results) throw new Error("worker 打分失败");
     raw = r.results;
   }

@@ -40,6 +40,8 @@ const cfg = {
   maxApiCalls: 24,
   contestSamples: Number(process.env.DEEP_TEST_CONTEST) || 1,
   strictFidelity: true,
+  persona:
+    (process.env.DEEP_TEST_PERSONA as "default" | "netgen" | "classic") || undefined,
 };
 
 async function main() {

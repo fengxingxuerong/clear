@@ -16,7 +16,13 @@ afterEach(() => cleanup());
 const EXPO_TEXT =
   "值得注意的是，随着人工智能技术的快速发展，AI 写作工具应运而生。综上所述，数字化办公不仅极大地提升了工作效率，而且有效地降低了运营成本。然而，技术的变革也带来了一系列值得关注的挑战。与此同时，如何平衡创新与风险，成为至关重要的课题。从长远来看，建立完善的监管体系，推动可持续发展，具有十分重要的意义。";
 
-const after: ScoreBreakdown = { score: 20, formulaicHits: 2, burstiness: 0.4, avgLen: 20, sentenceCount: 5 };
+const after: ScoreBreakdown = {
+  score: 20,
+  formulaicHits: 2,
+  burstiness: 0.4,
+  avgLen: 20,
+  sentenceCount: 5,
+};
 
 function base(overrides: Partial<Parameters<typeof BenchmarkPanel>[0]> = {}) {
   return {
@@ -79,9 +85,7 @@ describe("BenchmarkPanel（对标评分面板）", () => {
   });
 
   it("深度轮次分渲染（含失败轮显示「失败」与目标分）", () => {
-    const { getByText } = render(
-      <BenchmarkPanel {...base({ roundScores: [60, -1, 25] })} />,
-    );
+    const { getByText } = render(<BenchmarkPanel {...base({ roundScores: [60, -1, 25] })} />);
     expect(getByText(/60 → 失败 → 25/)).toBeTruthy();
     expect(getByText(/目标 ≤10/)).toBeTruthy();
   });
