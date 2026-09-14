@@ -671,8 +671,26 @@ export function injectSelfQA(
    P2 反检测特征增强（错别字 / 方言多命中修复）
    ========================================================= */
 
-/** P2-1：极低概率错别字注入（全文 <= 2 处），模拟人类打字手滑。
- *  错字池仅限「拼音同/近、语义偏离但读者秒懂」的常见输入法手滑对。 */
+/**
+ * P2-1：极低概率错别字注入（全文 <= 2 处），模拟人类打字手滑。
+ *
+ * @deprecated v0.9.8 P0 —— **已停用（全体裁关闭），不再产出任何替换**。
+ *
+ * 停用理由（代价已量化，scripts/_typo_cost.ts，2026-09-14）：
+ *   ① 收益为零：叙事体裁 2/10 seed 命中「得时候」，但 avg aiScore 仍是 **0.0** ——
+ *      标尺不检测这类错别字（`typoCount * 30` 抓的是另一类更显眼的拼写错）。
+ *      即：让文本出现真实语法错误，换不来任何"更像人写"的评分收益。
+ *   ② 代价是真实的：首条规则 `的(?=时候)` → ["地","得"] 会把「的时候」写成「得时候」。
+ *      这不是"模拟手滑"（真人打错字不会错成这个），而是"为反检测而故意犯错"。
+ *      工具卖点是"更自然"，输出带语法错误会直接砸口碑，买家还得自己修错字。
+ *   ③ 设计自证：`humanHand` 体裁早已 `disableTyposAnchor: true` —— 设计者本就认它有害。
+ *
+ * 为何整体关死而非把概率调更低：只要还注入，就一定会留下错误；而它换不来分数。
+ * 属"净负收益设计，删除优于调低概率"（同 injectDialect 的处置逻辑）。
+ *
+ * 保留函数本体与 TYPO_PAIRS 表以备回滚：**不要重新接回主路径**，
+ * 除非标尺新增了对"语法级错别字"的检测项（届时需重新量化收益）。
+ */
 const TYPO_PAIRS: [RegExp, string[]][] = [
   [/(?<![的地得])的(?=方式|方法|原因|结果|时候|问题|情况)/, ["地", "得"]],
   [/(?<![的地得])地(?=说|看|做|想|跑|走|提升|提高|降低)/, ["的", "得"]],
@@ -682,7 +700,11 @@ const TYPO_PAIRS: [RegExp, string[]][] = [
 ];
 const TYPO_MAX_GLOBAL = 2;
 
+/** v0.9.8 P0：错别字注入总开关。置 true 可临时回滚（需重新量化收益）。 */
+const TYPO_INJECTION_ENABLED = false;
+
 export function injectHumanTypos(text: string, rng: () => number, intensity: number): string {
+  if (!TYPO_INJECTION_ENABLED) return text;
   if (intensity < 0.7) return text;
   // P8 场景块保真：场景行区间不计入命中——错别字单字替换会破坏【场景：…】块头，
   // 同时保留全文级 TYPO_MAX_GLOBAL 预算语义不变
@@ -860,7 +882,7 @@ export function structuralShuffleParagraph(
   if (intensity < 0.5) return paragraph;
   const sents = splitSentences(paragraph);
   if (sents.length < 3) return paragraph;
-  const style = opts.style ?? "casual";
+  const style = opts.style ?? "plain";
   let working = sents;
   working = breakEnumerationStructure(working, rng, intensity, style);
   const { sentences: afterSummary, splitAfter } = breakSummaryTail(working, rng, intensity);
@@ -1430,7 +1452,6 @@ function boostBurstinessInBlock(
 export function boostBurstinessByCutting(text: string, targetCv: number, maxCuts: number): string {
   if (maxCuts <= 0) return text;
   let working = text;
-  let cutsDone = 0;
   for (let c = 0; c < maxCuts; c++) {
     const cur = sentenceStats(working);
     if (cur.cv >= targetCv) break;
@@ -1477,40 +1498,35 @@ export function boostBurstinessByCutting(text: string, targetCv: number, maxCuts
       sents.splice(t.i + 1, 0, t.s.slice(mid + 1).trim());
     }
     working = sents.join("");
-    cutsDone++;
   }
-  // v0.9 专家修复 P3 终段：切无可切（守卫全否决）且 CV 仍不达标 → 相邻中等句合并。
-  // 把两个句号句并为一个逗号长复句：句长方差上升，零新词汇注入（人类长句的
-  // 真实来源就是逗号连接分句）。仅在本轮一刀未切时启用，避免把刚切的句子又焊回去。
-  if (cutsDone === 0) {
-    let merged = 0;
-    while (merged < 2 && sentenceStats(working).cv < targetCv) {
-      const sents = splitSentences(working);
-      let bestI = -1;
-      let bestLen = -1;
-      for (let i = 0; i < sents.length - 1; i++) {
-        const a = sents[i];
-        const b = sents[i + 1];
-        const La = a.replace(/[\s。！？!?…，、；：]/g, "").length;
-        const Lb = b.replace(/[\s。！？!?…，、；：]/g, "").length;
-        // 仅「句号句 + 句号句」可并；问/叹句、语气锚短句、超长组合均跳过
-        if (!/。$/.test(a.trim()) || !/。$/.test(b.trim())) continue;
-        if (La < 8 || Lb < 8 || La + Lb > 80) continue;
-        if (a.includes("？") || b.includes("？") || a.includes("——") || b.includes("——")) continue;
-        // 取两段都较长的相邻对（合并后对比度最大）
-        const score = Math.min(La, Lb);
-        if (score > bestLen) {
-          bestLen = score;
-          bestI = i;
-        }
-      }
-      if (bestI === -1) break;
-      sents[bestI] = sents[bestI].replace(/。$/, "") + "，" + sents[bestI + 1];
-      sents.splice(bestI + 1, 1);
-      working = sents.join("");
-      merged++;
-    }
-  }
+  // v0.9.8 P0 修复：废除「切无可切 → 相邻句合并」兜底（原 v0.9 专家修复 P3 终段）。
+  //
+  // 原实现（保留注释备查）：
+  //   if (cutsDone === 0) {
+  //     while (merged < 2 && sentenceStats(working).cv < targetCv) {
+  //       ...把两个句号句并为一个逗号长复句...
+  //     }
+  //   }
+  //
+  // 废除理由一（根因与 boostBurstinessIfLow / boostBurstinessFragments 完全相同）：
+  //   它唯一的存在目的是把 CV 抬到 targetCv。而标尺 v0.9.6 已删除 burstiness 反向项
+  //   （实测 CV 判别力≈0 且方向反：人写口语随笔 CV=0.27 是全场最低）。
+  //   为已废除的指标服务的手段，只会制造新标尺要抓的污染。
+  //
+  // 废除理由二（确定性破坏作者结构，证据 scripts/_shape.ts）：
+  //   同一段文本「3 个 20+ 字句」，单段调用时不触发（0.3~0.9 档均保持 3 句），
+  //   但在多段调用（NARR_MULTI 等）下 0.5 档起稳定被焊成 1 句——
+  //   因为逐段调用时 sentenceStats 的 CV 基准变小，更容易落到 cutsDone===0 分支。
+  //   实测影响面（scripts/_merge_impact.ts，0.9 档）：论说最大损失 2 句、人写 1 句。
+  //   句子边界是作者的语气与节奏表达（「…汤。我…」焊成「…汤，我…」改变语气），
+  //   且丢失断句信息 —— humanize 的职责是去 AI 味，不是重写作者的断句。
+  //
+  // 废除理由三（函数名自反）：函数叫 ByCutting（切分），内部却做合并；
+  //   而真正的切分手段（findSplitPoint + fragmentCanStand 全套守卫）已在上面跑完，
+  //   切不动说明"这些话本就不该被切"（守卫否决是有意的设计），不该反手焊回去。
+  //
+  // 代价评估：去掉后 CV 可能偏低（部分文本），但标尺不再考核该指标，
+  //   且 clampAvgSentenceLenUnder25 / 结构层仍各自负责句长与骨架，不产生功能缺口。
   return working;
 }
 
@@ -1808,7 +1824,7 @@ export function crossChunkCleanup(text: string, stripCJKSpaces = false): string 
 }
 
 export function mechanicalShuffle(text: string, opts: HumanizeOptions = {}): string {
-  const style = opts.style ?? "casual";
+  const style = opts.style ?? "plain";
   if (!text || !text.trim()) return "";
 
   // P7-extra 引擎级体裁联动（与 humanize() 同一套旋钮语义，独立调用入口也生效）：

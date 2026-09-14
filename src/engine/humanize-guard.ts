@@ -159,3 +159,30 @@ export function isSceneBlockLine(line: string): boolean {
   const t = line.trimStart();
   return t.startsWith("【") && SCENE_BLOCK_LINE_RE.test(t);
 }
+
+/**
+ * 剧本台词行判定（v0.9.8 P0）。
+ *
+ * 形态：`说话人：台词` 或 `说话人（角色）：台词`，如
+ *   「张总（项目经理）：这个季度的指标完成得怎么样了？」
+ *   「李工：主流程已经联调完毕。」
+ *
+ * 为什么需要单独判定：块头保护只认【…】行，台词行会漏网。实测 0.9 档对话体：
+ *   injectOpinion 把垫词插到说话人**前面**（「讲真，张总（项目经理）：…」）
+ *   injectParentheticals 把插话插到台词**中间**（「收到，往好听了说。我让李工整理好发群里。」）
+ * 两者都破坏剧本格式——说话人标签前不得有修饰，台词内不得插叙述。
+ * 剧本格式一旦被破坏，整篇台词区的可读性就没了，比一般语体错位更严重。
+ *
+ * 判定口径：行首 1~12 个汉字（+可选（）角色注）紧跟全角/半角冒号。
+ * 只匹配行首，避免把正文里的「注意：…」类短句误判（正文行首通常更长且无冒号紧贴）。
+ */
+const SCENE_DIALOGUE_LINE_RE = /^[\u4e00-\u9fa5A-Za-z0-9]{1,12}(?:[（(][^）)]{0,12}[）)])?[：:]/;
+
+export function isSceneDialogueLine(line: string): boolean {
+  return SCENE_DIALOGUE_LINE_RE.test(line.trimStart());
+}
+
+/** 剧本行总判定：块头行或台词行 —— 注入器应跳过（保格式） */
+export function isScriptFormatLine(line: string): boolean {
+  return isSceneBlockLine(line) || isSceneDialogueLine(line);
+}

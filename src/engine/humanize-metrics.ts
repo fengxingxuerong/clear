@@ -3,6 +3,12 @@
  *
  * 从 humanize.ts 拆出的独立领域，只依赖 humanize-data.ts 的共享原语，
  * 不依赖核心替换引擎（避免循环依赖）。零第三方依赖。
+ *
+ * ⚠️ 命名说明：本文件注释里的 `v0.9.6` / `v0.9.7` / `v0.9.8` 指的是
+ * **评分标尺的修订批次**，不是产品版本号。二者恰好数字接近，易混淆：
+ *   - 标尺批次：标尺公式/权重/词表的每次重新标定（本文件）
+ *   - 产品版本：package.json 的 version（面向用户的发版号）
+ * 因此出现「产品 0.9.6 的代码里写着标尺 v0.9.8」属正常，不是笔误。
  */
 
 import {
@@ -13,14 +19,46 @@ import {
   splitSentences,
   sentenceStats,
   MIN_BURSTINESS_CV,
+  BROKEN_SUBSTITUTES,
 } from "./humanize-data.ts";
 import { FORMULAIC_EXTRA } from "./humanize-vocab-extra.ts";
 import type { PplFeature } from "../ppl/scorer-core.ts";
 
 /* ----------------------------- AI 味评分（本地启发式代理） ----------------------------- */
 
+/**
+ * v0.9.6：口语垫词"独句"表。
+ *
+ * 这些词在自然口语/对话里完全正常（"事情就这样结束了"），
+ * 但引擎会把它机械地插成独立短句：「……必然趋势。就这样。根据……」
+ * 只有**独立成句**才算硬伤，所以不能简单计入 BROKEN_SUBSTITUTES（会误伤），
+ * 改用句式层的"独句检测"。
+ */
+const PAD_SENTENCE_WORDS = new Set([
+  "就这样",
+  "你懂的",
+  "说白了",
+  "讲真",
+  "说真的",
+  "老实讲",
+  "行吧",
+  "好吧",
+  "是啊",
+  "你说得对",
+  "是这个理",
+  "随你怎么说",
+  "反正",
+  "往实了说",
+  "往好听了说",
+  "说难听点",
+  "夸张点说",
+  "不瞒你说",
+  "这么说吧",
+  "差不多得了",
+]);
+
 export interface ScoreBreakdown {
-  /** 0~100，越高越像 AI 写的 */
+  /** 0~100，越高越像 AI 写的（也越高说明质量越差） */
   score: number;
   /** 套话/书面腔词命中数 */
   formulaicHits: number;
@@ -30,16 +68,141 @@ export interface ScoreBreakdown {
   burstiness: number;
   /** 平均句长 */
   avgLen: number;
+  /** v0.9.6：病词命中数（引擎产出的坏替身，越多越糟） */
+  brokenHits?: number;
+  /** v0.9.6：句式损伤计数（断句/连接词丢失等结构性缺陷） */
+  structureHits?: number;
+}
+
+/**
+ * v0.9.6 修正说明（详见 artifacts/rt-20260914/引擎质量诊断报告-20260914.html）
+ *
+ * 原实现把 VOCAB 的**全部 key**（= 引擎要替换掉的正常书面语：提升/完善/构建…）
+ * 当作 AI 味计分。后果是形成自证闭环：引擎把「构建完善」改成病词「搭起弄全」
+ * 后，评分函数检测不到病词 → 判"不像 AI"给最低分 → bestOf 专挑病词最多的稿
+ * → 回归把烂成绩锁成基线 → 优化方向被彻底带偏。
+ *
+ * 修正三点：
+ *   1) 正常书面语（SCORING_EXCLUDE，已扩充到 150+ 词）不计分；
+ *   2) 新增**病词惩罚**（BROKEN_SUBSTITUTES）——出现坏替身要加分而非无视；
+ *   3) 新增**句式完整性检查**——断句、连接词丢失、标点异常等结构性缺陷加分。
+ *
+ * 目标是让评分函数与"人眼判断"对齐，而不是与引擎自身词表对齐。
+ */
+/**
+ * v0.9.7：口语污染检测用的词表与阈值。
+ *
+ * 词表直接取自**引擎自己的注入表**（PAD_WORDS / SENTENCE_FRAGMENTS）——
+ * 用引擎的注入清单来检测引擎的注入痕迹，口径天然对齐，不会出现
+ * "检测器认不出自己注入的东西"这种低级错配。
+ *
+ * 阈值 0.25 来自标定语料实测（scripts/_calib_ratio.ts）：
+ *   阈值 0.25 → 真人写误伤 0/8，引擎污染命中 7/9。
+ * 真人写样本最高污染率 0.2（合法垫词开头），留出安全边距。
+ */
+const POLLUTION_SENTENCE_THRESHOLD = 0.25;
+
+/** 句中/句首垫词（含"其实"这类引擎高频插入词） */
+const POLLUTION_PAD_WORDS = [
+  ...PAD_WORDS,
+  "其实",
+  "说到底",
+  "具体来说",
+  "换句话说",
+  "简单说",
+  "总体而言",
+  "坦白讲",
+  "客观讲",
+  "往实了说",
+  "话又说回来",
+];
+
+/** 语气词：紧跟汉字后接标点即算污染痕迹 */
+const POLLUTION_PARTICLES = ["嗯", "啊", "哦", "嗨", "咳", "呣", "啧", "诶", "哈", "嗼", "呵"];
+
+/** 碎片句独立成句的整句形态 */
+const POLLUTION_FRAGMENTS = [
+  "就这样",
+  "怎么说呢",
+  "反正就那样",
+  "你懂的",
+  "没别的意思",
+  "话是这么说",
+  "道理是这个道理",
+  "也不是不行",
+  "差不多得了",
+  "懂的都懂",
+  "你别不信",
+  "这谁说得准呢",
+  "也不是没有道理",
+  "行吧",
+  "随你怎么说",
+  "反正我信了",
+  "无话可说",
+  "是啊",
+  "哦对",
+];
+
+const ESC = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const PAD_ALT = POLLUTION_PAD_WORDS.map(ESC).join("|");
+const FRAG_ALT = POLLUTION_FRAGMENTS.map(ESC).join("|");
+const PART_ALT = POLLUTION_PARTICLES.map(ESC).join("|");
+
+/** 句首垫词 + 逗号 */
+const POLL_HEAD_PAD_RE = new RegExp(`^(?:${PAD_ALT})[，,]`);
+/** 句中垫词 + 逗号（前面至少有 4 个汉字，避免把句首误算两次） */
+const POLL_MID_PAD_RE = new RegExp(`^.{4,}?(?:${PAD_ALT})[，,]`);
+/** 垫词紧邻堆叠 */
+const POLL_PAD_STACK_RE = new RegExp(`(?:${PAD_ALT})[，,]\\s*(?:${PAD_ALT})[，,]`);
+/** 语气词跟在汉字后 + 标点 */
+const POLL_PARTICLE_RE = new RegExp(`[\\u4e00-\\u9fa5](?:${PART_ALT})[，,。！？]`);
+/** 碎片词整体成句（允许前置标点已由切句去掉） */
+const POLL_FRAG_RE = new RegExp(`^(?:${FRAG_ALT})[。！？]?$`);
+
+/**
+ * 统计"被口语污染的句子"占比。
+ *
+ * 设计取舍：只看**句子级命中**，不看词频。原因是真人写确实会用垫词
+ * （"说真的，这事儿我琢磨好几天了"），但真人**不会在一个句子里堆两个**、
+ * 也**不会让每个短句都带个语气词**。句级口径天然把"点缀"和"堆砌"分开。
+ */
+function countPollutedSentences(text: string): { total: number; polluted: number; ratio: number } {
+  const sents = text
+    .split(/(?<=[。！？])|\n+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  if (sents.length === 0) return { total: 0, polluted: 0, ratio: 0 };
+
+  let polluted = 0;
+  for (const s of sents) {
+    const bare = s.replace(/[。！？]+$/, "");
+    const hit =
+      POLL_HEAD_PAD_RE.test(s) ||
+      POLL_MID_PAD_RE.test(bare) ||
+      POLL_PAD_STACK_RE.test(s) ||
+      POLL_PARTICLE_RE.test(s) ||
+      POLL_FRAG_RE.test(bare);
+    if (hit) polluted++;
+  }
+  return { total: sents.length, polluted, ratio: polluted / sents.length };
 }
 
 export function aiScore(text: string): ScoreBreakdown {
   const stats = sentenceStats(text);
   const n = stats.count;
   if (n === 0) {
-    return { score: 0, formulaicHits: 0, sentenceCount: 0, burstiness: 0, avgLen: 0 };
+    return {
+      score: 0,
+      formulaicHits: 0,
+      sentenceCount: 0,
+      burstiness: 0,
+      avgLen: 0,
+      brokenHits: 0,
+      structureHits: 0,
+    };
   }
 
-  // 套话命中（v0.8：合并 FORMULAIC + FORMULAIC_EXTRA，去重防双重计分）
+  // ---- 1) 套话命中（真 AI 套话；正常书面语已排除）----
   let hits = 0;
   const haystack = text;
   const ALL_FORMULAIC = Array.from(new Set([...FORMULAIC, ...FORMULAIC_EXTRA]));
@@ -47,18 +210,178 @@ export function aiScore(text: string): ScoreBreakdown {
     if (!(phrase in VOCAB) && haystack.includes(phrase)) hits++;
   }
   for (const from of Object.keys(VOCAB)) {
-    if (SCORING_EXCLUDE.has(from)) continue;
+    if (SCORING_EXCLUDE.has(from)) continue; // v0.9.6：正常书面语不再计分
     if (haystack.includes(from)) hits++;
+  }
+
+  // ---- 2) 病词惩罚（v0.9.6 新增）----
+  // 这些是引擎替换层的"坏替身"，出现即是质量事故，必须让分数反映出来。
+  // 注意：部分词（就这样/你懂的/说白了…）在口语里本身正常，
+  // 只有被机械插成独立短句才是硬伤 —— 这类改由 3d 的"垫词独句"检测处理，
+  // 所以此处排除 PAD_SENTENCE_WORDS，避免双重计分与误伤。
+  let broken = 0;
+  for (const w of BROKEN_SUBSTITUTES) {
+    if (PAD_SENTENCE_WORDS.has(w)) continue;
+    if (haystack.includes(w)) broken++;
+  }
+
+  // ---- 3) 句式完整性检查 ----
+  //
+  // v0.9.7 重构：`structure` 的语义从「缺陷**次数**累加器」改为「**分值**累加器」。
+  //
+  // 起因：旧实现里各检测项往里加的是次数（1~4），最后由 `structure * N` 统一换算成分数。
+  // 加入 3e（句级口语污染）后这个设计崩了——3e 的天然量纲是"分值"（8/16/28），
+  // 和"次数"混在一起。于是调 `structure * N` 的系数就会**顾此失彼**：
+  // 调大让 3e 生效，旧的 3a~3d（次数 1~4）被同时放大到失真；调小则旧项全被削弱。
+  // 实测踩到这个坑：系数 8→3 后 M8 从 16 分掉到 6 分、M9 从 8 分掉到 3 分。
+  //
+  // 现在每个检测项**自带权重、直接给分**，`structure` 只做累加，不再乘系数。
+  // 好处：新增检测器时不必再回过头平衡全局系数，各环节可独立标定。
+  let structure = 0;
+  // 权重常量（集中定义，便于标定时对照）
+  //
+  // 标定依据：scripts/_calib_holdout.ts（训练集）与 _calib_margin.ts（训练+验证双集）
+  // 全程在 D:\deep\quaiwei 上实测，样本集见 scripts/_calib_corpus.ts。
+  //
+  // 标定过程记录：
+  //   初版权重（10/10/14/9，污染 12/20/30）→ 验证集漏判 2 项（V5 垫词 30、V7 碎片 38）
+  //   二者与训练集 M1（30）、M2（39）同位置同分值 → 判定为系统性欠力度而非过拟合
+  //   上调至（12/16/20/12，污染 16/26/36）→ 总错判 7→5，验证集漏判 2→1
+  //
+  // ⚠️ 已知灰区（不再继续上调，这是有意保留的）：
+  //   分数 20~36 区间里同时躺着真人写与引擎污染样本，原因各不相同——
+  //     H6 正式公文（26）、H8 技术说明（27）：得分来自 avgLen 长句项，与口语污染无关
+  //     V2 真人随笔（26）：单个合法垫词，刚过 3e 阈值
+  //     M1/V5 纯垫词堆叠（36）：只命中 3e 一项，无其他特征佐证
+  //     M9 错别字（20）：短样本仅命中 1 处
+  //   **继续上调权重会把 H6/H8/V2 一起推过 40，那是真误伤，代价不可接受。**
+  //   故接受灰区存在，靠"组合证据"定性；只有单一特征的短文本本就该落在可疑带。
+  const W_TAIL_PARTICLE = 12; // 句尾语气词硬插：一次即定性
+  const W_ORPHAN_CONN = 16; // 连接词孤立成句：一次即定性（真人极少如此）
+  const W_PAD_SENTENCE = 12; // 垫词独立成句
+
+  // 3a) 句尾语气词硬插：陈述句末尾紧跟单字语气词（"达到了 41.8%嗯。"）
+  const tailParticle = (
+    text.match(/[\d%．.、，]?[嗯啊哦嗨咳呣啧诶哈]{1,2}[。！？]/g) ?? []
+  ).length;
+  if (tailParticle > 0) structure += Math.min(2, tailParticle) * W_TAIL_PARTICLE;
+  // 3b) 连接词后直接跟句号（"说到底。/具体来说。"—— 连接词被孤立成句）
+  // v0.9.7：词表从 6 个扩到 20 个。旧表漏了"换句话说"这类，
+  // 导致 M8 样本（说到底。/换句话说。）只被算作 1 处。
+  const ORPHAN_CONN_RE =
+    /(?:说到底|具体来说|总的来说|换句话说|简单说|总体而言|归根到底|归根结底|一言以蔽之|综上所述|由此可见|值得一提的是|换言之|简而言之|与此同时|在此基础上|从长远来看|本质上|核心在于)[。！？]/g;
+  const orphanConn = (text.match(ORPHAN_CONN_RE) ?? []).length;
+  if (orphanConn > 0) structure += Math.min(3, orphanConn) * W_ORPHAN_CONN;
+  // 3c) 明显错别字（实测"在去年→再去年"这类替换副作用）
+  //
+  // v0.9.7：从 structure 挪出，独立成项（与病词同级）。
+  // 理由：错别字是**语义级**错误——病词只是"读着别扭"，错别字是"字写错了"，
+  // 严重程度等同病词，不该混在句式损伤里按 20 分计。独立后：
+  //   - 单处错别字即得 30 分（接近但不到阈值），两处 60 分直接定性
+  //   - 不与句式项的累加互相挤占
+  const TYPO_PATTERNS: RegExp[] = [
+    /再去年/g,
+    /再上个/g,
+    /是实上/g,
+    /大这?家/g,
+    /时候候/g,
+  ];
+  let typoCount = 0;
+  for (const re of TYPO_PATTERNS) typoCount += (text.match(re) ?? []).length;
+  // 3d) 垫词独句：口语垫词被机械插成独立短句。
+  //     正常写作里"就这样"可以出现（"事情就这样结束了"），
+  //     但绝不会以「就这样。」「你懂的。」这种形态单独成句 —— 那是引擎的插入痕迹。
+  for (const w of PAD_SENTENCE_WORDS) {
+    const re = new RegExp(
+      `(?:^|[。！？!?\\n]\\s*)${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[。！？]`,
+      "g"
+    );
+    const c = (text.match(re) ?? []).length;
+    if (c > 0) structure += Math.min(3, c) * W_PAD_SENTENCE;
+  }
+
+  // 3e) 句级口语污染率（v0.9.7 新增）
+  //
+  // 背景：v0.9.6 补了「病词惩罚」和「句式损伤」，但实测发现标尺仍有一个**系统性盲区**——
+  // 它认不出「口语化污染」。铁证（scripts/_calib_baseline.ts，2026-09-14）：
+  //
+  //   说真的，其实说白了，在当前背景下，企业要转型。讲真，老实讲，数字化转型不是一蹴而就的。
+  //
+  // 这段任何中文母语者一眼看出是机器拼的，旧标尺给 **0 分**。原因是四个维度全部落空：
+  //   套话项  —— 说真的/讲真/老实讲 不在 VOCAB 也不在 FORMULAIC
+  //   病词项  —— 不在 BROKEN_SUBSTITUTES
+  //   句式 3d —— 只认「垫词+句号」（你懂的。），这里垫词后面跟的是**逗号**
+  //   avgLen  —— 20.5 字、CV 0.07，落在"正常"区间
+  //
+  // 后果比"漏判"更严重：这是个**自证闭环**。优化器（bestOf）专挑低分稿，
+  // 而"把书面句改成满嘴你懂的"正好拿 0 分 → 优化方向被彻底带偏。
+  // v0.9.6 修掉过一次同类闭环（引擎造病词 → 标尺不认 → 专挑病词稿），
+  // 这里是它的换皮版本：引擎撒口语垫词 → 标尺不认 → 专挑口语垃圾稿。
+  //
+  // 口径选择（经实测比较，scripts/_calib_ratio.ts / _calib_threshold.ts）：
+  //   候选 A「垫词密度（每百字词数）」：零误伤但只命中 4/9 —— 对长文本不公平，
+  //     长文里垫词绝对数少、被字数稀释后密度掉到阈值以下，但"被污染的句子"占比其实不低。
+  //   候选 B「句级污染率（被污染句数 / 总句数）」：阈值 0.25 时零误伤 + 命中 7/9。
+  //   采用 B。
+  //
+  // 安全边距：真人写样本里最高的污染率是 0.2（H2 那句合法的「说真的，这事儿…」），
+  // 与阈值 0.25 之间留出余量。真人会写垫词，但**不会连着堆**——检测器据此取证。
+  //
+  // 污染句的判定（任一命中即算）：
+  //   - 句首垫词 + 逗号（说真的，…）
+  //   - 句中垫词 + 逗号（…，说白了，…）
+  //   - 垫词紧邻堆叠（说真的，其实…）
+  //   - 语气词跟在汉字后 + 标点（…很大嗼。）
+  //   - 碎片词独立成句（就这样。/你懂的。）
+  const polluted = countPollutedSentences(text);
+  if (polluted.ratio >= POLLUTION_SENTENCE_THRESHOLD) {
+    // v0.9.7：分段给分（初版线性公式给分过保守，M1/M2/M3 污染率 0.5~1.0 只拿到 7~14 分，
+    // 全部卡在 40 阈值下方）。分段依据：污染率越高，越不可能是自然写作。
+    //   0.25~0.40 → 16 分（少数句子带痕迹，可能只是风格）
+    //   0.40~0.60 → 26 分（明显成片）
+    //   >= 0.60   → 36 分（满篇痕迹，直接定性为引擎产物）
+    // 与病词项（上限 45）同级但略轻：口语污染不改变语义，病词会改变语义。
+    const r = polluted.ratio;
+    structure += r >= 0.6 ? 36 : r >= 0.4 ? 26 : 16;
   }
 
   // 句长统计（复用入口处的 stats，避免重复切句）
   const avgLen = stats.avg;
   const burstiness = stats.cv;
+  const lenStd = stats.std;
 
-  // 综合：套话命中数（每命中 6 分，上限 60） + 低 burstiness + 长且均匀的句子
+  // ---------------------------------------------------------------------------
+  // v0.9.6 修正（二）：burstiness 反向项的删除
+  //
+  // 原式 `(1 - min(1, burstiness/0.6)) * 30` 隐含假设「CV 越低越像 AI」，但实测
+  // 该假设不成立（scripts/_burst_test.ts，2026-09-14）：
+  //
+  //   样本            CV     STD    avgLen  人/机
+  //   人写·口语随笔    0.27   6.96   25.4    人
+  //   人写·正式公文    0.46   10.38  22.6    人
+  //   AI·典型套话      0.27   8.77   32.1    机
+  //   AI·均匀排比      0.34   8.69   25.6    机
+  //
+  // 人随手写的口语 CV 反而是全场最低（短句为主、长度集中）。而引擎把文本砸碎
+  // 后 CV 可飙到 0.84（劣质输出实测），在旧式下 `(1-1.4)*30 → clamp 0` 完全免罚。
+  // 即「CV 高」既可能是人味也可能是破碎，判别力接近零，且方向反了。
+  // 结论：删除该项，把判别力交还给 avgLen / 套话 / 病词 / 句式损伤。
+  //
+  // 保留一个**弱**的节奏信号：AI 文本的句长标准差实测集中在 8.7~8.8（人写
+  // 6.96~7.67），但样本量小、差距窄，只给 ≤8 分的辅助权重，不做主判据。
+  // ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // v0.9.7：加权公式。注意 structure **已经是分值**，这里不再乘系数。
+  // （重构原因见上方 3) 段的说明：旧的"次数 + 统一系数"设计在加入 3e 后顾此失彼。）
+  // ---------------------------------------------------------------------------
   let ai = Math.min(60, hits * 6);
-  ai += (1 - Math.min(1, burstiness / 0.6)) * 30;
-  ai += Math.max(0, Math.min(1, (avgLen - 25) / 40)) * 20;
+  ai += Math.min(45, broken * 12); // 病词是硬伤（上限 45）
+  ai += Math.min(60, typoCount * 30); // 错别字（语义级错误，单处即 30 分）
+  ai += Math.min(70, structure); // 句式/污染损伤（已是分值，直接累加，上限 70）
+  // 长且均匀：AI 骨架的主要残留信号。25 字起步，65 字以上拿满 25 分。
+  ai += Math.max(0, Math.min(1, (avgLen - 25) / 40)) * 25;
+  // 句长标准差落入 AI 集中带（实测 8.0~10.5 是 AI 高发区，人写偏小）——弱信号 ≤8 分
+  if (lenStd >= 8.0 && lenStd <= 10.5) ai += 8;
 
   return {
     score: Math.round(Math.max(0, Math.min(100, ai))),
@@ -66,6 +389,8 @@ export function aiScore(text: string): ScoreBreakdown {
     sentenceCount: n,
     burstiness: Number(burstiness.toFixed(2)),
     avgLen: Number(avgLen.toFixed(1)),
+    brokenHits: broken,
+    structureHits: structure,
   };
 }
 

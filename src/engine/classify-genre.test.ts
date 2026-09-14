@@ -120,7 +120,8 @@ describe("P7 引擎级体裁联动", () => {
   });
 
   it("humanize 主入口联动：自动识别 dialogue 全文跳过自问自答，普通论说机制仍在", () => {
-    const QA_MARKERS = [
+    // casual 表演型池的独有 marker —— 只用于「对话体裁不该出现」的负向断言
+    const CASUAL_QA_MARKERS = [
       "为啥这么说",
       "真的假的",
       "你可能会问",
@@ -131,12 +132,17 @@ describe("P7 引擎级体裁联动", () => {
     ];
     for (let seed = 1; seed <= 20; seed++) {
       const out = humanize(DIALOG_SCRIPT, { intensity: 0.9, zhuqueMode: true, seed });
-      for (const m of QA_MARKERS) expect(out).not.toContain(m);
+      for (const m of CASUAL_QA_MARKERS) expect(out).not.toContain(m);
     }
+    // 正向断言：论说体裁下自问自答机制应生效。
+    //
+    // v0.9.8 P0 收敛（七）后默认风格是 plain，走 injectSelfQA 的**克制型池**
+    // （「为什么呢？原因其实不复杂。」…），不含 casual 那组表演型 marker。
+    // 故正向探针改用两种池的共有形态：疑问句 + 紧随其后的短答句。
     let positiveSeen = false;
     for (let seed = 1; seed <= 40 && !positiveSeen; seed++) {
       const out = humanize(EXPO_TEXT, { intensity: 0.9, zhuqueMode: true, seed });
-      if (QA_MARKERS.some((m) => out.includes(m))) positiveSeen = true;
+      if (/[？?][^。！？!?]{0,20}[。！]/u.test(out)) positiveSeen = true;
     }
     expect(positiveSeen).toBe(true);
   });

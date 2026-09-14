@@ -14,6 +14,7 @@ import {
 import { chat, resetApiCallCount, getApiCallCount } from "./llm-chat";
 import { processCandidate, fabricationReview } from "./llm-quality";
 import { restoreMixedSpacing } from "../engine/humanize-shuffle.ts";
+import { fingerprintCheck } from "../engine/humanize.ts";
 import { errMsg } from "./llm-judge";
 
 /* ----------------------------- 去味 ----------------------------- */
@@ -173,6 +174,16 @@ export async function humanizeViaApiDeep(
     anchorScore === null
       ? target
       : Math.max(target, Math.round(anchorScore * RELATIVE_TARGET_RATIO));
+  // v0.9.6 未改进即停·L1（痕迹收敛守卫）：上一轮交叉定罪痕迹集合。
+  // 修订轮定罪清单中若与上轮重合度 ≥2 项，说明定向修订没有消除目标痕迹——
+  // 实测（panel-revision 实验）：合议庭痕迹可精确执行消除（虚构事例 ✅），
+  // 但总分受"地板噪声"（句长/收尾类风格偏好）托底不降，继续轮次只会白烧预算。
+  let prevCrimes: Set<string> | null = null;
+  // v0.9.6 未改进即停·L2（风格回退守卫）：修订前最优稿的本地指纹硬伤集合。
+  // 修订候选若新增硬指纹（句长节奏过平等——LLM 碎句化改写的典型副产物），
+  // 视为回退：拒收本轮、回滚上一轮底稿并停止（风格回退无法靠下一轮修复，
+  // 实测第 2 轮"碎句化"修订把 cv 拉回 AI 特征带）。
+  let prevFingerprintIssues: Set<string> = new Set();
 
   // v0.5.1 双改写器竞争：主模型与备选模型各写一版第一稿，交叉评分择优当底稿。
   // 依据 A/B 实测：glm-5.2 改写被 deepseek 判 35，deepseek 改写被 glm 判 75（两样本一致）——
@@ -364,11 +375,60 @@ export async function humanizeViaApiDeep(
       continue;
     }
 
+    // v0.9.6 未改进即停·L2（风格回退守卫）：修订候选若引入上一轮最优稿没有的
+    // 本地硬指纹（句长节奏过平等——LLM 碎句化修订的典型副产物），判为风格回退：
+    // 拒收本轮、保留上一轮底稿并停止（风格回退不是下一轮能修好的，实测第 2 轮
+    // "碎句化"修订把节奏拉回 AI 特征带）。仅修订轮生效（round ≥ 2），竞争段豁免。
+    if (round >= 2 && bestText) {
+      const fpNow = new Set(
+        fingerprintCheck(cand.shuffled)
+          .issues.filter((i) => i.name !== "AI 套话残留" && i.name !== "段首过渡词残留")
+          .map((i) => i.name),
+      );
+      const newIssues = [...fpNow].filter((n) => !prevFingerprintIssues.has(n));
+      if (newIssues.length > 0) {
+        note =
+          (note ? `${note}；` : "") +
+          `第 ${round} 轮风格回退：修订引入新指纹「${newIssues[0]}」，保留上一轮最优稿，停止后续轮次`;
+        break;
+      }
+    }
+
     const score = cand.score;
     if (score !== null && score >= 0) {
       if (anchorScore === null) anchorScore = score;
       roundScores.push(score);
       lastCritique = cand.critique;
+
+      // v0.9.6 未改进即停·L1（痕迹收敛守卫）：合议庭模式下，本轮交叉定罪与
+      // 上一轮的重合度 ≥2 项 → 定向修订没有消除目标痕迹，继续轮次只是白烧。
+      // 依据（panel-revision 实验）：痕迹可精确消除（虚构事例 ✅），但总分被
+      // "地板噪声"（句长/收尾类风格偏好）托底，75→75 不动。分数单指标看不出来，
+      // 必须比对痕迹集合。仅修订轮生效（round ≥ 2），竞争段豁免。
+      const fpForL1 = fingerprintCheck(cand.shuffled);
+      const prev = prevCrimes;
+      if (round >= 2 && prev !== null && prev.size > 0) {
+        const overlap = cand.critique.filter((c) => prev.has(c)).length;
+        if (overlap >= 2) {
+          const stuck = cand.critique.filter((c) => prev.has(c)).slice(0, 2);
+          note =
+            (note ? `${note}；` : "") +
+            `第 ${round} 轮痕迹收敛守卫：${overlap} 项上轮定罪痕迹未消除（${stuck.join("、")}），定向修订无效，停止后续轮次`;
+          break;
+        }
+      }
+      // 更新基准（在守卫判定之后、bestText 更新之前——本轮定罪清单是下一轮的靶子）
+      if (cand.critique.length) {
+        prevCrimes = new Set(cand.critique);
+      }
+      if (fpForL1.issues.length) {
+        // 非统计软项才进回退基准（节奏类是趋势信号，会随切句波动）
+        prevFingerprintIssues = new Set(
+          fpForL1.issues
+            .filter((i) => i.name !== "AI 套话残留" && i.name !== "段首过渡词残留")
+            .map((i) => i.name),
+        );
+      }
     } else {
       roundScores.push(-1); // 评分失败不阻断流程，标记 -1
     }

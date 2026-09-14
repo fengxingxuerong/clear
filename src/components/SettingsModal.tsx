@@ -26,9 +26,16 @@ interface SettingsModalProps {
   ) => void;
 }
 
+// v0.9.8 P0 收敛（七）：默认风格由 casual 改为 plain（见 DEFAULT_API.style 注释）。
+// 因此「默认」标记从 casual 移到 plain；casual 保留为"更口语"的强表达档。
+//
+// 为什么不是 casual 做默认：实测（scripts/_style_cost.ts）casual 的四个口语注入器
+// 会往文本里塞垫词（要我说/说真的/不信？那你自己试试），而这些正是机器味检测的
+// 命中词 —— 等于一边拆机器味一边造机器味。plain 四组样本 80/80 全过且最高分
+// 压在 20 以下，casual 三组漏判、最高分冲到 40。
 const STYLE_OPTIONS: { value: RewriteStyle; label: string }[] = [
-  { value: "casual", label: "自然口语（默认）" },
-  { value: "plain", label: "平实书面（报告/公众号）" },
+  { value: "plain", label: "平实书面（默认）" },
+  { value: "casual", label: "自然口语（更口语化）" },
   { value: "academic", label: "学术体（论文降AIGC）" },
 ];
 

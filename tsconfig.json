@@ -17,5 +17,13 @@
     "noFallthroughCasesInSwitch": true
   },
   "include": ["src", "scripts"],
-  "exclude": ["scripts/archive", "node_modules", "dist", "electron-app", "electron-dist"]
+  "exclude": [
+    "scripts/archive",
+    "scripts/eval",
+    "scripts/_*.ts",
+    "node_modules",
+    "dist",
+    "electron-app",
+    "electron-dist"
+  ]
 }

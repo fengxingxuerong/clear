@@ -157,7 +157,30 @@ export const DEFAULT_API: ApiConfig = {
   deepMode: true,
   judgeModel: "",
   altModel: "",
-  style: "casual",
+  // v0.9.8 P0 收敛（七）：默认风格 casual → plain。
+  //
+  // 实测依据（scripts/_style_cost.ts，4 组真实 AI 文本 × 4 档 × 20 seed = 320 次）：
+  //
+  //   文本             原文   casual 成功/均值/max    plain 成功/均值/max
+  //   A 公众号议论文     39    69/80 · 14.7 / 38       80/80 · 11.7 / 20
+  //   B 工作总结        12    76/80 ·  8.0 / 34       80/80 ·  3.4 /  8
+  //   C 产品介绍         6    80/80 ·  2.9 / 24       80/80 ·  1.4 /  6
+  //   D 议论文长文       18    76/80 ·  4.3 / 40       80/80 ·  0.8 /  8
+  //
+  // plain 四组全部 80/80 通过且 max 全在 20 以下；casual 三组漏判、max 冲到 38/34/40。
+  // 交叉验证（scripts/_inj_ab.ts）：casual 的污染上界 T1=100 / T2=56 / T4=40，
+  // plain 对应 56 / 30 / 16。差异全部来自 casual 独有的四个口语注入器
+  // （injectParentheticals / injectOpinion / injectParentheticNotes / injectFragments）。
+  //
+  // 关键反直觉点：plain 不是"去味更弱"而是"去味更强"。
+  // 原先的假设是 casual 更口语化 → 更像人 → 分数更低，实测相反：
+  // 引擎的"口语化手法"就是往文本里塞垫词，而垫词正是标尺判定的机器味。
+  // casual 等于一边拆机器味、一边造机器味。
+  //
+  // 另验证（scripts/_dialogue_style.ts）：casual 在对话/叙事/人写三体裁上
+  // 与 plain、academic 完全同分（这些体裁本就被 skipSelfQA 挡住注入器），
+  // 即 casual 没有任何一个体裁上的量化优势。
+  style: "plain",
   reasoningEffort: undefined,
   maxWaitSeconds: 0,
   maxApiCalls: 0,
