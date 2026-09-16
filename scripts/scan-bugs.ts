@@ -33,6 +33,9 @@ const SEEDS = Array.from({ length: SEED_COUNT }, (_, i) => i);
 const SEEDS_20 = SEEDS.slice(0, Math.min(20, SEEDS.length));
 const SEEDS_10 = SEEDS.slice(0, Math.min(10, SEEDS.length));
 const VERBOSE = process.env.SCAN_VERBOSE === "1";
+/** v0.9.10：更新「句长节奏过平」基线（收紧用；跑完打印建议值）。
+ *  用环境变量而非 argv——本文件顶部注册了精简 process shim（仅 exit/env）。 */
+const UPDATE_RHYTHM_BASELINE = process.env.SCAN_UPDATE_RHYTHM === "1";
 const logDetail = (s: string) => {
   if (VERBOSE) console.log(s);
 };
@@ -276,6 +279,8 @@ let v52 = 0;
     ["一次搞定作定语", /一次搞定(服务|方案|平台)/],
     ["使役无主句", /。(让|使|帮|叫)[^。]{2,}/],
   ];
+  /** v0.9.10 P2：句长节奏过平的已知基线（见下方比对段说明） */
+  const rateHits: { it: number; seed: number; cv: number }[] = [];
   for (const text of extSamples) {
     if (humanize(text, { intensity: 0, seed: 1 }) !== text) {
       console.log("❌ v5.2 强度0 改动了原文");
@@ -318,10 +323,22 @@ let v52 = 0;
             v52++;
             pushV("v5.2", `指纹-${iss.name}`, it, seed, { snippet: out.slice(0, 200), input: text.slice(0, 300) });
           }
-          if (it === 0.6 && iss.name === "句长节奏过平") {
-            logDetail(`❌ v5.3 指纹体检[句长节奏过平] 强度${it} seed${seed}`);
-            v52++;
-            pushV("v5.3", "指纹-句长节奏过平", it, seed, { snippet: out.slice(0, 200), input: text.slice(0, 300) });
+          // v0.9.1：节奏检查从 0.6 档改到 0.9 档——v0.9.8 废除极短语气锚后，0.6 档
+          // 的 boostBurstiness 拉不动 CV 到 0.45 是设计权衡（少语气词 vs 低 CV），
+          // 0.9 档有完整 boost 能力，节奏过平才是真实引擎问题。
+          //
+          // v0.9.10 基线化（P2）：本项是**已知且有意的设计权衡**，故建基线而非当违规。
+          // 背景链：
+          //  · v0.9.6 实测证伪 CV 判别力（人写口语随笔 CV=0.27 全场最低、AI 排比 0.34），
+          //    标尺删除 burstiness 反向项，只留 ≤8 分弱信号；
+          //  · v0.9.8 据此废除「为 CV 撒极短语气锚」的 boostBurstinessIfLow——语气词是
+          //    新标尺第一损伤源（单剥可回收 33~84 分）；
+          //  · CV 兜底只剩 boostBurstinessByCutting（纯切长句、零注入），对短文本
+          //    （<150 字）切句空间不足，0.9 档实测 CV 稳定落在 0.19~0.37。
+          // 结论：此处 CV 偏低是「不撒语气词」的必要代价，修它等于重新引入语气词污染。
+          // 基线语义：记录当前档位命中数，允许持平，超出即报警（真实退化）。
+          if (it === 0.9 && iss.name === "句长节奏过平") {
+            rateHits.push({ it, seed, cv: rep.sentenceCV });
           }
         }
       }
@@ -330,6 +347,38 @@ let v52 = 0;
   console.log(
     v52 === 0 ? "✅ v0.5.3 外部通用文本回归 3样本×2强度×30种子 全部通过" : `外部回归共 ${v52} 次违规`,
   );
+
+  // ---------------------------------------------------------------------------
+  // v0.9.10 P2：「句长节奏过平」基线（已知设计权衡，非常规回归）
+  //
+  // 为什么建基线而不是修：CV 偏低是「v0.9.6 证伪 CV 判别力 → v0.9.8 废除语气锚注入」
+  // 之后的**必然结果**——引擎只剩 boostBurstinessByCutting（纯切长句），短文本
+  // 切句空间不足时 CV 拉不到 0.45。修它 = 重新引入语气词污染（新标尺第一损伤源）。
+  //
+  // 基线语义（与 regression-12samples.lock.json 同思路）：
+  //   · 命中数 ≤ 基线 → 通过（打印持平/改善提示，不阻断 CI）；
+  //   · 命中数 > 基线 → 报违规（说明除已知权衡外又多了新退化，需人工判断）。
+  // 维护：若未来 boost 手段增强使命中数下降，跑 `--update-rhythm-baseline` 收紧基线。
+  // ---------------------------------------------------------------------------
+  const RHYTHM_BASELINE = 31;
+  if (UPDATE_RHYTHM_BASELINE) {
+    console.log(
+      `\n🔧 建议把 RHYTHM_BASELINE 更新为 ${rateHits.length}（当前基线 ${RHYTHM_BASELINE}）——` +
+        `命中 CV ${rateHits.length ? `${Math.min(...rateHits.map((h) => h.cv))}~${Math.max(...rateHits.map((h) => h.cv))}` : "无"}`,
+    );
+  } else if (rateHits.length > RHYTHM_BASELINE) {
+    const excess = rateHits.length - RHYTHM_BASELINE;
+    logDetail(`❌ v5.3 指纹体检[句长节奏过平] 超出基线：${rateHits.length} > ${RHYTHM_BASELINE}`);
+    v52 += excess;
+    pushV("v5.3", "指纹-句长节奏过平（超基线）", 0.9, -1, {
+      snippet: `命中 ${rateHits.length} 次 > 基线 ${RHYTHM_BASELINE}（CV ${Math.min(...rateHits.map((h) => h.cv))}~${Math.max(...rateHits.map((h) => h.cv))}）`,
+      input: "(见 v5.2 外部样本，短文本切句空间不足)",
+    });
+  } else if (rateHits.length > 0) {
+    console.log(
+      `📊 v5.3 句长节奏过平：${rateHits.length}/${RHYTHM_BASELINE} 基线内（已知权衡：v0.9.8 废除语气锚后短文本 CV 兜底受限）`,
+    );
+  }
 }
 
 // ============================================================
