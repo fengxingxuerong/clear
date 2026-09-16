@@ -129,6 +129,11 @@ function judgeGuardBlocks(from: string, context: string, before: string): boolea
   if (before && /[A-Za-z0-9._\-/]$/.test(before)) return true;
   if (context && /^[A-Za-z0-9._\-/]/.test(context)) return true;
 
+  // v0.9.1 名词位替身守卫：「的+V」是中文名物化修饰结构（"实现的突破"=the realized breakthrough），
+  // 替换 V 为口语替身会产出"的弄成的突破"式病句——口语动词不能做名物化定语。
+  // scan-bugs v5.2「名词位替身」86 次违规的根因。通用守卫：前缀"的"即跳过。
+  if (before && /的$/.test(before)) return true;
+
   const pre = GUARD_BEFORE[from];
   if (pre) {
     for (const g of pre) {

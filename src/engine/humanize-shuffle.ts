@@ -41,6 +41,10 @@ import {
 
 import { EXTRA_SENT_STARTERS, EXTRA_STRIP_CONNECTIVES } from "./humanize-vocab-extra.ts";
 
+// v0.9.1 使役无主句守卫：clampAvgSentencesInBlock 切句前检查后半句能否独立成句
+// （「减轻教师的负担，让教师将…」切成「。让教师将…」= 无主病句，scan-bugs v5.2 106 次违规）
+import { fragmentCanStand } from "./humanize-vocab.ts";
+
 // P7-extra 引擎级体裁联动（与 classify-genre.ts 存在模块循环，但双方均只在函数体内
 // 延迟引用对方导出、无顶层求值依赖，ESM 活绑定可安全解析）
 import { classifyGenre } from "./classify-genre.ts";
@@ -876,6 +880,7 @@ export function structuralShuffleParagraph(
     zhuqueMode?: boolean;
     expoForceP3?: boolean;
     skipSceneInject?: boolean;
+    skipSelfQA?: boolean; // v0.9.1：narrative/humanHead 跳过全部自问自答
     style?: RewriteStyle;
   } = {},
 ): string {
@@ -907,8 +912,9 @@ export function structuralShuffleParagraph(
   // 按行扫描判定：前置注入可能把多行折叠成单段并污染段首，^ 锚定的整段匹配会失配击穿保护
   // v0.9 专家修复 P5：academic 文风禁用自问自答（「不信？」「例子呢？」是纯口语装置，
   // academic 承诺仅消结构规律与套话，不得引入口语注入）
+  // v0.9.1：narrative/humanHand 体裁级跳过全部自问自答（"例子呢？"不属于叙事/人写原稿）
   const sceneBlockPara = (opts.skipSceneInject ?? false) && paraHasSceneBlock(paragraph);
-  if (!sceneBlockPara && style !== "academic") {
+  if (!sceneBlockPara && style !== "academic" && !(opts.skipSelfQA ?? false)) {
     working = injectSelfQA(working, rng, intensity, style);
   }
   if (splitAfter !== undefined && splitAfter > 0 && splitAfter < working.length - 1) {
@@ -1163,6 +1169,10 @@ function clampAvgSentencesInBlock(text: string, targetAvg: number, maxCuts: numb
       const cand = rank[k];
       const m = findGuardedCutNear(cand.s, Math.floor(cand.s.length / 2));
       if (m !== -1) {
+        // v0.9.1 使役无主句守卫：切出的后半句若以"让/使/帮/叫"开头（承接前句宾语），
+        // 不能独立成句——跳过该候选，换下一句切（scan-bugs v5.2「使役无主句」106 次违规）
+        const rest = cand.s.slice(m + 1).trim();
+        if (!fragmentCanStand(rest)) continue;
         t = cand;
         cutIdx = m;
         break;
@@ -1234,10 +1244,17 @@ export function capParticleSentenceDensity(text: string, maxPerPara = 1, stripSu
       const sents = splitSentences(para);
       // v0.9 长尾：整段只剩短碎句（重切/桥接把正文抽走后留下「道理是这个道理。行。」
       // 式空段）→ 整段丢弃（全段句子均 ≤8 字即视为无正文残留）
+      // v0.9.10 修正：原判据「全段句子均 ≤8 字」会把普通短句段整段清空——
+      // 8 字是常见中文句长（「这个功能确实好用。」正好 8 字），不是碎句，
+      // 实测该函数直接把这类段落返回成空串，与主流程注释「不动正常短句」相悖。
+      // 空壳段的真特征是「语气词残留 + 全段极短」，故收紧为：≥2 句、均 ≤5 字、
+      // 且至少含 1 条独立语气句（确有注入器残留痕迹）。
       const bareAll = sents.filter((s) => s.trim());
+      const bareOf = (s: string) => s.replace(/[\s。！？!?…，、；：]/g, "");
       if (
-        bareAll.length > 0 &&
-        bareAll.every((s) => s.replace(/[\s。！？!?…，、；：]/g, "").length <= 8)
+        bareAll.length >= 2 &&
+        bareAll.every((s) => bareOf(s).length <= 5) &&
+        bareAll.some((s) => PARTICLE_SENT_RE.test(bareOf(s)))
       ) {
         return "";
       }
