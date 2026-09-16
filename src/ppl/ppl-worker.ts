@@ -11,7 +11,13 @@
  * 打分数学与 Electron 主进程引擎一致：MLM 多位置掩码 + logsumexp，
  * 选点/求值逻辑复用共享内核 scorer-core.ts。
  */
-import { MASK_GROUPS, maskGroups, maskedMeanNll, selectTargets } from "./scorer-core.ts";
+import {
+  MASK_GROUPS,
+  maskGroups,
+  maskedMeanNll,
+  selectTargets,
+  toNumberList,
+} from "./scorer-core.ts";
 
 type Transformers = typeof import("@huggingface/transformers");
 
@@ -47,26 +53,13 @@ async function ensure(mirror?: string, onProgress?: (p: unknown) => void): Promi
   return ctx;
 }
 
-function toList(x: unknown): number[] | null {
-  if (x == null) return null;
-  const obj = x as { tolist?: () => unknown[]; data?: ArrayLike<number> };
-  if (typeof obj.tolist === "function") {
-    const v = obj.tolist();
-    return Array.isArray(v) ? (v.flat(Number.POSITIVE_INFINITY) as unknown[]).map(Number) : null;
-  }
-  if (obj.data != null) return Array.from(obj.data, (n) => Number(n));
-  return Array.isArray(x)
-    ? ((x as unknown[]).flat(Number.POSITIVE_INFINITY) as unknown[]).map(Number)
-    : null;
-}
-
 async function scoreWindow(c: Ctx, chars: string[]) {
   const tokenize = c.tokenizer as unknown as (
     s: string,
     o: Record<string, unknown>,
   ) => Promise<TokenizeResult>;
   const encoded = await tokenize(chars.join(""), { add_special_tokens: true });
-  const ids = toList(encoded.input_ids);
+  const ids = toNumberList(encoded.input_ids);
   if (!ids || ids.length === 0) throw new Error("tokenizer 输出异常");
   const targets = selectTargets(ids);
   if (targets.length === 0) return { meanNll: null, scoredCount: 0 };

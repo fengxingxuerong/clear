@@ -8,6 +8,7 @@ import {
   SENSENOVA_PRESET,
 } from "../api/llm";
 import { DetectorConfig, DEFAULT_DETECTOR } from "../api/detector";
+import { hasSecureStore } from "../store";
 import type { LocalSettings } from "../store";
 
 interface SettingsModalProps {
@@ -119,6 +120,12 @@ export function SettingsModal({
             placeholder="sk-..."
           />
         </label>
+        {!hasSecureStore() && (
+          <p className="modal-tip" style={{ marginTop: -6, color: "var(--warn)" }}>
+            ⚠️ Web 版 Key 以明文存储于浏览器 localStorage，关闭页面后仍在。
+            如担心安全，请使用 Electron 桌面版（系统级加密存储），或退出前手动清除浏览器数据。
+          </p>
+        )}
         <label className="row" style={{ alignItems: "flex-start" }}>
           <span>
             Key 池

@@ -48,6 +48,21 @@ export interface CalibSample {
   ts: number;
 }
 
+/**
+ * 数值字段的容错读取：空值必须保持"缺失"，不能塌缩成 0。
+ *
+ * 0 在评分域里是一个**真实的值**（0 分 = 完全人类 / 官方判定无 AI 痕迹），
+ * 而 `Number(null) === 0`、`Number("") === 0`——旧写法让"没填过"看起来像
+ * "填了 0"，于是存储里一条半损坏的样本会凭空变成 (local=0, official=99)
+ * 或 (local=80, official=0) 的观测点，直接把最小二乘拟合线拽歪，
+ * 而实验室 UI 上只显示"多了一条校准点"，看不出异常。
+ */
+function numOrNull(v: unknown): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 export function loadSamples(): CalibSample[] {
   try {
     const raw = localStorage.getItem(K_SAMPLES);
@@ -55,15 +70,15 @@ export function loadSamples(): CalibSample[] {
     const arr = JSON.parse(raw);
     if (!Array.isArray(arr)) return [];
     return arr
-      .filter((s) => s && typeof s.text === "string" && isFinite(Number(s.surface)))
+      .filter((s) => s && typeof s.text === "string" && numOrNull(s.surface) !== null)
       .map((s) => ({
         id: String(s.id ?? genId()),
         name: String(s.name ?? "未命名样本"),
         text: s.text,
         source: (s.source ?? "manual") as SampleSource,
-        surface: Number(s.surface),
-        semantic: s.semantic == null ? null : Number(s.semantic),
-        official: s.official == null ? null : Number(s.official),
+        surface: numOrNull(s.surface) as number,
+        semantic: numOrNull(s.semantic),
+        official: numOrNull(s.official),
         officialLabel: s.officialLabel ?? null,
         ts: Number(s.ts) || Date.now(),
       }));
@@ -259,13 +274,14 @@ export function collectPoints(): CalibPoint[] {
     if (raw) {
       const arr = JSON.parse(raw);
       if (Array.isArray(arr)) {
-        legacy = arr
-          .filter((p) => p && isFinite(Number(p.local)) && isFinite(Number(p.official)))
-          .map((p) => ({
-            local: Number(p.local),
-            official: Number(p.official),
-            ts: Number(p.ts) || 0,
-          }));
+        legacy = arr.flatMap((p) => {
+          const local = numOrNull(p?.local);
+          const official = numOrNull(p?.official);
+          // 空值同样不得塌缩成 0：旧版 key 里一条 {local:null,official:99}
+          // 会伪装成 (0, 99) 的观测点，把拟合线往下拽
+          if (local === null || official === null) return [];
+          return [{ local, official, ts: Number(p.ts) || 0 }];
+        });
       }
     }
   } catch {

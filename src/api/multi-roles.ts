@@ -22,6 +22,7 @@
 import { readFileSync } from "fs";
 import { existsSync } from "fs";
 import type { JudgeSeat } from "./judge-panel";
+import { splitKeys } from "./llm-config";
 
 /** 用户提供的通道清单原文件路径（不进 git） */
 const ENDPOINTS_FILE = ["endpoints.local.json", "../endpoints.local.json"];
@@ -48,10 +49,8 @@ function loadKeys(): { sensenova: string[]; amd: string; nvidia: string } {
   // sensenova：复用项目既有 gitignored Key 文件
   let sensenova: string[] = [];
   try {
-    sensenova = readFileSync("scripts/.sensenova-keys", "utf8")
-      .split(/[\n,;]+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
+    // 复用全局 Key 拆分规则（支持全角分隔 + 去重），避免与设置面板两套行为
+    sensenova = splitKeys(readFileSync("scripts/.sensenova-keys", "utf8"));
   } catch {
     /* 文件不存在时为空 */
   }

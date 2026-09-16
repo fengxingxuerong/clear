@@ -192,15 +192,24 @@ export const DEFAULT_API: ApiConfig = {
   persona: "default",
 };
 
-/** 解析 Key 池：apiKey 与 apiKeys 合并去重（换行/逗号/分号分隔均可） */
-export function effectiveKeys(cfg: ApiConfig): string[] {
-  const raw = [cfg.apiKey || "", cfg.apiKeys || ""].join("\n");
+/**
+ * 拆分 Key 串：换行/半角逗号分号/全角逗号分号均可，去空白、去重、保序。
+ * 全角必须支持——设置面板是中文界面，用户复制粘贴时带「，」「；」是常态；
+ * 只认半角会导致第二个之后的 Key 被静默吞掉（表现：明明填了 3 个 Key 却照样 429）。
+ * 全局唯一实现：multi-roles 读本地 Key 文件也走这里，避免两套规则漂移。
+ */
+export function splitKeys(raw: string): string[] {
   const seen = new Set<string>();
   for (const k of raw.split(/[\n,;，；]+/)) {
     const t = k.trim();
     if (t) seen.add(t);
   }
   return [...seen];
+}
+
+/** 解析 Key 池：apiKey 与 apiKeys 合并去重（换行/逗号/分号分隔均可） */
+export function effectiveKeys(cfg: ApiConfig): string[] {
+  return splitKeys([cfg.apiKey || "", cfg.apiKeys || ""].join("\n"));
 }
 
 /* ----------------------------- 深度去味闭环常量 ----------------------------- */

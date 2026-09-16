@@ -5,6 +5,7 @@ import {
   nllToPerplexity,
   planWindows,
   selectTargets,
+  toNumberList,
   type PplFeature,
   type PplWindow,
 } from "./scorer-core.ts";
@@ -167,5 +168,44 @@ describe("pplIssues（metrics 层第 8 项判定）", () => {
       }),
     );
     expect(r).toEqual([]);
+  });
+});
+
+describe("toNumberList（张量归一）", () => {
+  it("Tensor 对象：tolist() 返回一维数组", () => {
+    expect(toNumberList({ tolist: () => [1, 2, 3] })).toEqual([1, 2, 3]);
+  });
+
+  it("Tensor 对象：tolist() 返回二维嵌套需展平", () => {
+    expect(toNumberList({ tolist: () => [[101, 22], [33, 102]] })).toEqual([101, 22, 33, 102]);
+  });
+
+  it("Tensor 对象：tolist() 返回三维嵌套也展平", () => {
+    expect(toNumberList({ tolist: () => [[[101, 22, 102]]] })).toEqual([101, 22, 102]);
+  });
+
+  it("降级路径：只有 .data（TypedArray）", () => {
+    expect(toNumberList({ data: Int32Array.from([5, 6, 7]) })).toEqual([5, 6, 7]);
+  });
+
+  it("纯嵌套数组（测试桩）", () => {
+    expect(toNumberList([[[1]], [[2]]])).toEqual([1, 2]);
+  });
+
+  it("BigInt64Array 也转成 number（worker 里张量是 int64）", () => {
+    expect(toNumberList({ data: BigInt64Array.from([1n, 2n]) })).toEqual([1, 2]);
+  });
+
+  it("null / undefined 返回 null 而不是空数组（避免算出假性 0 分）", () => {
+    expect(toNumberList(null)).toBeNull();
+    expect(toNumberList(undefined)).toBeNull();
+  });
+
+  it("tolist() 返回非数组时返回 null", () => {
+    expect(toNumberList({ tolist: () => 123 })).toBeNull();
+  });
+
+  it("既无 tolist 也无 data 且非数组时返回 null", () => {
+    expect(toNumberList({ foo: 1 })).toBeNull();
   });
 });

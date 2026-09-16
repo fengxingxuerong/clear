@@ -97,6 +97,15 @@ export interface OfficialResult {
   note: string;
 }
 
+/** 档位词之后允许的分隔（"："「占比」空格等），不含数字与百分号；数字为第 2 捕获组 */
+const PCT_AFTER = "[^\\d%]{0,12}(\\d+(?:\\.\\d+)?)\\s*%";
+/**
+ * 任意百分比。前置守卫 `(?<![\d.-])` 的作用：
+ * ① 不要把 "-5%" 读成 5%（负号被吃掉等于凭空造一个正数）；
+ * ② 不要从小数片段里抠数字（"1.2.3%" 这类脏粘贴不该产出看似合理的分数）。
+ */
+const PCT_ANY = /(?<![\d.-])(\d+(?:\.\d+)?)\s*%/g;
+
 const LABELED: Array<{ re: RegExp; label: ZhuqueLabel; text: string }> = [
   { re: /(AI\s*生成|AI\s*特征)/, label: "ai", text: "AI生成/AI特征" },
   { re: /(疑似\s*AI\s*辅助|疑似\s*AI)/, label: "suspected", text: "疑似AI辅助" },
@@ -123,11 +132,19 @@ export function parseOfficialResult(raw: string): OfficialResult {
     }
   }
 
-  // 2. 概率：优先取"档位词附近"的百分比（如"AI生成 99.99%"），否则取第一个百分比
+  // 2. 概率：必须与档位取自同一处。
+  //    反例（v0.9.10 修复）：官方三段占比 "人工特征 0.01% 疑似AI辅助 0% AI生成 99.99%"
+  //    旧逻辑先按优先级定档为 ai，再取文本里第一个百分比 → 拿到人工特征的 0.01%，
+  //    label=ai 却配 probability=0.01，这种矛盾点写进校准库会把映射彻底带偏。
+  //    改为：命中哪个档位词，就取该档位词后面的百分比。
   let probability: number | null = null;
-  const near: RegExp[] = [
-    /(AI\s*生成|AI\s*特征|疑似\s*AI|人工特征)[^\d%]{0,12}(\d+(?:\.\d+)?)\s*%/,
-  ];
+  const near: RegExp[] = [];
+  if (label !== null) {
+    const hit = LABELED.find((x) => x.label === label);
+    if (hit) near.push(new RegExp(hit.re.source + PCT_AFTER));
+  }
+  // 未命中档位词时退回通用形态（"AI 生成概率：98.47%"）
+  near.push(new RegExp("(AI\\s*生成|AI\\s*特征|疑似\\s*AI|人工特征)" + PCT_AFTER));
   for (const re of near) {
     const m = s.match(re);
     if (m) {
@@ -136,7 +153,7 @@ export function parseOfficialResult(raw: string): OfficialResult {
     }
   }
   if (probability === null) {
-    const all = s.match(/(\d+(?:\.\d+)?)\s*%/g);
+    const all = s.match(PCT_ANY);
     if (all && all.length) probability = clampPct(parseFloat(all[0]));
   }
 

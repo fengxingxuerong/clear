@@ -24,7 +24,9 @@ export const DEFAULT_DETECTOR: DetectorConfig = {
 
 function getPath(obj: unknown, path: string): unknown {
   return path.split(".").reduce((o: unknown, k: string) => {
-    if (o == null) return o;
+    // 中途断裂必须显式返回 undefined：若原样返回 null，外层 Number(null) === 0，
+    // 检测器故障会被静默读成「0 分 = 完全人类」——失败方向最危险的一种。
+    if (o == null) return undefined;
     if (typeof o === "object" && k in (o as Record<string, unknown>)) {
       return (o as Record<string, unknown>)[k];
     }

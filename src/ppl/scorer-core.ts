@@ -161,6 +161,31 @@ export function selectTargets(ids: number[]): ScoredToken[] {
 }
 
 /**
+ * 把 transformers.js 的张量/嵌套数组归一成 number[]。
+ *
+ * 三种实际遇到的形状：
+ *  · Tensor 对象：有 tolist()，但返回嵌套数组（[[]] 或 [[[]]]），需展平
+ *  · Tensor 对象降级：只有 .data（TypedArray）
+ *  · 纯嵌套数组（测试桩/旧版本）
+ * 归一失败一律返回 null 让调用方抛错——静默拿到空数组会让 PPL 层算出 0 分，
+ * 比直接报错危险得多（分数会假性变好）。
+ */
+export function toNumberList(x: unknown): number[] | null {
+  if (x == null) return null;
+  const obj = x as { tolist?: () => unknown; data?: ArrayLike<number> };
+  if (typeof obj.tolist === "function") {
+    const v = obj.tolist();
+    return Array.isArray(v)
+      ? (v.flat(Number.POSITIVE_INFINITY) as unknown[]).map(Number)
+      : null;
+  }
+  if (obj.data != null) return Array.from(obj.data, (n) => Number(n));
+  return Array.isArray(x)
+    ? ((x as unknown[]).flat(Number.POSITIVE_INFINITY) as unknown[]).map(Number)
+    : null;
+}
+
+/**
  * 从整段 logits（长度 seqLen*vocabSize 的扁平数组）按目标位计算
  * log softmax 后取原词分量的均值负对数似然（nat）。数值稳定实现。
  */
