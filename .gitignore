@@ -43,3 +43,6 @@ endpoints.local.json
 # 一次性实验/诊断脚本（_ 前缀；已跟踪的除外）
 scripts/_*.ts
 scripts/eval/
+
+# 覆盖率产物
+coverage/

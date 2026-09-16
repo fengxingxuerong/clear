@@ -1,7 +1,7 @@
 {
   "name": "ai-humanizer",
   "private": true,
-  "version": "0.9.9",
+  "version": "0.9.10",
   "type": "module",
   "description": "趣AI味 · 本地离线可用、可选接 LLM 的中文 AI 文本拟人化工具，对标朱雀",
   "scripts": {
@@ -13,7 +13,8 @@
     "test:quality": "tsx scripts/verify-quality.ts",
     "bench": "tsx scripts/bench.ts",
     "test": "vitest run",
-    "lint": "eslint src/",
+    "test:cov": "vitest run --coverage --coverage.thresholds.lines=75 --coverage.thresholds.statements=75",
+    "lint": "eslint src/ scripts/",
     "fmt": "prettier --write \"src/**/*.{ts,tsx,css}\" \"*.{ts,tsx,json,mjs}\" \"vite.config.ts\"",
     "build:electron": "tsc -b && vite build && node scripts/sync-dist.mjs"
   },
@@ -21,14 +22,17 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
+  "optionalDependencies": {
+    "@huggingface/transformers": "^4.2.0"
+  },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@huggingface/transformers": "^4.2.0",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.3",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^5.2.0",
+    "@vitest/coverage-v8": "^4.1.11",
     "eslint": "^10.9.0",
     "globals": "^17.11.0",
     "happy-dom": "^20.12.0",

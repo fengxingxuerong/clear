@@ -358,7 +358,9 @@ let v52 = 0;
   // 基线语义（与 regression-12samples.lock.json 同思路）：
   //   · 命中数 ≤ 基线 → 通过（打印持平/改善提示，不阻断 CI）；
   //   · 命中数 > 基线 → 报违规（说明除已知权衡外又多了新退化，需人工判断）。
-  // 维护：若未来 boost 手段增强使命中数下降，跑 `--update-rhythm-baseline` 收紧基线。
+  // 维护：若未来 boost 手段增强使命中数下降，用
+  //       `SCAN_UPDATE_RHYTHM=1 npm run test:regress` 打印建议值后手动收紧基线
+  //       （本文件顶部注册了精简 process shim，无 argv，故用环境变量而非 CLI flag）。
   // ---------------------------------------------------------------------------
   const RHYTHM_BASELINE = 31;
   if (UPDATE_RHYTHM_BASELINE) {

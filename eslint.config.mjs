@@ -35,17 +35,14 @@ export default tseslint.config(
     },
   },
   {
+    // 测试文件与 CLI 工具允许 any（桩对象/外部数据形状不定）
     files: [
       "src/**/*.test.ts",
+      "src/**/*.test.tsx",
+      "scripts/**/*.test.ts",
       "scripts/scan-bugs.ts",
       "scripts/bench.ts",
       "scripts/verify-quality.ts",
-      "scripts/zhique-prep.ts",
-      "scripts/api-test.ts",
-      "scripts/api-test-2.ts",
-      "scripts/multi-case-test.ts",
-      "scripts/ox-test.ts",
-      "scripts/zhuque-test.ts",
     ],
     rules: {
       "@typescript-eslint/no-explicit-any": "off",
