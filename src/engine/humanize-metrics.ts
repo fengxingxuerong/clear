@@ -241,7 +241,7 @@ export function aiScore(text: string): ScoreBreakdown {
   // 权重常量（集中定义，便于标定时对照）
   //
   // 标定依据：scripts/_calib_holdout.ts（训练集）与 _calib_margin.ts（训练+验证双集）
-  // 全程在 D:\deep\quaiwei 上实测，样本集见 scripts/_calib_corpus.ts。
+  // 全程在本仓库上实测（原 D:\deep\quaiwei，2026-09-18 迁至 D:\projects\quaiwei），样本集见 scripts/_calib_corpus.ts。
   //
   // 标定过程记录：
   //   初版权重（10/10/14/9，污染 12/20/30）→ 验证集漏判 2 项（V5 垫词 30、V7 碎片 38）

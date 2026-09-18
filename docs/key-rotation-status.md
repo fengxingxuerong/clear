@@ -16,6 +16,6 @@
 
 ```
 1. 控制台重置 Key
-2. 编辑 D:\deep\quaiwei\scripts\.sensenova-keys（一行一个新 Key）
+2. 编辑 D:\projects\quaiwei\scripts\.sensenova-keys（一行一个新 Key）
 3. 验证：npx tsx -e "import {loadPresetKeys} from './src/api/llm-config'; console.log(loadPresetKeys().length)"
 ```
