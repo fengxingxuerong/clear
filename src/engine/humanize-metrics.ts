@@ -72,6 +72,8 @@ export interface ScoreBreakdown {
   brokenHits?: number;
   /** v0.9.6：句式损伤计数（断句/连接词丢失等结构性缺陷） */
   structureHits?: number;
+  /** v0.9.13：错别字命中数。此前只加进 score 却不外露，导致"各项皆 0 却满分 100"无法诊断 */
+  typoHits?: number;
 }
 
 /**
@@ -199,6 +201,7 @@ export function aiScore(text: string): ScoreBreakdown {
       avgLen: 0,
       brokenHits: 0,
       structureHits: 0,
+      typoHits: 0,
     };
   }
 
@@ -279,11 +282,14 @@ export function aiScore(text: string): ScoreBreakdown {
   // 严重程度等同病词，不该混在句式损伤里按 20 分计。独立后：
   //   - 单处错别字即得 30 分（接近但不到阈值），两处 60 分直接定性
   //   - 不与句式项的累加互相挤占
+  // 每项都必须写「引擎真实造出的错字形态」本身，不能用可选量词放宽：
+  // 旧式 /大这?家/ 把正常词「大家」也判成错字（每处 +30、两处 +60），
+  // 全仓语料 30 处命中全是真人写法、真错字 0 处——纯粹的假阳性发生器。
   const TYPO_PATTERNS: RegExp[] = [
     /再去年/g,
     /再上个/g,
     /是实上/g,
-    /大这?家/g,
+    /大这家/g,
     /时候候/g,
   ];
   let typoCount = 0;
@@ -391,6 +397,7 @@ export function aiScore(text: string): ScoreBreakdown {
     avgLen: Number(avgLen.toFixed(1)),
     brokenHits: broken,
     structureHits: structure,
+    typoHits: typoCount,
   };
 }
 

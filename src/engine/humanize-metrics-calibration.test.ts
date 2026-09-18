@@ -67,6 +67,12 @@ const HUMAN_CASES: [string, string][] = [
     "短促节奏·有意的短句",
     `雨停了。我出门。巷子里没什么人。只有一只猫。它看了我一眼。又低下头去。`,
   ],
+  [
+    "对话·含「大家」（v0.9.13 错别字项误伤回归）",
+    `张总（项目经理）：大家早上好，今天我们来开本周的项目周会。
+李工（前端负责人）：张总您好，我这边进展比较顺利，剩下的是兼容性测试。
+张总（项目经理）：好，那请大家在上线当天保持手机通讯畅通，有问题提前说。`,
+  ],
 ];
 
 /* ------------- MACHINE：引擎污染，应全部 >= CUTOFF ------------- */
@@ -146,5 +152,42 @@ describe("标尺区分度：真人写 vs 引擎污染（v0.9.7 盲区修复）",
     expect(humanMax, `真人写最高 ${humanMax} 与引擎最低 ${machineMin} 出现重叠`).toBeLessThan(
       machineMin,
     );
+  });
+});
+
+/**
+ * 错别字项专项（v0.9.13）
+ *
+ * 起因：旧式 /大这?家/ 把正常词「大家」判成错字（每处 +30、两处 +60），而 typoCount
+ * 只进 score 不外露 → 探针显示"各项命中 0"、分数却顶格，谁也查不出来。
+ * 全仓语料该模式命中 30 处全是真人写法、真错字 0 处。修后必须同时锁两件事：
+ * 正常词不罚、罚分项可诊断。
+ */
+describe("错别字项：不误伤「大家」，且命中数可外露诊断（v0.9.13）", () => {
+  it("真人写法「大家早上好 / 提醒大家 / 请大家」零罚分", () => {
+    const t = "大家早上好，今天我们来开周会。不过需要提醒大家的是，支付模块做了一次比对。请大家在上线当天保持通讯畅通。";
+    const r = aiScore(t);
+    expect(r.typoHits).toBe(0);
+  });
+
+  it("引擎真实造出的错字形态仍要抓到", () => {
+    expect(aiScore("大这家店不错。").typoHits).toBe(1);
+    expect(aiScore("规模再去年已经突破了 56.7 万亿元。").typoHits).toBe(1);
+    expect(aiScore("大这家店不错。时候候我们再说。").typoHits).toBe(2);
+  });
+
+  it("纯靠错字顶到 60 分的文本，breakdown 必须解释得出这 60 分", () => {
+    const r = aiScore("大这家店不错。大这家店也好。大这家店还行。");
+    expect(r.typoHits).toBeGreaterThanOrEqual(2);
+    expect(r.formulaicHits).toBe(0);
+    expect(r.brokenHits).toBe(0);
+    expect(r.structureHits).toBe(0);
+    expect(r.score).toBeGreaterThanOrEqual(60);
+  });
+
+  it("任何被打分的文本都外露 typoHits（杜绝再一次隐藏计分）", () => {
+    for (const t of ["", "今天很好。", "大这家店不错。", "值得注意的是，这事儿成了。"]) {
+      expect(aiScore(t).typoHits, `aiScore(${JSON.stringify(t)}) 未外露 typoHits`).toBeTypeOf("number");
+    }
   });
 });
