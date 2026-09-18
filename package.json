@@ -14,6 +14,7 @@
     "test:calib": "tsx scripts/calib-sanity.ts",
     "test:evidence": "tsx scripts/zhuque-evidence.ts audit",
     "check:release": "npm run test && npm run test:regress && npm run test:quality && npm run test:calib && npm run test:evidence",
+    "check:publish": "tsx scripts/zhuque-evidence.ts audit --strict",
     "bench": "tsx scripts/bench.ts",
     "test": "vitest run",
     "test:cov": "vitest run --coverage --coverage.thresholds.lines=75 --coverage.thresholds.statements=75",

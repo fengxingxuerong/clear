@@ -47,13 +47,17 @@ git 冲突标记 / 极性读反 / 不足 350 字 / 孤儿 id / strict 退出码�
 【1】参数一致性与【2】拟合误差是自洽检查，不过即拦；【3】x 轴漂移做成**基线棘轮**（当前 6 点、Δmax 35），
 只许变好不许变差，`--ceiling` 可临时收紧自测——实测 `--ceiling 5` 退出 1、默认退出 0。
 
-**5) 新增 `npm run check:release`**：test + test:regress + test:quality + test:calib + test:evidence 串成一道门。
+**5) 新增两道聚合门（此前没有任何一道串起来的发布门）**
+`npm run check:release` = test + test:regress + test:quality + test:calib + test:evidence，日常与发版前跑；
+`npm run check:publish` = `zhuque-evidence audit --strict`，把"历史点无凭证"也升级成硬伤。
+两者故意分档：前者今天全绿（可用作日常门），后者今天**必然红**（覆盖率 0/18）——它就是那条
+"没有带截图的官方真值就别对外发布"的实体闸门，不是装饰。
 
 **随版收编**（v0.9.12 之后落地、此前无条目的三项）：多候选赛马改有界并发（实测墙钟 −25%）、
 修订轮"字数只减不增"改为等量替换（±10%，机制修正、效果未证）、摘除被跟踪的明文 Key 并给 pre-commit 加密钥拦截。
 
-**门禁**：`tsc --noEmit` 0、`eslint src/ scripts/` 0、`vitest run` **650 全通过**（+46）、
-`scan-bugs` 0 违规、`verify-quality` 通过、`calib-sanity` 通过（6/6 基线）。
+**门禁**：`tsc --noEmit` 0、`eslint src/ scripts/` 0、`vitest run` **655 全通过**（+51）、
+`scan-bugs` 0 违规、`verify-quality` 通过、`calib-sanity` 通过（6/6 基线）、`check:release` 退出 0。
 
 ## v0.9.12 更新（LLM 通路反馈回路纠偏：三处自相矛盾清算 + 交付来源可见）
 

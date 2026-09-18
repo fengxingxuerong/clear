@@ -308,7 +308,9 @@ npm run bench          # 性能基准（本地引擎 10x 文本约 3~5ms）
 npx tsx scripts/zhuque-evidence.ts seal \
   --id O1 --submit-file scripts/zhuque-v4-out/O1.txt --pct 85 \
   --verdict "AI生成 85.00%" --label ai --screenshot artifacts/zhuque/O1.png
-npm run test:evidence          # 全量复算；--strict 连"历史点无凭证"一起拦（发布前用）
+npm run test:evidence   # 全量复算（历史点无凭证只列软账，不拦日常开发）
+npm run check:publish   # = audit --strict：连"历史点无凭证"一起拦 —— 今天必然红（覆盖率 0/18），
+                        #  补齐带截图的官方送检凭证并重建校准线之前，它就是发布阻断项
 ```
 
 - **哈希复算**：`seal` 把送检原文与截图**复制**进 `evidence/zhuque/`（已跟踪）并按字节取 sha256 入账。
