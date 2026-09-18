@@ -3,7 +3,7 @@
  * mock fetch 按 chat 请求体中的 system 提示词特征返回对应内容。
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { judgeWithCritique, judgeScoreStable, judgeAiScore, errMsg } from "./llm-judge";
+import { judgeWithCritique, judgeScoreStable, judgeAiScore, errMsg, parseJudgeVerdict } from "./llm-judge";
 import { DEFAULT_API } from "./llm-config";
 
 afterEach(() => {
@@ -150,5 +150,32 @@ describe("errMsg", () => {
     expect(errMsg(new Error("boom"))).toBe("boom");
     expect(errMsg(123)).toBe("123");
     expect(errMsg(null)).toBe("null");
+  });
+});
+
+describe("parseJudgeVerdict（分数行判据）", () => {
+  it("合规输出：末行裸数字为分数，上方为痕迹清单", () => {
+    const r = parseJudgeVerdict("句长过于均匀\n过渡词残留\n78");
+    expect(r?.score).toBe(78);
+    expect(r?.critique).toEqual(["句长过于均匀", "过渡词残留"]);
+  });
+
+  it("计数行不得被当成分数（旧正则把「残留痕迹2处」读成 2 分）", () => {
+    expect(parseJudgeVerdict("句长过于均匀\n残留痕迹2处")).toBeNull();
+  });
+
+  it("带标签/带单位/markdown 强调的分数行都认", () => {
+    expect(parseJudgeVerdict("清单行\n评分：42 分")?.score).toBe(42);
+    expect(parseJudgeVerdict("清单行\n**42**")?.score).toBe(42);
+    expect(parseJudgeVerdict("清单行\n42/100")?.score).toBe(42);
+    expect(parseJudgeVerdict("清单行\n综合得分 42")?.score).toBe(42);
+  });
+
+  it("越界数字跳过，继续向前找合法分数行", () => {
+    expect(parseJudgeVerdict("清单行\n42\n999")?.score).toBe(42);
+  });
+
+  it("找不到分数行返回 null，交 reasoning 兜底而不猜数字", () => {
+    expect(parseJudgeVerdict("只有文字\n没有数字行")).toBeNull();
   });
 });

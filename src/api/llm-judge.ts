@@ -36,30 +36,7 @@ export async function judgeWithCritique(
     { temperature: 0, maxTokens: 8000, model: modelOverride },
   );
 
-  const parse = (body: string): JudgeResult | null => {
-    const lines = body
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter(Boolean);
-    // 从后往前找"独立成行的 0-100 整数"作为分数行
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const m = lines[i].match(/^(?:\D*?)(\d{1,3})(?:\D*)$/);
-      if (m) {
-        const score = parseInt(m[1], 10);
-        if (score >= 0 && score <= 100) {
-          const critique = lines
-            .slice(0, i)
-            .map((l) => l.replace(/^[\d①②③④⑤][.、）)]?\s*/, "").slice(0, 30))
-            .filter((l) => l && !/^\d+$/.test(l))
-            .slice(0, 5);
-          return { score, critique };
-        }
-      }
-    }
-    return null;
-  };
-
-  const fromContent = content ? parse(content) : null;
+  const fromContent = content ? parseJudgeVerdict(content) : null;
   if (fromContent) return fromContent;
   // 思考型模型偶发 content 空：从 reasoning 兜底取最后的数字
   const nums = reasoning.match(/\d+/g);
@@ -67,6 +44,42 @@ export async function judgeWithCritique(
     return { score: Math.max(0, Math.min(100, parseInt(nums[nums.length - 1], 10))), critique: [] };
   }
   throw new Error("评判失败：模型未给出数字");
+}
+
+/** 裸分数行："78"、"78 分"、"**78**"、"78/100" */
+const JUDGE_BARE_SCORE = /^[*_#\s]*(\d{1,3})\s*(?:分|\/\s*100|%)?[*_\s]*$/;
+/** 带标签的分数行："评分：78"、"综合得分 78 分"、"AI 味分：78" */
+const JUDGE_LABEL_SCORE =
+  /^[*_#\s]*(?:[①②③④⑤\d][.、）)]?\s*)?(?:综合)?(?:评分|得分|分数|分值|打分|ai\s*味分|score)[^0-9%]{0,6}(\d{1,3})\s*(?:分|\/\s*100|%)?[*_\s]*$/i;
+
+/**
+ * 解析评委输出：从后往前找分数行，取其上方的痕迹清单。
+ *
+ * 判据必须严格。评委提示词明写"最后一行单独输出一个 0 到 100 的整数，除此之外不要输出
+ * 任何内容"，所以合规输出就一定有裸数字行。旧实现用 /^(?:\D*?)(\d{1,3})(?:\D*)$/ 这种
+ * "行内只有一个数字即可"的宽松式，而评委的清单里几乎每行都带数字（"残留痕迹2处"、
+ * "过渡词残留3个"），且这类计数行常排在分数行之后——从后往前找就正好把 **2 处读成 2 分**，
+ * 系统性把分数压向个位数，还顺带污染 bestOf 的择优排序。
+ * 解析不出来就返回 null，交给调用方的 reasoning 兜底，不再猜。
+ */
+export function parseJudgeVerdict(body: string): JudgeResult | null {
+  const lines = body
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const m = lines[i].match(JUDGE_BARE_SCORE) || lines[i].match(JUDGE_LABEL_SCORE);
+    if (!m) continue;
+    const score = parseInt(m[1], 10);
+    if (!Number.isFinite(score) || score < 0 || score > 100) continue;
+    const critique = lines
+      .slice(0, i)
+      .map((l) => l.replace(/^[\d①②③④⑤][.、）)]?\s*/, "").slice(0, 30))
+      .filter((l) => l && !/^\d+$/.test(l))
+      .slice(0, 5);
+    return { score, critique };
+  }
+  return null;
 }
 
 export interface StableJudgeResult {
