@@ -710,9 +710,34 @@ export function fuseLayers(
 
 /* ----------------------------- 校准：本地分 → 官方分 ----------------------------- */
 
+/**
+ * 数值字段的容错读取：空值必须保持"缺失"，不能塌缩成 0。
+ *
+ * 0 在评分域里是一个**真实的值**（0 分 = 完全人类 / 官方判定无 AI 痕迹），
+ * 而 `Number(null) === 0`、`Number("") === 0` —— 用 `isFinite(Number(x))` 做过滤时，
+ * "从没填过"会被读成"填了 0"，于是一条半损坏的存储记录会凭空变成
+ * (local=0, official=99) 或 (local=80, official=0) 的观测点，把最小二乘拟合线拽歪。
+ * 这个坑在本项目里先后在 detector / calib-lab / api-zhuque 三处独立踩到，
+ * 故收敛为全局唯一实现（见 SOUL：结论要给证据路径，同类缺陷不留第二次机会）。
+ */
+export function numOrNull(v: unknown): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  // 只认 number 与数字串。若写成 `Number(v)` 一把梭，还会踩到 `Number([]) === 0`
+  // （JSON 损坏时数字字段变成数组是常见形态）和 `Number(true) === 1`——
+  // 同样是"非数字的值被静默当成 0/1"，与我们要根除的缺陷同源。
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  if (typeof v === "string") {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
 /** 最小二乘拟合 official ≈ a×local + b；样本 <2 时退化为纯偏移 */
 export function fitCalibration(points: CalibPoint[]): Calibration {
-  const pts = points.filter((p) => isFinite(p.local) && isFinite(p.official));
+  // 这里 points 已被类型约束为 number，但调用方可能来自未校验的存储读取，
+  // 再用 numOrNull 兜一层：NaN/空值不得进入求和（求和里一个 NaN 会让整条线变 NaN）
+  const pts = points.filter((p) => numOrNull(p.local) !== null && numOrNull(p.official) !== null);
   if (pts.length === 0) return { a: 1, b: 0, n: 0, points: [] };
   if (pts.length === 1) return { a: 1, b: pts[0].official - pts[0].local, n: 1, points: pts };
 

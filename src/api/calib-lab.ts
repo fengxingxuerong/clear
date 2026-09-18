@@ -17,6 +17,7 @@
 import {
   fitCalibration,
   fuseLayers,
+  numOrNull,
   DEFAULT_SEMANTIC_WEIGHT,
   type CalibPoint,
   type Calibration,
@@ -56,12 +57,9 @@ export interface CalibSample {
  * "填了 0"，于是存储里一条半损坏的样本会凭空变成 (local=0, official=99)
  * 或 (local=80, official=0) 的观测点，直接把最小二乘拟合线拽歪，
  * 而实验室 UI 上只显示"多了一条校准点"，看不出异常。
+ *
+ * 实现已收敛到 engine/zhuque.ts 的 numOrNull（api/zhuque.ts 的旧版点读取同源）。
  */
-function numOrNull(v: unknown): number | null {
-  if (v === null || v === undefined || v === "") return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
 
 export function loadSamples(): CalibSample[] {
   try {
@@ -263,30 +261,39 @@ export interface LabStats {
   progress: string;
 }
 
+/**
+ * 读取旧版校准点（localStorage: quaiwei.zhuque.calib）。
+ *
+ * **全局唯一实现**：api/zhuque.ts 的 addCalibPoint 也要读同一份存储来追加，
+ * 过去两处各写一份读取逻辑，导致同一个「空值塌缩成 0」缺陷只被修掉一处
+ * （calib-lab 版已修、api/zhuque 版漏网，还因 addCalibPoint 会写回存储
+ * 而把伪观测点**永久固化**）。共享实现即根除这类"修一半"。
+ */
+export function readLegacyPoints(): CalibPoint[] {
+  try {
+    const raw = localStorage.getItem(K_CALIB_LEGACY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return [];
+    return arr.flatMap((p) => {
+      // 空值不得塌缩成 0：一条 {local:null,official:99} 会伪装成 (0, 99)
+      // 的观测点，把最小二乘拟合线往下拽
+      const local = numOrNull(p?.local);
+      const official = numOrNull(p?.official);
+      if (local === null || official === null) return [];
+      return [{ local, official, ts: Number(p.ts) || 0 }];
+    });
+  } catch {
+    return [];
+  }
+}
+
 /** 汇总所有校准点（样本库派生 + 旧版 key 兼容），去重（同一 local/official 对） */
 export function collectPoints(): CalibPoint[] {
   const fromSamples = loadSamples()
     .filter((s) => s.official !== null)
     .map((s) => ({ local: s.surface, official: s.official as number, ts: s.ts }));
-  let legacy: CalibPoint[] = [];
-  try {
-    const raw = localStorage.getItem(K_CALIB_LEGACY);
-    if (raw) {
-      const arr = JSON.parse(raw);
-      if (Array.isArray(arr)) {
-        legacy = arr.flatMap((p) => {
-          const local = numOrNull(p?.local);
-          const official = numOrNull(p?.official);
-          // 空值同样不得塌缩成 0：旧版 key 里一条 {local:null,official:99}
-          // 会伪装成 (0, 99) 的观测点，把拟合线往下拽
-          if (local === null || official === null) return [];
-          return [{ local, official, ts: Number(p.ts) || 0 }];
-        });
-      }
-    }
-  } catch {
-    /* noop */
-  }
+  const legacy = readLegacyPoints();
   const seen = new Set<string>();
   return [...fromSamples, ...legacy].filter((p) => {
     const k = `${p.local}|${p.official}`;

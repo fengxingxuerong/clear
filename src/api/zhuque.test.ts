@@ -247,6 +247,24 @@ describe("校准点存储", () => {
     expect(c2.points).toHaveLength(2);
   });
 
+  it("旧版点里的空值不被读成 0，也不会被写回存储（防永久固化伪观测点）", () => {
+    // readLegacyPoints 的结果会被 addCalibPoint 原样写回 localStorage，
+    // 旧写法把 {local:null} 读成 local=0，等于往库里永久塞一条 (0, 99) 的假点
+    localStorage.setItem(
+      LEGACY_KEY,
+      JSON.stringify([{ local: null, official: 99, ts: 1 }, { local: 40, official: 55, ts: 2 }]),
+    );
+    const cal = addCalibPoint(70, 80);
+    const stored = JSON.parse(localStorage.getItem(LEGACY_KEY) as string) as Array<{ local: number }>;
+    expect(stored.map((p) => p.local).sort((a, b) => a - b)).toEqual([40, 70]);
+    expect(cal.n).toBe(2);
+  });
+
+  it("official 为空的旧版点同样被剔除", () => {
+    localStorage.setItem(LEGACY_KEY, JSON.stringify([{ local: 40, official: "", ts: 1 }]));
+    expect(loadCalibPoints()).toEqual([]);
+  });
+
   it("clearCalibPoints 清空后重拟合退化为空校准", () => {
     addCalibPoint(40, 55);
     clearCalibPoints();

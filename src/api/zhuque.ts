@@ -20,8 +20,13 @@ import {
   type ZhuqueLabel,
   fitCalibration,
 } from "../engine/zhuque.ts";
-import { collectPoints, clearOfficialResults } from "./calib-lab.ts";
+import {
+  collectPoints,
+  clearOfficialResults,
+  readLegacyPoints as readLegacyCalibPoints,
+} from "./calib-lab.ts";
 
+/** 与 calib-lab.ts 的 K_CALIB_LEGACY 是同一份存储；改任一处必须同步 */
 const K_CALIB = "quaiwei.zhuque.calib";
 
 /* ----------------------------- 送检 ----------------------------- */
@@ -203,25 +208,10 @@ function clampPct(n: number): number {
 
 /* ----------------------------- 校准存储 ----------------------------- */
 
-/** 旧版手动校准点（主面板「记为校准点」写入这里；实验室回填走样本库） */
-function readLegacyPoints(): CalibPoint[] {
-  try {
-    const raw = localStorage.getItem(K_CALIB);
-    if (!raw) return [];
-    const arr = JSON.parse(raw);
-    if (!Array.isArray(arr)) return [];
-    return arr
-      .filter((p) => p && isFinite(Number(p.local)) && isFinite(Number(p.official)))
-      .map((p) => ({
-        local: Number(p.local),
-        official: Number(p.official),
-        ts: Number(p.ts) || Date.now(),
-      }))
-      .slice(-50);
-  } catch {
-    return [];
-  }
-}
+/** 旧版手动校准点（主面板「记为校准点」写入这里；实验室回填走样本库）。
+ *  读取实现收敛在 calib-lab.ts——同一份存储在别处另有读取方，
+ *  各写一份必然出现"同一个缺陷只修一处"。 */
+const readLegacyPoints = readLegacyCalibPoints;
 
 export function loadCalibPoints(): CalibPoint[] {
   // v0.7.4 起校准点以样本库为主存储（实验室回填写入 quaiwei.zhuque.samples），

@@ -14,6 +14,7 @@ beforeAll(() => {
 import {
   seedTruthAnchors,
   collectPoints,
+  readLegacyPoints,
   labStats,
   loadSamples,
   saveSamples,
@@ -148,6 +149,28 @@ describe("saveSamples", () => {
     const s = loadSamples();
     expect(s).toHaveLength(200);
     expect(s[199].surface).toBe(229); // 末尾（最近）那批
+  });
+});
+
+describe("readLegacyPoints（全局唯一实现）", () => {
+  it("读取旧版校准点并剔除空值脏点", () => {
+    store.set(
+      K_LEGACY,
+      JSON.stringify([{ local: null, official: 99, ts: 1 }, { local: 40, official: 55, ts: 2 }]),
+    );
+    expect(readLegacyPoints()).toEqual([{ local: 40, official: 55, ts: 2 }]);
+  });
+
+  it("非数组 / 坏 JSON 返回空数组而不是抛错", () => {
+    store.set(K_LEGACY, "{ 坏 json");
+    expect(readLegacyPoints()).toEqual([]);
+    store.set(K_LEGACY, JSON.stringify({ a: 1 }));
+    expect(readLegacyPoints()).toEqual([]);
+  });
+
+  it("缺 ts 时补 0（不崩）", () => {
+    store.set(K_LEGACY, JSON.stringify([{ local: 10, official: 20 }]));
+    expect(readLegacyPoints()).toEqual([{ local: 10, official: 20, ts: 0 }]);
   });
 });
 

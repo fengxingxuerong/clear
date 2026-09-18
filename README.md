@@ -324,5 +324,5 @@ MIT（见 LICENSE）。
 
 ## 更新日志
 
-完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。当前版本 **v0.9.5**。
+完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。当前版本 **v0.9.10**（以 `package.json` 的 `version` 为准）。
 

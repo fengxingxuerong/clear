@@ -4,6 +4,7 @@ import {
   fuseLayers,
   fitCalibration,
   applyCalibration,
+  numOrNull,
   officialLabelOf,
   pplLayerScore,
   PPL_FUSE_WEIGHT,
@@ -310,5 +311,50 @@ describe("buildSubmission（按句子边界截断送检）", () => {
     expect(sub.text.endsWith("。")).toBe(true);
     expect(sub.text.length).toBeLessThanOrEqual(12);
     expect(text.startsWith(sub.text)).toBe(true);
+  });
+});
+
+describe("numOrNull（数值容错读写）", () => {
+  it("空值一律判为缺失，不得塌缩成 0", () => {
+    // Number(null) === 0、Number("") === 0 —— 直接 Number() 会把"没填过"读成"填了 0"，
+    // 而 0 在本域里是合法分数（完全人类），于是伪造出一条极端观测值
+    expect(numOrNull(null)).toBeNull();
+    expect(numOrNull(undefined)).toBeNull();
+    expect(numOrNull("")).toBeNull();
+  });
+
+  it("0 是合法值，必须保留", () => {
+    expect(numOrNull(0)).toBe(0);
+    expect(numOrNull("0")).toBe(0);
+  });
+
+  it("合法数字与数字字符串正常解析", () => {
+    expect(numOrNull(42)).toBe(42);
+    expect(numOrNull("42.5")).toBe(42.5);
+    expect(numOrNull(-3)).toBe(-3);
+  });
+
+  it("非数字与 NaN/Infinity 判为缺失", () => {
+    expect(numOrNull("abc")).toBeNull();
+    expect(numOrNull(NaN)).toBeNull();
+    expect(numOrNull(Infinity)).toBeNull();
+    expect(numOrNull({})).toBeNull();
+    expect(numOrNull([])).toBeNull();
+    expect(numOrNull([5])).toBeNull(); // Number([5]) === 5，不得被当成有效数值
+    expect(numOrNull(true)).toBeNull(); // Number(true) === 1，布尔不是分数
+  });
+});
+
+describe("fitCalibration（空值不得污染求和）", () => {
+  it("含空值的点被剔除，不会让整条线变 NaN", () => {
+    const dirty = [
+      { local: null, official: 99, ts: 1 },
+      { local: 40, official: 55, ts: 2 },
+      { local: 70, official: 80, ts: 3 },
+    ] as unknown as CalibPoint[];
+    const cal = fitCalibration(dirty);
+    expect(cal.n).toBe(2);
+    expect(Number.isFinite(cal.a)).toBe(true);
+    expect(Number.isFinite(cal.b)).toBe(true);
   });
 });
