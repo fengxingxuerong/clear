@@ -363,3 +363,26 @@ describe("FingerprintPanel（指纹体检面板）", () => {
     expect(queryByText(/下载模型/)).toBeNull();
   });
 });
+
+describe("DiffView 字符级渲染", () => {
+  it("未改动的字单独成 same 片段，标题带改动率", () => {
+    const before = "值得注意的是，这道菜非常好吃。";
+    const after = "说白了，这道菜挺好吃。";
+    const { container, getByText } = render(<DiffView before={before} after={after} onClose={() => {}} />);
+    // 两处独立改动 → 两个 del 块，中间的"这道菜"必须是未被涂色的 same
+    expect(container.querySelectorAll(".diff-col-body .diff-del").length).toBeGreaterThanOrEqual(2);
+    const sameText = [...container.querySelectorAll(".diff-col-body .diff-same")].map((e) => e.textContent).join("");
+    expect(sameText).toContain("这道菜");
+    expect(getByText(/\/\d+ 字（\d+%）/)).toBeTruthy();
+  });
+
+  it("改动率随改动规模变化，无改动时为「无改动」", () => {
+    const small = render(<DiffView before="这是一句完全正常的人话没有套话。" after="这是一句完全正常的人话没有废话。" onClose={() => {}} />);
+    const big = render(<DiffView before="这是一句完全正常的人话没有套话。" after="换掉了一大半的内容完全不同的句子。" onClose={() => {}} />);
+    const pct = (c: HTMLElement) => Number(c.querySelector(".modal-head span")!.textContent!.match(/（(\d+)%）/)?.[1] ?? -1);
+    expect(pct(big.container)).toBeGreaterThan(pct(small.container));
+    small.unmount();
+    const none = render(<DiffView before="同一句。" after="同一句。" onClose={() => {}} />);
+    expect(none.getByText(/无改动/)).toBeTruthy();
+  });
+});

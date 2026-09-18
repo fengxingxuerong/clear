@@ -3,7 +3,7 @@
  * DiffView 只做了渲染级断言，这里锁死算法本身的正确性（保序/还原/边界）。
  */
 import { describe, it, expect } from "vitest";
-import { diffSentences, trimCommon, type DiffPart } from "./diff";
+import { diffSentences, diffInline, diffStats, trimCommon, type DiffPart } from "./diff";
 
 function typesOf(parts: DiffPart[]): string {
   return parts.map((p) => p.type).join("");
@@ -136,5 +136,89 @@ describe("trimCommon（前后缀裁切）", () => {
     const r = trimCommon(full, changed);
     expect(r.pre + r.midOld + r.post).toBe(full);
     expect(r.pre + r.midNew + r.post).toBe(changed);
+  });
+});
+
+describe("diffInline（字符粒度）", () => {
+  const flat = (parts: { type: string; text: string }[]) => parts.map((p) => `${p.type}:${p.text}`).join("|");
+
+  it("句内小改动：只把变的那个词标成 del/ins，其余保持 same", () => {
+    const { left, right } = diffInline("值得注意的是，这道菜非常好吃。", "说白了，这道菜挺好吃。");
+    expect(flat(left)).toContain("del:值得注意");
+    expect(flat(right)).toContain("ins:说白了");
+    // 未动的部分必须是 same，不能整句涂色
+    expect(flat(left)).toContain("same:，这道菜");
+  });
+
+  it("完全相同：左右全 same，无 del/ins", () => {
+    const t = "第一句。第二句。";
+    const { left, right } = diffInline(t, t);
+    expect(left.every((p) => p.type === "same")).toBe(true);
+    expect(right.every((p) => p.type === "same")).toBe(true);
+  });
+
+  it("还原性：left 的 same+del 拼回原文，right 的 same+ins 拼回改后稿", () => {
+    const before = "我们进行了优化，予以了反馈。效率提升了，成本降低了。";
+    const after = "我们优化了一遍，给了反馈。效率上来了，成本降了，风险也可控。";
+    const { left, right } = diffInline(before, after);
+    expect(left.filter((p) => p.type !== "ins").map((p) => p.text).join("")).toBe(before);
+    expect(right.filter((p) => p.type !== "del").map((p) => p.text).join("")).toBe(after);
+  });
+
+  it("纯增句 / 纯删句：单侧成块，另一侧不产生幻影块", () => {
+    const { left, right } = diffInline("第一句。第二句。", "第一句。第二句。第三句。");
+    expect(left.some((p) => p.type === "del")).toBe(false);
+    expect(right.some((p) => p.type === "ins")).toBe(true);
+  });
+
+  it("空串边界：不抛错", () => {
+    expect(() => diffInline("", "")).not.toThrow();
+    expect(() => diffInline("有内容的一句话。", "")).not.toThrow();
+    expect(() => diffInline("", "有内容的一句话。")).not.toThrow();
+  });
+});
+
+describe("diffStats（改动率）", () => {
+  it("无改动：改动率为 0", () => {
+    const s = diffStats("同一句话。", "同一句话。");
+    expect(s.ratio).toBe(0);
+    expect(s.removed + s.added).toBe(0);
+  });
+
+  it("改少数几个字：改动率应为个位数百分比，而非整句占比", () => {
+    const before = "这道菜的口味非常的好，值得大家去品尝一下。";
+    const after = "这道菜的口味挺的好，值得大家去品尝一下。";
+    const s = diffStats(before, after);
+    expect(s.removed).toBeGreaterThan(0);
+    expect(s.ratio).toBeGreaterThan(0);
+    expect(s.ratio).toBeLessThan(15);
+  });
+
+  it("分母是原文规模：total === kept + removed", () => {
+    const s = diffStats("第一句。第二句。", "第一句。第二句改了。");
+    expect(s.total).toBe(s.kept + s.removed);
+  });
+
+  it("空原文不除零", () => {
+    expect(diffStats("", "新增的一句话。").ratio).toBe(0);
+  });
+});
+
+describe("diffInline（字符粒度的两个硬要求）", () => {
+  it("一句内两处独立改动必须分开标注，不得合并成一整块", () => {
+    const { left } = diffInline("值得注意的是，这道菜非常好吃。", "说白了，这道菜挺好吃。");
+    const dels = left.filter((p) => p.type === "del");
+    expect(dels.length).toBeGreaterThanOrEqual(2);
+    expect(dels.map((p) => p.text)).toContain("非常");
+    expect(left.filter((p) => p.type === "same").map((p) => p.text).join("")).toContain("这道菜");
+  });
+
+  it("超单边上限时退回前后缀裁切，仍完整还原两侧", () => {
+    const long = "长".repeat(1600);
+    const before = `${long}。`;
+    const after = `${long}改。`;
+    const { left, right } = diffInline(before, after);
+    expect(left.filter((p) => p.type !== "ins").map((p) => p.text).join("")).toBe(before);
+    expect(right.filter((p) => p.type !== "del").map((p) => p.text).join("")).toBe(after);
   });
 });

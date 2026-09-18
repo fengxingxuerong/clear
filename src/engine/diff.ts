@@ -99,3 +99,147 @@ export function trimCommon(
     post,
   };
 }
+
+function pushIf(arr: DiffPart[], type: DiffPart["type"], text: string) {
+  if (text) arr.push({ type, text });
+}
+
+/**
+ * 字符级 LCS 上限：DP 表是 O(m×n)，单边 1500 字约 9MB / 225 万次比较，
+ * 再往上就会卡住主线程；超限退回 trimCommon（只裁一段），宁可标注粗糙也不能冻界面。
+ */
+const CHAR_DIFF_MAX = 1500;
+
+function coalesce(parts: DiffPart[]): DiffPart[] {
+  const out: DiffPart[] = [];
+  for (const p of parts) {
+    const last = out[out.length - 1];
+    if (last && last.type === p.type) last.text += p.text;
+    else out.push({ ...p });
+  }
+  return out;
+}
+
+/** 逐字符 LCS，返回两侧对齐的 same/del/ins 块——一句里有多处小改动时才能分开标出 */
+function charParts(a: string, b: string): { left: DiffPart[]; right: DiffPart[] } {
+  const m = a.length;
+  const n = b.length;
+  const w = n + 1;
+  const dp = new Uint32Array((m + 1) * w);
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i * w + j] =
+        a[i - 1] === b[j - 1] ? dp[(i - 1) * w + j - 1] + 1 : Math.max(dp[(i - 1) * w + j], dp[i * w + j - 1]);
+    }
+  }
+  const revL: DiffPart[] = [];
+  const revR: DiffPart[] = [];
+  let i = m;
+  let j = n;
+  while (i > 0 && j > 0) {
+    if (a[i - 1] === b[j - 1]) {
+      revL.push({ type: "same", text: a[i - 1] });
+      revR.push({ type: "same", text: b[j - 1] });
+      i--;
+      j--;
+    } else if (dp[(i - 1) * w + j] >= dp[i * w + j - 1]) {
+      revL.push({ type: "del", text: a[i - 1] });
+      i--;
+    } else {
+      revR.push({ type: "ins", text: b[j - 1] });
+      j--;
+    }
+  }
+  while (i > 0) {
+    revL.push({ type: "del", text: a[i - 1] });
+    i--;
+  }
+  while (j > 0) {
+    revR.push({ type: "ins", text: b[j - 1] });
+    j--;
+  }
+  return { left: coalesce(revL.reverse()), right: coalesce(revR.reverse()) };
+}
+
+/**
+ * 字符粒度 diff：在句级 LCS 之上，把成对出现的「删除段 / 新增段」再做一次逐字符 LCS，
+ * 只把真正变化的字标成 del/ins。
+ *
+ * 为什么不在句子层直接收工：去味改写的常态是一句里只换两三个词（"值得注意的是"→"说白了"
+ * 与"非常"→"挺"同处一句），整句划除会让用户以为内容被大段动过，反而看不出到底改了哪个字
+ * ——而"改动率"要回答的恰恰是"这稿被动了多少"。
+ */
+export function diffInline(before: string, after: string): { left: DiffPart[]; right: DiffPart[] } {
+  const { left: L, right: R } = diffSentences(before, after);
+  const left: DiffPart[] = [];
+  const right: DiffPart[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < L.length || j < R.length) {
+    if (i < L.length && j < R.length && L[i].type === "same" && R[j].type === "same") {
+      left.push(L[i]);
+      right.push(R[j]);
+      i++;
+      j++;
+      continue;
+    }
+    let di = i;
+    while (di < L.length && L[di].type === "del") di++;
+    let ij = j;
+    while (ij < R.length && R[ij].type === "ins") ij++;
+    const delText = L.slice(i, di).map((p) => p.text).join("");
+    const insText = R.slice(j, ij).map((p) => p.text).join("");
+    if (delText && insText) {
+      if (delText.length <= CHAR_DIFF_MAX && insText.length <= CHAR_DIFF_MAX) {
+        const cp = charParts(delText, insText);
+        left.push(...cp.left);
+        right.push(...cp.right);
+      } else {
+        const { pre, midOld, midNew, post } = trimCommon(delText, insText);
+        pushIf(left, "same", pre);
+        pushIf(left, "del", midOld);
+        pushIf(left, "same", post);
+        pushIf(right, "same", pre);
+        pushIf(right, "ins", midNew);
+        pushIf(right, "same", post);
+      }
+    } else if (delText) {
+      left.push({ type: "del", text: delText });
+    } else if (insText) {
+      right.push({ type: "ins", text: insText });
+    } else {
+      // 只剩一侧的 same：直接搬运，避免死循环
+      if (i < L.length) left.push(L[i++]);
+      if (j < R.length) right.push(R[j++]);
+      continue;
+    }
+    i = di;
+    j = ij;
+  }
+  return { left, right };
+}
+
+export interface DiffStats {
+  /** 未变字符数 */
+  kept: number;
+  /** 原文中被替换/删除的字符数 */
+  removed: number;
+  /** 改写稿新增的字符数 */
+  added: number;
+  /** 原文参与比对的字符总数 */
+  total: number;
+  /** 改动率 %（相对原文规模，四舍五入到整数） */
+  ratio: number;
+}
+
+/** 改动率统计：让用户一眼看出"这稿被动了多少"，而不是只看到"改了 N 处" */
+export function diffStats(before: string, after: string): DiffStats {
+  const { left, right } = diffInline(before, after);
+  const sum = (parts: DiffPart[], type: DiffPart["type"]) =>
+    parts.reduce((n, p) => n + (p.type === type ? p.text.length : 0), 0);
+  const kept = sum(left, "same");
+  const removed = sum(left, "del");
+  const added = sum(right, "ins");
+  const total = kept + removed;
+  return { kept, removed, added, total, ratio: total ? Math.round(((removed + added) / total) * 100) : 0 };
+}
