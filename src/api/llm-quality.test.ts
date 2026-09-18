@@ -293,3 +293,42 @@ describe("fabricationReview 编造专项复核（v0.9.4 P1.5）", () => {
     await expect(fabricationReview(orig, "改写稿内容。", cfg)).rejects.toThrow("未返回有效 JSON");
   });
 });
+
+describe("processCandidate（修复成功路径）", () => {
+  it("修复稿必须接管交付与评分（回归：旧实现返回被打回的那一稿）", async () => {
+    const cfg = { ...DEFAULT_API, enabled: true, apiKey: "test-key" };
+    const reqs: { sys: string; user: string }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: unknown, init?: RequestInit) => {
+        const msgs = JSON.parse(String(init?.body)).messages ?? [];
+        const sys: string = msgs[0]?.content ?? "";
+        const user: string = msgs[1]?.content ?? "";
+        reqs.push({ sys, user });
+        let content = "PASS"; // 质检默认放行
+        if (sys.includes("改写专家")) content = "改写稿：营收增长23%，海外占比提升。"; // 修好了
+        else if (sys.includes("复刻检测员")) content = "句长过于均匀\n18"; // 评分行
+        return new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }),
+    );
+    const r = await processCandidate(
+      "原文：营收增长23%，海外占比提升。",
+      "改写稿：营收增长32%，海外占比提升。",
+      cfg,
+      0.6,
+    );
+    expect(r.qc.pass).toBe(true);
+    // 交付的是修复稿，而不是被本地硬门槛打回的数字篡改稿
+    expect(r.shuffled).toContain("23%");
+    expect(r.shuffled).not.toContain("32%");
+    // 评委评的也必须是最终交付那一稿。判别词要取检测员提示词独有的「复刻检测员」：
+    // "质检员"提示词含"检测员"字样，而改写专家提示词里也提到"朱雀"，两者都会串台
+    const judge = reqs.find((q) => q.sys.includes("复刻检测员"));
+    expect(judge?.user).toContain("23%");
+    expect(judge?.user).not.toContain("32%");
+    expect(r.score).toBe(18);
+  });
+});

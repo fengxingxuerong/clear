@@ -351,7 +351,11 @@ export async function processCandidate(
   panelSeats?: { id: string; score: number | null; critique: string[]; error?: string }[];
 }> {
   // v0.8.9：回填被 LLM 压掉的中英/中数空格（铁律里写了模型仍照删，改确定性后处理）
-  const draft = restoreMixedSpacing(original, content); // shuffled 字段名保留以兼容调用面
+  // 必须是 let：修复轮产出的稿子要替换掉被打回的那一稿。旧实现这里写成 const，
+  // 修复稿 rep.content 只参与了 qc 判定、文本从未被任何变量接住，于是
+  // 「用修复稿的通过结论，交付并评分落选稿」——用户拿到的是没过质检的那版，
+  // 评委评的也不是最终交出去的那版，整次修复调用纯烧。
+  let draft = restoreMixedSpacing(original, content); // shuffled 字段名保留以兼容调用面
   let qc: QCResult;
   try {
     qc = await qualityCheck(original, draft, cfg);
@@ -374,19 +378,23 @@ export async function processCandidate(
         cfg,
         [
           { role: "system", content: buildSystemPrompt(cfg, intensity, original) },
-          { role: "user", content: buildRepairPrompt(original, content, qc.issues) },
+          // 喂 draft 而非 content：打回清单是判在 draft 上的，给模型看另一版文本
+          // 会让它去追一个在自己眼前那版里根本不存在的问题（空格差异尤甚）
+          { role: "user", content: buildRepairPrompt(original, draft, qc.issues) },
         ],
         { temperature: 0.4, maxTokens: 8000 },
       );
       if (rep.content) {
-        qc = await qualityCheck(original, rep.content, cfg);
+        // 修复稿接管候选身份：后续质检、硬门槛、编造复核、评分与交付全部以它为准
+        draft = restoreMixedSpacing(original, rep.content);
+        qc = await qualityCheck(original, draft, cfg);
         if (qc.pass) {
-          const gate = localHardGate(original, rep.content);
+          const gate = localHardGate(original, draft);
           if (gate.length) qc = { pass: false, issues: gate.slice(0, 6) };
         }
         // v0.9.5 P1：修复稿同样过编造复核（编造项已喂给修复 prompt，此处确认修掉）
         if (qc.pass && cfg.strictFidelity) {
-          const fabs2 = await fabricationReview(original, rep.content, cfg);
+          const fabs2 = await fabricationReview(original, draft, cfg);
           if (fabs2.length) {
             qc = { pass: false, issues: fabs2.map((f) => `编造复核：${f}`).slice(0, 6) };
           }
