@@ -27,6 +27,32 @@ import { errMsg } from "./llm-judge";
  *  "改写稿显著优于底稿"的语义带内，且不需要按模型硬编码宽严表。 */
 const RELATIVE_TARGET_RATIO = 0.35;
 
+/** 多候选并发的上限：与 Key 池容量（3）对齐。再高不增吞吐，只会加剧 429 反而更慢。 */
+const CONTEST_MAX_PARALLEL = 3;
+
+/**
+ * 有界并发遍历：同时最多 limit 个任务在跑，任务自己负责把结果写到自己的下标位。
+ * 刻意不返回"按完成顺序"的数组——聚合必须按输入下标，否则并发完成顺序会改变
+ * qcPassed/roundScores 序列，同一输入两次跑出不同结果，可复现性就没了。
+ */
+async function mapLimited<T>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<void>,
+): Promise<void> {
+  let cursor = 0;
+  const width = Math.max(1, Math.min(limit, items.length));
+  await Promise.all(
+    Array.from({ length: width }, async () => {
+      for (;;) {
+        const i = cursor++;
+        if (i >= items.length) return;
+        await fn(items[i], i);
+      }
+    }),
+  );
+}
+
 /** 组装改写用的 system 提示词（基础战术 + 按体裁选范例 + 文风预设 + 人味人格 + 强度档位） */
 export function buildSystemPrompt(
   cfg: ApiConfig,
@@ -212,16 +238,32 @@ export async function humanizeViaApiDeep(
   }
   if (multiContest) {
     const contestInfo: string[] = [];
-    for (let ci = 0; ci < contestants.length; ci++) {
-      const m = contestants[ci];
-      // 同模型多次采样时给日志加序号，否则 N 条记录长得一模一样没法排查
+    // v0.9.13 候选并发。此前逐个 await：本网关实测单次调用 30~40s、每候选约 5~7 次调用，
+    // 3 候选串行 ≈9 分钟，直接撞满 maxWaitSeconds——s4 实测 16 次调用 / 521 秒 / 只跑完
+    // 1 轮（目标 ≤15 分，拿到 42 分收场），"多轮迭代"在真实延迟下结构性不可能发生。
+    // 并发不减一次调用，只把墙钟从 Σ 降到 ceil(N/上限)，同一预算才换得来真正的多轮。
+    // 上限 3 与 Key 池容量对齐：再高会加剧 429，反而更慢。
+    type ContestResult =
+      | { kind: "none" }
+      | { kind: "info"; why: string }
+      | {
+          kind: "cand";
+          qcPass: boolean;
+          score: number | null;
+          text: string;
+          critique: string[];
+          model: string;
+          issues: string[];
+        };
+    const results: ContestResult[] = new Array(contestants.length).fill({ kind: "none" });
+    await mapLimited(contestants, CONTEST_MAX_PARALLEL, async (m, ci) => {
       const tag = `${m}#${ci + 1}`;
       // v0.8.6 竞争段接入调用预算：每个竞争者开跑前检查（与主循环"轮间检查"同语义），
       // 超预算不再发起竞争调用——此前竞争段计入计数却不受约束，极小预算配置下
       // 会先烧穿 maxApiCalls 才轮到主循环首次检查
       if (isOverBudget()) {
-        contestInfo.push(`${tag}:预算已耗尽跳过`);
-        continue;
+        results[ci] = { kind: "info", why: `${tag}:预算已耗尽跳过` };
+        return;
       }
       try {
         // v0.8.9：竞争段同样走空响应降级重试；altModel 传空——本段已是多候选竞争，
@@ -237,31 +279,50 @@ export async function humanizeViaApiDeep(
           isOverBudget,
         );
         if (!r.content) {
-          contestInfo.push(`${tag}:空输出`);
-          continue;
+          results[ci] = { kind: "info", why: `${tag}:空输出` };
+          return;
         }
         const cand = await processCandidate(text, r.content, cfg, intensity);
-        qcPassed.push(cand.qc.pass);
-        if (!cand.qc.pass) {
-          contestInfo.push(`${tag}:质检未过`);
-          qcIssues = cand.qc.issues;
-          continue;
-        }
-        roundScores.push(cand.score ?? -1);
-        if (cand.score !== null && cand.score >= 0 && anchorScore === null)
-          anchorScore = cand.score;
-        contestInfo.push(`${tag}:${cand.score ?? "?"}`);
-        const sc = cand.score ?? 999;
-        if (sc < bestScore) {
-          bestScore = sc;
-          bestText = cand.shuffled;
-          lastCritique = cand.critique;
-          writerModel = m;
-        }
-        onProgress?.(1, cand.score, `竞争 ${tag} `);
+        results[ci] = {
+          kind: "cand",
+          qcPass: cand.qc.pass,
+          score: cand.score,
+          text: cand.shuffled,
+          critique: cand.critique,
+          model: m,
+          issues: cand.qc.issues,
+        };
       } catch {
-        contestInfo.push(`${tag}:调用失败`);
+        results[ci] = { kind: "info", why: `${tag}:调用失败` };
       }
+    });
+    // 聚合严格按候选序号：并发的完成顺序不得改变 qcPassed/roundScores 的序列，
+    // 否则同一份输入两次跑结果不同，可复现性就没了
+    for (let ci = 0; ci < contestants.length; ci++) {
+      const tag = `${contestants[ci]}#${ci + 1}`;
+      const res = results[ci];
+      if (res.kind === "info") {
+        contestInfo.push(res.why);
+        continue;
+      }
+      if (res.kind !== "cand") continue;
+      qcPassed.push(res.qcPass);
+      if (!res.qcPass) {
+        contestInfo.push(`${tag}:质检未过`);
+        qcIssues = res.issues;
+        continue;
+      }
+      roundScores.push(res.score ?? -1);
+      if (res.score !== null && res.score >= 0 && anchorScore === null) anchorScore = res.score;
+      contestInfo.push(`${tag}:${res.score ?? "?"}`);
+      const sc = res.score ?? 999;
+      if (sc < bestScore) {
+        bestScore = sc;
+        bestText = res.text;
+        lastCritique = res.critique;
+        writerModel = res.model;
+      }
+      onProgress?.(1, res.score, `竞争 ${tag} `);
     }
     note = `双模型竞争（${contestInfo.join("，")}）`;
     // v0.8.9：竞争段有多个有效分时，锚点取<b>最优（最低）</b>分而非首个——首个分只是
