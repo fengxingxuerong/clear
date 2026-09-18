@@ -1,12 +1,32 @@
 /**
  * SenseNova 网关实测：3 Key × 5 模型连通性 + 去味效果冒烟（纯 JS，临时脚本）
  */
+import { readFileSync } from "node:fs";
 const BASE = "https://token.sensenova.cn/v1/chat/completions";
-const KEYS = [
-  "***REMOVED***",
-  "***REMOVED***",
-  "***REMOVED***",
-];
+// Key 只从环境变量 SENSENOVA_KEYS 或 gitignore 的 scripts/.sensenova-keys 读取。
+// 此处曾硬编码明文 Key 并被 git 跟踪（34792ea 归档该脚本时把 54c12ce 移出的密钥又写了回来）。
+// 任何形态的密钥都不准再进这个文件：.githooks/pre-commit 会拦提交行里的 Key 形态串。
+function loadKeys() {
+  const raw =
+    process.env.SENSENOVA_KEYS ||
+    (() => {
+      try {
+        return readFileSync(`${import.meta.dirname}/../.sensenova-keys`, "utf8");
+      } catch {
+        return "";
+      }
+    })();
+  return raw
+    .split(/[\r\n,;，；]+/)
+    .map((s) => s.trim())
+    .filter((s) => s && !s.startsWith("#"));
+}
+
+const KEYS = loadKeys();
+if (!KEYS.length) {
+  console.error("无可用 Key：设 SENSENOVA_KEYS 或写 scripts/.sensenova-keys（一行一个）");
+  process.exit(1);
+}
 const MODELS = ["deepseek-v4-flash", "sensenova-6.8-flash-lite", "deepseek-v4-pro", "glm-5.2", "kimi-k3"];
 
 async function chat(key, model, prompt, maxTokens = 800) {

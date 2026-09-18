@@ -21,6 +21,25 @@ else
   TSC="npx tsc"
 fi
 
+# ── 密钥形态拦截（先跑，秒级）────────────────────────────────────────────
+# 起因：scripts/archive/gateway-probe.mjs 在归档时把 3 条**可用的** SenseNova Key 硬编码
+# 进文件并被 git 跟踪（34792ea），等于悄悄撤销了 54c12ce 的「Key 移出源码」。当时没有任何
+# 环节拦得住——类型检查、单测、scan-bugs 都不看这个。这里只查本次暂存的新增行，
+# 不让历史存量把仓库永久锁死；命中内容一律截断隐去，避免密钥被打进终端/CI 日志。
+SECRET_RE='sk-[A-Za-z0-9]{16,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{24,}\.[A-Za-z0-9_-]{16,}\.'
+if command -v git >/dev/null 2>&1; then
+  hits=$(git diff --cached -U0 | grep -E "^\+" | grep -E "$SECRET_RE" | sed -E 's/^(\+.{0,14}).*/\1…（已隐去）/')
+  if [ -n "$hits" ]; then
+    printf '\n'
+    echo "❌ 疑似密钥被写进提交内容，提交已阻止："
+    echo "$hits"
+    echo "   → 密钥走环境变量（SENSENOVA_KEYS）或 gitignore 的文件（scripts/.sensenova-keys）"
+    echo "   → 注意 git 历史会永久留存明文：一旦推到远端就等于泄露，须先在控制台轮换"
+    echo "   → 确属误报再跳过：git commit --no-verify"
+    exit 1
+  fi
+fi
+
 echo "[pre-commit] 类型检查中…（约 7 秒）"
 $TSC --noEmit
 rc=$?
