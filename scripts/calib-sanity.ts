@@ -6,7 +6,8 @@
  * 3) x 轴漂移报告：用 rebuild 参数重建文本 → 当前引擎重算 aiScore，
  *    与数据源 x 对比，|Δ| > 3 标红（= 引擎改动导致校准线过时信号）
  *
- * 用法：npx tsx scripts/calib-sanity.ts
+ * 退出码：【1】【2】不过就是错；【3】按"漂移基线"棘轮拦（只许变好，见文件末尾说明）。
+ * 用法：npx tsx scripts/calib-sanity.ts [--ceiling N]   # N 用于临时收紧/放宽漂移基线
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -16,6 +17,16 @@ import { humanize } from "../src/engine/humanize";
 import { CALIB, predictOfficialPct, type CalibTrack } from "../src/engine/zhuque-calib";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+/** 极简 flag 解析：不带值的 --xxx 记为 "1" */
+const argv: Record<string, string> = {};
+{
+  const a = process.argv.slice(2);
+  for (let i = 0; i < a.length; i++) {
+    if (!a[i].startsWith("--")) continue;
+    const next = a[i + 1];
+    argv[a[i].slice(2)] = next === undefined || next.startsWith("--") ? "1" : a[++i];
+  }
+}
 const DATA = JSON.parse(fs.readFileSync(path.join(__dirname, "calibration-data.json"), "utf8"));
 const V2_JSON = JSON.parse(fs.readFileSync(path.join(__dirname, "calibration-data-v2-genres.json"), "utf8"));
 const SEED = 20260826;
@@ -96,3 +107,26 @@ if (drifted.length > 0) {
   console.log("  漂移点：" + drifted.map((d) => `${d.id}(Δ${d.delta >= 0 ? "+" : ""}${d.delta})`).join("、"));
   console.log("  → 提示：这些点对应体裁线已过时，需官方送检新数据后重拟合");
 }
+
+/* ----------------------------- 退出码 ----------------------------- *
+ * 【1】【2】是自洽性检查，不过就是错，一律拦。
+ * 【3】x 轴漂移是"已知过时"状态：2026-09-19 实测剩 6/18 点漂移（最大 Δ=-35，D0），
+ * 全部硬拦会让仓库永久红、进而没人看这个检查——正是本文件长期只打印不拦（退出码恒 0）
+ * 导致漂移无人察觉的老问题。所以做成**棘轮**：只许变好、不许变差，超过基线才拦。
+ * 用 --ceiling 可以临时收紧来自测这条门禁真的会拦。
+ * ------------------------------------------------------------------ */
+const DRIFT_CEILING_POINTS = Number(argv.ceiling ?? 6);
+const DRIFT_CEILING_MAX = 35;
+const maxAbs = Math.max(...driftList.map((d) => Math.abs(d.delta)));
+const bad: string[] = [];
+if (!paramOk) bad.push("tracks 参数与 zhuque-calib.ts 不一致");
+if (maxErr > 8) bad.push(`锚点拟合误差 ${maxErr.toFixed(1)}pp > 8pp`);
+if (drifted.length > DRIFT_CEILING_POINTS)
+  bad.push(`漂移 ${drifted.length} 点 > 基线 ${DRIFT_CEILING_POINTS} 点（引擎改动让校准线更过时了）`);
+if (maxAbs > DRIFT_CEILING_MAX) bad.push(`最大漂移 Δ${maxAbs} > 基线 ${DRIFT_CEILING_MAX}`);
+console.log(
+  bad.length
+    ? `\n❌ 标定数据源自检未通过：\n  - ${bad.join("\n  - ")}`
+    : `\n✅ 标定数据源自检通过（漂移基线 ${drifted.length}/${DRIFT_CEILING_POINTS} 点、Δmax ${maxAbs}/${DRIFT_CEILING_MAX}）`,
+);
+process.exit(bad.length ? 1 : 0);
