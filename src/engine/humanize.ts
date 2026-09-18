@@ -339,7 +339,9 @@ function replaceVocab(
         rng() < p &&
         // v0.8.6 术语保护：命中位置落在受保护术语内则跳过（不影响 rng 消耗节奏）
         !isProtectedTerm(base, idx, end) &&
-        !guardBlocks(from, base.slice(end, end + 8), base.slice(Math.max(0, idx - 3), idx))
+        // 前窗取 6 字而非 3 字：够着"受到广泛"这类隔了状语的搭配。
+        // judgeGuardBlocks 里所有前缀判据都是尾锚定（endsWith / /…$/），加宽不改变既有行为。
+        !guardBlocks(from, base.slice(end, end + 8), base.slice(Math.max(0, idx - 6), idx))
       ) {
         const rep = pick(rng, candidates);
         // v0.8.9 叠字守卫：替换词尾字与右侧首字相同时将产生叠字——
@@ -395,6 +397,40 @@ const RELAX_REDUNDANT_RES = ["进行", "予以", "加以"].map(
 function relaxRedundantVerb(text: string, rng: () => number, p: number): string {
   for (const re of RELAX_REDUNDANT_RES) {
     text = text.replace(re, (_m, verb: string) => (rng() < p ? verb : _m));
+  }
+  return text;
+}
+
+/**
+ * 被动软化白名单：AI 稿爱堆无施事被动（被广泛使用于 / 受到广泛关注 / 被认为是），
+ * 人写稿通常把施事补出来或干脆说主动。
+ *
+ * 只做**固定搭配整块替换**，不做切词式泛化：非白名单的"得到提高""受到启发"一律不碰，
+ * 按"被+V于X"通用捕获重排会把主语边界切错（历史版本实测切出"人工智能技在…中，术…"）。
+ */
+const PASSIVE_REWRITES: { re: RegExp; variants: string[] }[] = [
+  {
+    re: new RegExp("被广泛使用于([^\\n，。！？；]{2,20})", "g"),
+    variants: ["在$1用得很广", "在$1到处都在用"],
+  },
+  { re: /受到广泛关注/g, variants: ["大家都很关注", "被不少人盯着看", "挺受看重"] },
+  { re: /得到广泛认可/g, variants: ["大家都很认可", "口碑不错", "普遍叫好"] },
+  // 必须保留系词"是"；且替身要能直接接在原主语后面——"大家普遍觉得是"会留下
+  // "这大家普遍觉得是行业趋势"这种悬空话题，"公认是/大家都说是"才读得通。
+  { re: /被认为是/g, variants: ["公认是", "大家都说是"] },
+  // "大家管它叫"要不得：原句式是「主语 + 被称之为 + 宾」，换完变"它大家管它叫里程碑"，
+  // 主语与"管它"重复。只有能直接跟在主语后的谓语性说法才安全。
+  { re: /被称之为/g, variants: ["人称", "俗称"] },
+];
+
+function softenPassive(text: string, rng: () => number, p: number): string {
+  for (const { re, variants } of PASSIVE_REWRITES) {
+    text = text.replace(re, (...args: unknown[]) => {
+      const matched = args[0] as string;
+      if (rng() >= p) return matched;
+      const g1 = args[1];
+      return pick(rng, variants).replace(/\$1/g, typeof g1 === "string" ? g1 : "");
+    });
   }
   return text;
 }
@@ -929,6 +965,9 @@ function humanizeSingle(text: string, opts: HumanizeOptions = {}): string {
   working = relaxRedundantVerb(working, rng, 0.85 * intensity);
   working = relaxIntensifierVerb(working, rng, 0.85 * intensity);
   working = relaxLe(working, rng, 0.6 * intensity); // 补"了"概率从 0.4 提到 0.6，人味更强
+  // 必须排在 replaceVocab 之前：否则"受到广泛关注"的"关注"先被换成"留意"，
+  // 这里再也匹配不到，实测会留下"受到广泛留意"这种搭配病句。
+  working = softenPassive(working, rng, Math.min(1, 0.85 * intensity));
   working = replaceTemplates(working, rng, intensity);
   working = replaceVocab(working, rng, intensity, style);
   working = replaceWithDevelopment(working, rng, intensity);

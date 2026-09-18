@@ -245,3 +245,51 @@ describe("restoreMixedSpacing（v0.8.9 LLM 稿空格回填）", () => {
     expect(restoreMixedSpacing(orig, once)).toBe(once);
   });
 });
+
+describe("softenPassive（被动软化白名单）", () => {
+  // 每例都给两句：引擎对极短文本有闸门，单句会被原样返回，测不到这条规则
+  const cases: [string, string][] = [
+    ["这种方法很新。这种方法被广泛使用于医疗诊断。", "被广泛使用于"],
+    ["这款产品卖得好。该产品受到广泛关注。", "受到广泛关注"],
+    ["这套流程跑了两年。方案得到广泛认可。", "得到广泛认可"],
+    ["这是个热门方向。这被认为是行业趋势。", "被认为是"],
+    ["这块牌子响了十年。它被称之为里程碑。", "被称之为"],
+  ];
+
+  it("每条白名单搭配都能被软化（跨种子覆盖全部 5 条）", () => {
+    const softened = cases.map(([, cliche]) => {
+      for (let seed = 0; seed < 40; seed++) if (!humanize(cases.find((x) => x[1] === cliche)![0], { intensity: 1, seed }).includes(cliche)) return true;
+      return false;
+    });
+    expect(softened.every(Boolean)).toBe(true);
+  });
+
+  it("不产出搭配病句、主语重复或缺介词的残形", () => {
+    for (const [text] of cases) {
+      for (let seed = 0; seed < 40; seed++) {
+        const o = humanize(text, { intensity: 1, seed });
+        expect(/受到广泛留意|得到广泛盯着/.test(o), `搭配病句: ${o}`).toBe(false);
+        expect(/它大家|这大家普遍|管它叫/.test(o), `主语重复/回退替身: ${o}`).toBe(false);
+        // 整块替换必须带介词"在"；"用得很广"后面跟语气词是合法的，所以正向验前置
+        if (o.includes("用得很广")) expect(/在[^，。！？\s]{2,14}用得很广/.test(o), `缺介词: ${o}`).toBe(true);
+      }
+    }
+  });
+
+  it("「被认为是」软化后系词仍在，判断句不残缺", () => {
+    const t = "这是个热门方向。这被认为是行业趋势。";
+    for (let seed = 0; seed < 40; seed++) {
+      const o = humanize(t, { intensity: 1, seed });
+      if (!o.includes("被认为是")) expect(/是/.test(o), `丢了系词: ${o}`).toBe(true);
+    }
+  });
+
+  it("非白名单的被动搭配一律不碰（宁缺毋滥）", () => {
+    const t = "这套方法很常用。他得到了提高，也受到启发，被广泛应用在工业界。";
+    for (let seed = 0; seed < 20; seed++) {
+      const o = humanize(t, { intensity: 1, seed });
+      expect(o).toContain("得到了提高");
+      expect(o).toContain("受到启发");
+    }
+  });
+});

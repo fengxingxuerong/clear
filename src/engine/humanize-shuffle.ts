@@ -24,6 +24,7 @@ import {
   PAD_WORDS,
   SENT_STARTERS,
   MECH_CLICHES,
+  MECH_CLICHE_REWRITE,
   splitSentences,
   sentenceStats,
   computeStats,
@@ -845,7 +846,21 @@ function varyParagraphs(text: string, rng: () => number, p: number): string {
 
 function stripAICliches(text: string): string {
   let out = text;
-  for (const c of MECH_CLICHES) out = out.split(c).join("");
+  // 只在**小句起始位**删除：MECH_CLICHES 里混着两类东西——句首脚手架（综上所述，/在当今社会）
+  // 和谓语短语（展望未来/按下了快进键/具有里程碑意义）。后者往往是句子里唯一的谓语，
+  // 盲删会留下"人工智能技术。"式光杆主语，再被垫词补成"人工智能技术吧。"的废句
+  //（实测谓语类 92~100/100 必塌）。判据与 stripLeadingConnectivesHard 同源：
+  // 认边界不认内容，宁可留一个扣分项，也不产出读不通的句子。
+  for (const c of MECH_CLICHES) {
+    const escaped = c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    out = out.replace(new RegExp(`(^|[。！？；，、\\n])${escaped}`, "g"), "$1");
+  }
+  // 谓语位不能删的，改用口语等价物顶掉，避免把套话原样留在稿里。
+  // 长键先换：否则短键会先命中并打断长键的匹配。
+  for (const c of Object.keys(MECH_CLICHE_REWRITE).sort((a, b) => b.length - a.length)) {
+    const escaped = c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    out = out.replace(new RegExp(escaped, "g"), MECH_CLICHE_REWRITE[c]);
+  }
   return out;
 }
 

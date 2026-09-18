@@ -134,6 +134,18 @@ function judgeGuardBlocks(from: string, context: string, before: string): boolea
   // scan-bugs v5.2「名词位替身」86 次违规的根因。通用守卫：前缀"的"即跳过。
   if (before && /的$/.test(before)) return true;
 
+  // 形式动词语槽守卫：「进行/予以/加以（+了）」后只能站动词性名词，口语结果补语塞进去
+  // 会得到"进行了调好"式病句（"优化→调好"撞进"进行了优化"）。八维元压测 A 维实测
+  // 188/1800 次运行命中，且被同批语料里"，予以了反馈"的输入自带命中长期掩盖。
+  // 交由套话清除层整体处理"进行了X→X"，逐字替换在此槽位一律跳过。
+  if (before && /(?:进行|予以|加以)了?$/.test(before)) return true;
+
+  // 「受到/得到/予以/备受 +（状语）+ 关注/重视」是固定搭配：把"关注"换成口语替身会得到
+  // "受到广泛留意"式搭配病句（实测）。搭配里隔了状语，所以判据要能吃下中间那几个字。
+  if (from === "关注" || from === "重视") {
+    if (/(?:受到|得到|予以|备受)[^，。！？；]{0,4}$/.test(before)) return true;
+  }
+
   const pre = GUARD_BEFORE[from];
   if (pre) {
     for (const g of pre) {
