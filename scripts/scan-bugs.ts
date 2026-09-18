@@ -3,6 +3,7 @@ import {
   mechanicalShuffle,
   fingerprintCheck,
   checkFidelityLocal,
+  collapseIssues,
 } from "../src/engine/humanize.ts";
 import { humanizeBestOf } from "../src/engine/humanize-bestof.ts";
 import { reportAll, type Violation } from "./violation-report.ts";
@@ -315,6 +316,14 @@ let v52 = 0;
             v52++;
             pushV("v5.2", name, it, seed, { pattern: re.source, snippet: out.slice(0, 200), input: text.slice(0, 300) });
           }
+        }
+        // 谓语塌缩差分探针。brokenSigs 是签名式正则，只能防已知写法；这里拿输出与**原文**
+        // 做差分，能罩住整类"谓语被删成光杆主语"。这类缺陷曾从 v0.8 一路活到 v0.9.10，
+        // 因为 aiScore 对塌句给 0 分——所有指标只奖励"删掉了"，没人检查句子还成不成句。
+        for (const col of collapseIssues(text, out)) {
+          logDetail(`❌ v5.2 语法塌缩 强度${it} seed${seed}: ${col}`);
+          v52++;
+          pushV("v5.2", "语法塌缩", it, seed, { snippet: out.slice(0, 200), input: text.slice(0, 300) });
         }
         const rep = fingerprintCheck(out);
         for (const iss of rep.issues) {
