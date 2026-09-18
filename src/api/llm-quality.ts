@@ -313,9 +313,16 @@ export function deletionStubIssues(original: string, rewritten: string): string[
 
 export function localHardGate(original: string, rewritten: string): string[] {
   const issues: string[] = [];
-  const STAT_SOFT = new Set(["句长节奏过平", "句长标准差落入 AI 特征带"]);
+  // 不参与否决的两类：① 统计型节奏项（交评分修订收敛，硬拦会空烧 API）；
+  // ② 中英/中数空格——本仓库 v0.8.8 已定策"空格完全跟随原文排版"：本地侧
+  // stripCJKEdgeSpaces 见原文有空格就不删（humanize-shuffle.ts:762 注释），LLM 侧
+  // restoreMixedSpacing 是同口径的反向补齐，SYSTEM_PROMPT 第 18 条也是这个口径。
+  // 而 processCandidate 先补齐再打门槛，旧写法等于让管线为自己刚做的、
+  // 有意为之的事把每个候选全部判死（实测：一版零把柄的紧排稿被回填后凭空多出
+  // 5 处空格把柄 → 打回 → 修复再打回 → 整条 LLM 通路静默退回本地引擎）。
+  const NON_VETOING = new Set(["句长节奏过平", "句长标准差落入 AI 特征带", "中英数字间空格"]);
   for (const i of fingerprintCheck(rewritten).issues) {
-    if (!STAT_SOFT.has(i.name)) issues.push(`指纹：${i.name}`);
+    if (!NON_VETOING.has(i.name)) issues.push(`指纹：${i.name}`);
   }
   issues.push(...checkFidelityLocal(original, rewritten).problems);
   issues.push(...coherenceIssues(rewritten)); // v0.8.5：重排后的衔接断裂

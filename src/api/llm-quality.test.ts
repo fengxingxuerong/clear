@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { localHardGate, processCandidate, coherenceIssues, fabricationIssues, truncationIssues, fabricationReview, deletionStubIssues } from "./llm-quality";
+import { fingerprintCheck } from "../engine/humanize";
+import { restoreMixedSpacing } from "../engine/humanize-shuffle";
 import { buildRevisionPrompt } from "./llm-prompts";
 import { ZHUQUE_DETECT_SYSTEM } from "./zhuque-semantic";
 import { humanizeViaApiDeep } from "./llm-humanize";
@@ -330,5 +332,23 @@ describe("processCandidate（修复成功路径）", () => {
     expect(judge?.user).toContain("23%");
     expect(judge?.user).not.toContain("32%");
     expect(r.score).toBe(18);
+  });
+});
+
+describe("空格口径必须与硬门槛一致（v0.8.8「空格跟随原文排版」）", () => {
+  const orig = "本文使用 GPT-4 模型处理 1750 亿参数，实测准确率为 92.5%。";
+  const tight = "这篇拿GPT-4跑了1750亿参数，准确率实测92.5%，效果还行。";
+
+  it("回填造出的空格不得进否决理由——否则每个候选都必死", () => {
+    const restored = restoreMixedSpacing(orig, tight);
+    // 先确认前提成立：回填确实造出了空格把柄，否则这条测试没在测东西
+    expect(fingerprintCheck(restored).issues.some((i) => i.name === "中英数字间空格")).toBe(true);
+    // 但它不能成为打回理由：processCandidate 先补齐再打门槛，豁免前每个候选都被判死
+    expect(localHardGate(orig, restored).filter((s) => s.includes("空格"))).toEqual([]);
+  });
+
+  it("原文本身无空格时不得凭空造出空格（回填触发条件仍是 1 处）", () => {
+    const noSpace = "这篇拿GPT-4跑了1750亿参数，效果还行。";
+    expect(restoreMixedSpacing(noSpace, noSpace)).toBe(noSpace);
   });
 });
