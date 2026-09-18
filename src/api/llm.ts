@@ -23,11 +23,20 @@ import { humanizeViaApi, humanizeViaApiDeep } from "./llm-humanize";
 import { resetApiCallCount } from "./llm-chat";
 import { errMsg } from "./llm-judge";
 
+/** 实际产出这一稿的引擎。`usedApi` 只回答"有没有调用过 API"，
+ *  分块路径里单块失败会本地补位而 usedApi 仍为 true——它不足以说明
+ *  用户手上这稿是谁写的，而深度模式失败回退时恰恰必须说清这件事。 */
+export type HumanizeEngine = "llm" | "local" | "mixed" | "passthrough";
+
 export interface RunResult {
   text: string;
   before: ReturnType<typeof aiScore>;
   after: ReturnType<typeof aiScore>;
   usedApi: boolean;
+  /** 交付稿的真实来源 */
+  engine: HumanizeEngine;
+  /** 降级原因（人读文案，供 UI 与历史留痕）；全程走 LLM 时为空 */
+  degrade: string[];
   note: string;
   /** 深度模式各轮评分 */
   roundScores: number[];
@@ -90,11 +99,15 @@ export async function runHumanize(
       before,
       after: before,
       usedApi: false,
+      engine: "passthrough",
+      degrade: [],
       note: "文本过短（去空白 <10 字），跳过去味",
       roundScores: [],
     };
   }
   let usedApi = false;
+  let engine: HumanizeEngine = "local";
+  const degrade: string[] = [];
   let note = "";
   let outText: string;
   let roundScores: number[] = [];
@@ -111,6 +124,8 @@ export async function runHumanize(
         const allScores: number[] = [];
         const allQc: boolean[] = [];
         let anyIssue = false;
+        // 被本地引擎补位的块数：混拼时 usedApi 仍为 true，必须单独记账才说得清来源
+        let localChunks = 0;
         // v0.8.6 调用预算跨块共享：整篇 reset 一次，各块累计计数，
         // maxApiCalls 语义从"每块一次"修正为"整篇一次"
         resetApiCallCount();
@@ -142,6 +157,8 @@ export async function runHumanize(
               // 套话与连接词清理，与 LLM 稿的风格落差最小。
               parts.push(humanize(chunks[i], { intensity: Math.min(intensity, 0.5) }));
               anyIssue = true;
+              localChunks++;
+              degrade.push(`第 ${i + 1}/${chunks.length} 块 LLM 未产出，已由本地引擎温和档补位`);
             }
           } else {
             parts.push(await humanizeViaApi(chunks[i], cfg, intensity));
@@ -152,6 +169,7 @@ export async function runHumanize(
         // 在块边界会累积成新指纹——拼接后做全文级限额去重（零改写）
         outText = crossChunkCleanup(outText);
         usedApi = true;
+        engine = localChunks === 0 ? "llm" : "mixed";
         const fid = checkFidelityLocal(text, outText);
         // v0.9.4 P2：整篇压缩率（含单块本地回退的混拼结果，按最终拼稿算）
         const rc = (s: string) => s.replace(/\s+/g, "").length;
@@ -171,12 +189,15 @@ export async function runHumanize(
           shrinkNote;
         // v0.8.6 LLM 主导：API 输出即最终稿，不再叠加本地朱雀特征（方言/自问自答/错别字
         // 注入会污染 LLM 的语义级改写）。反检测特征由提示词 19 条战术原生产出。
+        // 混拼（部分块本地补位）同样要把原因顶到最前，理由同下
         return {
           text: outText,
           before,
           after: aiScore(outText),
           usedApi,
-          note,
+          engine,
+          degrade,
+          note: (degrade.length ? `⚠️ ${degrade.join("；")}。` : "") + note,
           roundScores: allScores,
         };
       }
@@ -192,6 +213,7 @@ export async function runHumanize(
         outText = deep.text;
         roundScores = deep.roundScores;
         usedApi = true;
+        engine = "llm";
         const shown = deep.roundScores.map((s) => (s < 0 ? "失败" : s)).join(" → ");
         const qcOk = deep.qcPassed.filter(Boolean).length;
         // v0.9.5：qcIssues 现在只记录"最后一轮被弃用候选"的问题——交付稿必然
@@ -219,18 +241,22 @@ export async function runHumanize(
         // 与深度模式的机械扰动层对齐反指纹下限
         outText = crossChunkCleanup(outText);
         usedApi = true;
+        engine = "llm";
       }
     } catch (e: unknown) {
       // 回退本地引擎时同样尊重择优设置
       const r = runLocal(text, intensity, zhuqueMode, genre, cfg.style, local);
       outText = r.text;
       bestOf = r.bestOf;
+      engine = "local";
+      degrade.push("API 调用失败，整稿由本地引擎产出（非 LLM）");
       note = `API 调用失败，已回退本地引擎：${errMsg(e)}`;
     }
   } else {
     const r = runLocal(text, intensity, zhuqueMode, genre, cfg.style, local);
     outText = r.text;
     bestOf = r.bestOf;
+    degrade.push("未启用 API 或无可用 Key，本稿由本地引擎产出（非 LLM）");
   }
 
   // v0.8.6 LLM 主导：API 输出即最终稿，不再叠加本地朱雀特征（方言/自问自答/错别字注入
@@ -244,12 +270,17 @@ export async function runHumanize(
     before.score < 35 && usedApi
       ? "（提示：输入 AI 味已较低，本轮收益有限；重复/串联去味不建议）"
       : "";
+  // 降级原因前置到 note：这条 note 是 UI 唯一无条件展示的一行，写在末尾会被
+  // "深度去味达标…"之类好消息挤下去，而"这稿到底是不是 LLM 写的"恰恰最需要显眼
+  const head = degrade.length ? `⚠️ ${degrade.join("；")}。` : "";
   return {
     text: outText,
     before,
     after,
     usedApi,
-    note: (note + (tip ? ` ${tip}` : "")).trim(),
+    engine,
+    degrade,
+    note: (head + note + (tip ? ` ${tip}` : "")).trim(),
     roundScores,
     bestOf,
     shrinkRatio,

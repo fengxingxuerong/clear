@@ -3,6 +3,7 @@
  * 每次去味完成后自动保存，支持回看、一键复用
  */
 import type { ScoreBreakdown } from "./engine/humanize";
+import type { HumanizeEngine } from "./api/llm";
 
 export interface HistoryEntry {
   id: string;
@@ -12,6 +13,9 @@ export interface HistoryEntry {
   afterScore: number;
   intensity: number;
   usedApi: boolean;
+  /** 该稿的真实产出引擎。旧记录没有这个字段（可选），缺省时按 usedApi 推断。
+   *  只存 usedApi 是不够的：分块混拼时它是 true，看不出本地补位。 */
+  engine?: HumanizeEngine;
   timestamp: number;
 }
 
@@ -62,6 +66,7 @@ export function makeHistoryEntry(
   after: ScoreBreakdown,
   intensity: number,
   usedApi: boolean,
+  engine?: HumanizeEngine,
 ): HistoryEntry {
   return {
     id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
@@ -71,6 +76,7 @@ export function makeHistoryEntry(
     afterScore: after.score,
     intensity,
     usedApi,
+    engine,
     timestamp: Date.now(),
   };
 }

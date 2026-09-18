@@ -36,6 +36,8 @@ describe("runHumanize 分发", () => {
     const cfg = { ...DEFAULT_API, enabled: false };
     const r = await runHumanize(SAMPLE, 0.7, cfg);
     expect(r.usedApi).toBe(false);
+    expect(r.engine).toBe("local");
+    expect(r.degrade.join("")).toContain("未启用 API");
     expect(r.text.length).toBeGreaterThan(0);
     expect(r.before.score).toBeGreaterThanOrEqual(r.after.score - 5); // 本地分不显著上升
   });
@@ -46,6 +48,8 @@ describe("runHumanize 分发", () => {
     const cfg = { ...DEFAULT_API, enabled: true, apiKey: "k", deepMode: false };
     const r = await runHumanize(SAMPLE, 0.7, cfg);
     expect(r.usedApi).toBe(true);
+    expect(r.engine).toBe("llm");
+    expect(r.degrade).toEqual([]); // 全程 LLM，不得留降级痕迹
     expect(r.text).toContain("时间往前倒几年");
     expect(r.note).toBe("");
   });
@@ -58,6 +62,10 @@ describe("runHumanize 分发", () => {
     const cfg = { ...DEFAULT_API, enabled: true, apiKey: "k", deepMode: false };
     const r = await runHumanize(SAMPLE, 0.7, cfg);
     expect(r.usedApi).toBe(false);
+    // 旧文案在这里会显示「未配置/未启用 API」——用户明明付了调用，那是假话
+    expect(r.engine).toBe("local");
+    expect(r.degrade.join("")).toContain("API 调用失败");
+    expect(r.note.startsWith("⚠️")).toBe(true);
     expect(r.note).toMatch(/API 调用失败，已回退本地引擎/);
     expect(r.text.length).toBeGreaterThan(0);
   });
@@ -67,6 +75,7 @@ describe("runHumanize 分发", () => {
     const cfg = { ...DEFAULT_API, enabled: true, apiKey: "k", deepMode: false };
     const r = await runHumanize(SAMPLE, 0.7, cfg);
     expect(r.usedApi).toBe(false);
+    expect(r.engine).toBe("local");
     expect(r.text.length).toBeGreaterThan(0);
   });
 

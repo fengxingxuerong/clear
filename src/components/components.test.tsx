@@ -181,14 +181,22 @@ describe("HistoryPanel（去味历史）", () => {
     expect(p.onClear).toHaveBeenCalledTimes(1);
   });
 
-  it("点条目触发 onLoad 并自动关闭；API 条目标注 API", () => {
+  it("点条目触发 onLoad 并自动关闭；无 engine 字段的旧记录按 usedApi 推断", () => {
     const p = props({ entries: [e2, e1] });
     const { container, getAllByText } = render(<HistoryPanel {...p} />);
     expect(container.textContent).toContain("3 小时前");
-    expect(container.textContent).toContain("API");
+    expect(container.textContent).toContain("LLM");
     fireEvent.click(getAllByText("一段被去味的原文内容…")[0]);
     expect(p.onLoad).toHaveBeenCalledWith(e2);
     expect(p.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("混拼条目必须显式标出（usedApi=true 不代表整稿都来自 LLM）", () => {
+    const mixed: HistoryEntry = { ...e2, id: "h3", engine: "mixed" };
+    const passthrough: HistoryEntry = { ...e1, id: "h4", engine: "passthrough" };
+    const { container } = render(<HistoryPanel {...props({ entries: [mixed, passthrough] })} />);
+    expect(container.textContent).toContain("LLM+本地混拼");
+    expect(container.textContent).toContain("未处理（过短）");
   });
 
   it("点关闭按钮触发 onClose", () => {

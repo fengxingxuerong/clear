@@ -7,6 +7,16 @@ interface HistoryPanelProps {
   onClose: () => void;
 }
 
+/** 这稿是谁写的。旧记录没有 engine 字段，只能按 usedApi 让步推断
+ *  （推不出混拼——这正是当初只存布尔值的代价）。 */
+function engineLabel(e: HistoryEntry): string {
+  const eng = e.engine ?? (e.usedApi ? "llm" : "local");
+  if (eng === "llm") return "LLM";
+  if (eng === "mixed") return "LLM+本地混拼";
+  if (eng === "passthrough") return "未处理（过短）";
+  return "本地引擎";
+}
+
 function timeAgo(ts: number): string {
   const diff = Date.now() - ts;
   const mins = Math.floor(diff / 60000);
@@ -55,7 +65,7 @@ export function HistoryPanel({ entries, onLoad, onClear, onClose }: HistoryPanel
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 2 }}>
                     {timeAgo(e.timestamp)} · 强度 {Math.round(e.intensity * 100)}% ·{" "}
-                    {e.usedApi ? "API" : "本地引擎"}
+                    {engineLabel(e)}
                   </div>
                   <div
                     style={{

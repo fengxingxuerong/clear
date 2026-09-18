@@ -274,11 +274,21 @@ export default function App({
       setZqText(zt);
       const zr = detectZhuque(zt, zhuqueOpts(zqCalib));
       setZq(zr);
-      let msg = r.usedApi
-        ? r.roundScores?.length
-          ? "已使用 API 深度去味"
-          : "已使用 API（LLM）去味"
-        : "使用本地引擎去味（未配置/未启用 API）";
+      // 按**真实产出引擎**出文案。旧写法只看 usedApi，于是"API 调用失败回退本地"
+      // 时界面写的是「使用本地引擎去味（未配置/未启用 API）」——用户明明付了调用，
+      // 看到的是假话；而长文分块混拼时 usedApi 仍是 true，更分不出这稿是谁写的。
+      let msg: string;
+      if (r.engine === "llm") {
+        msg = r.roundScores?.length ? "已使用 API 深度去味" : "已使用 API（LLM）去味";
+      } else if (r.engine === "mixed") {
+        msg = "⚠️ 本稿是 LLM + 本地引擎混拼（部分块 LLM 未产出，已本地补位）";
+      } else if (r.engine === "passthrough") {
+        msg = "文本过短，未做去味处理";
+      } else {
+        msg = r.usedApi
+          ? "⚠️ 调用过 API 但最终仍由本地引擎产出"
+          : "使用本地引擎去味（未走 LLM）";
+      }
       if (r.note) msg += " · " + r.note;
       if (r.bestOf) {
         msg += ` · 多候选择优：${r.bestOf.tried} 稿中挑最优（淘汰 ${r.bestOf.rejected} 稿，中选种子 ${r.bestOf.seed}）`;
@@ -302,7 +312,7 @@ export default function App({
       }
       setNote(msg);
       // 保存到历史记录
-      const entry = makeHistoryEntry(input, r.text, r.before, r.after, intensity, r.usedApi);
+      const entry = makeHistoryEntry(input, r.text, r.before, r.after, intensity, r.usedApi, r.engine);
       saveHistory(entry);
       setHistory(loadHistory());
     } catch (e: unknown) {
