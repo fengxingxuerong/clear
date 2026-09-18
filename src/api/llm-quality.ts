@@ -2,7 +2,7 @@
  * 趣AI味 · 改写稿质检：LLM 通顺+忠实质检、本地忠实度兜底、候选处理管线
  */
 
-import { checkFidelityLocal, fingerprintCheck } from "../engine/humanize";
+import { checkFidelityLocal, collapseIssues, fingerprintCheck } from "../engine/humanize";
 import { restoreMixedSpacing } from "../engine/humanize-shuffle.ts";
 import { ApiConfig } from "./llm-config";
 import { chat } from "./llm-chat";
@@ -322,6 +322,10 @@ export function localHardGate(original: string, rewritten: string): string[] {
   issues.push(...fabricationIssues(original, rewritten)); // v0.8.9：编造兜底
   issues.push(...truncationIssues(original, rewritten)); // v0.9.4：截断/严重缩水守卫（P0）
   issues.push(...deletionStubIssues(original, rewritten)); // v0.9.5 P4：删减残留孤词句
+  // 谓语被删光的光杆主语：上面两条都漏（deletionStub 只管 2~6 字且含"在/被"即放行，
+  // 且要求残段在原文逐字出现）；而 aiScore 对这种塌句给 0 分 = 奖励删除，
+  // 不加这道否决，择优会稳定挑出删得最狠的一稿。
+  issues.push(...collapseIssues(original, rewritten));
   return issues;
 }
 

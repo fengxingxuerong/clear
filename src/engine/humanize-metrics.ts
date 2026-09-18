@@ -582,5 +582,41 @@ export function checkFidelityLocal(original: string, rewritten: string): Fidelit
   return { pass: problems.length === 0, problems: problems.slice(0, 8) };
 }
 
+/** 塌句常被垫词补成"人工智能技术吧。"，比对前先剥掉尾部语气词 */
+const COLLAPSE_TAIL_PARTICLES = /[吧呢啊嘛呀哦哈呗咯嗯]+$/;
+const CLAUSE_SPLIT_RE = /[，、；;：:。！？!?\n]+/;
+
+/**
+ * 语法塌缩检测（与原文做差分）：改写稿里凡是"原文某小句的严格前缀、且尾巴被砍掉 ≥2 字"
+ * 的短小句，就是谓语被删光后剩下的光杆主语（"人工智能技术展望未来。"→"人工智能技术。"）。
+ *
+ * 用差分而不是动词表：中文没有可靠的光杆谓语判据，靠词表要么漏（含"在/被"就放行，
+ * 实测"这种技术在医疗诊断"正是这么滑过去的），要么误杀"脑子木。"这类正常短句。
+ * 而"逐字前缀 + 尾部被截"只有删减型破坏才会产生——正常改写会换词，不会原样保留前缀
+ * 再砍掉尾巴。
+ *
+ * 这条检查存在的原因：aiScore 对塌句给 0 分，等于奖励删除；不补一票否决，
+ * 择优会稳定挑出删得最狠的那一稿。
+ */
+export function collapseIssues(original: string, rewritten: string): string[] {
+  // 两侧必须用同一套分隔符切句，否则切分口径不一致会整批误报（全角冒号就是这么漏的）
+  const srcClauses = original.split(CLAUSE_SPLIT_RE).map((s) => s.trim()).filter((s) => s.length >= 4);
+  const outClauses = rewritten.split(CLAUSE_SPLIT_RE).map((s) => s.trim()).filter(Boolean);
+  if (!srcClauses.length) return [];
+  const outSet = new Set(outClauses);
+  const issues: string[] = [];
+  for (const raw of outClauses) {
+    const frag = raw.replace(COLLAPSE_TAIL_PARTICLES, "");
+    if (frag.length < 4 || frag.length > 16) continue;
+    // 只有"被截的那个原文小句在输出里也消失了"才算塌缩——否则它只是另一句的普通前缀
+    //（"字字字…"这类嵌套前缀、或两句共享词头时都会整批误报）
+    const victim = srcClauses.find(
+      (s) => s.length - frag.length >= 2 && s.startsWith(frag) && !outSet.has(s),
+    );
+    if (victim) issues.push(`「${frag}」是原文「${victim.slice(0, 24)}」被截断后的残留，谓语已丢失`);
+  }
+  return issues;
+}
+
 // splitSentences 在此保留引用以维持导出面（部分调用方可能直接用它做切句校验）
 export { splitSentences };
