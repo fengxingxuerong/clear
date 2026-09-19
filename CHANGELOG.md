@@ -344,6 +344,37 @@ README 的 110% 那段同步改写清楚：它是**给模型的目标**不是硬
 故只对齐自己改动部分；新增/改写的测试文件（`llm-chat.test.ts`、`humanize-metrics-calibration.test.ts`）
 已按格式收齐。
 
+**10) 朱雀官方 API 已开放：真值闭环从"手点网页"变成"只差一个 Key"（2026-09-20）**
+
+网页版送检这条路当天就撞死了：脚本一点「立即检测」就先弹腾讯滑块（`captcha.gtimg.com/static/template/drag_ele`），
+不去解、也没解，**额度一次没花**；而 s2 深改稿 199 字 / 原文 345 字，两个版本都够不到网页版 350 字门槛。
+但只读抓官网 DOM 时发现 `<a class="api-entry">使用API</a>` 指向
+`cloud.tencent.com/document/product/1552/137539` —— 朱雀**是有官方 API 的**，
+仓库里「朱雀没有公开 API，官方结果只能走网页」（`src/api/zhuque.ts` 头注释、`ZhuquePanel` 界面文案、
+README 对标段）和「EdgeOne 网关（企业版）」（`BenchmarkPanel`）四处说法全是过期的。
+文档口径逐条核过（拉原始 HTML 验字符串确实存在，没有只信摘要）：EdgeOne Makers 内置模型
+`@makers/zhuque-text`，固定网关 `POST https://ai-gateway.edgeone.link/v1/providers/zhuque-text/classify`，
+Bearer Key，body `{text, is_merge}`（默认 true = 整篇一个分，与网页口径一致），分数在
+`softmax_confidence`（0~1，越大越像风险内容），`labels_ratio` 另给三档占比，
+额度按 `makers_models_usage.total_tokens` 扣（不是 `usage.total_tokens`），50 万 token/月免费，仅文本。
+**不需要自建网关**——预设按钮此前拿 `your-gateway.edgeone.app` 占位域名拼路径，也一并换成官方固定域名。
+
+顺带堵住一处方向最错的 bug：`scoreViaDetector` 原来只挡「路径取不到数」，
+HTTP 200 + `{"status":"error","msg":"quota exceeded","softmax_confidence":0}` 会被读成
+**0 分 = 完全人类**，一次配额耗尽会被记成一次完美的去味成功。现在 `failureSignal` 只在响应
+**自报失败**时开火（status 非成功词 / msg 非空 / error 非空），且三类信号全部拼进错误消息留现场；
+不做"成功白名单"式的收紧，没有 `status` 字段的第三方接口行为不变。
+
+接线：`detector.ts` 新增 `ZHUQUE_OFFICIAL_DETECTOR` 预设与 `classifyViaDetector`（保留原始响应，
+`scoreViaDetector` 改成它的投影，出网路径只留一条——请求逻辑分两处写，守卫就只在一处生效）；
+`scripts/zhuque-api-score.ts` 批量 CLI，Key 只从环境变量读（命令行会留在 shell 历史，写文件会被 git 看见）。
+真发一次未授权请求验通链路：`401 {"error":{"code":"auth_failed"}}`，扣 0 token。
+两个失败分支实测退出码 2（缺 Key）/ 1（送检失败），过程中还修掉一个 Windows 陷阱：
+`process.exit()` 在 fetch 句柄未关完时炸 libuv 断言，把真实退出码盖成 127，改用 `process.exitCode`。
+预设也不再替用户勾「启用检测器」——点按钮只填口径，开不开（=花不花外部账号额度）由用户决定，
+旧测试断言 `enabled=true` 已同步改成断言 false。测试 727 → **736**（+8：200-但自报失败的四种形态、
+正常响应不误伤、无 status 向后兼容、非对象 JSON、预设口径、文档真实样例跑分）。`check:release` 退出 0。
+
 ## v0.9.13 更新（标尺错别字项误伤清算 + 官方送检凭证账本）
 
 **背景**：给"外部真值"补流水线（送检凭证账本）时，先撞上一件更糟的事——漂移表里 8 个点的内部分

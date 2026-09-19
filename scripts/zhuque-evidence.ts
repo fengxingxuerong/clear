@@ -70,8 +70,9 @@ export function labelFromPct(pct: number): ZhuqueLabel {
 
 const LABELS: ZhuqueLabel[] = ["ai", "suspected", "human"];
 const sha256 = (buf: Buffer) => crypto.createHash("sha256").update(buf).digest("hex");
-/** 与官方口径一致的字数：去掉空白后按码点计（UTF-16 长度对 emoji/生僻字不可靠） */
-const countChars = (s: string) => Array.from(s).filter((c) => !/\s/.test(c)).length;
+/** 与官方口径一致的字数：去掉空白后按码点计（UTF-16 长度对 emoji/生僻字不可靠）。
+ *  zhuque-api-score.ts 复用这一份，免得两处对"多少字"各说各话。 */
+export const countChars = (s: string) => Array.from(s).filter((c) => !/\s/.test(c)).length;
 /** 仓库内相对路径（正斜杠）。落盘前已确保 dest 在 base 之内，故不可能逃出 */
 const rel = (base: string, abs: string) => path.relative(base, abs).replace(/\\/g, "/");
 const inside = (base: string, abs: string) => path.resolve(abs).startsWith(path.resolve(base) + path.sep);

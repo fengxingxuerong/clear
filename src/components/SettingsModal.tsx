@@ -7,7 +7,7 @@ import {
   DEEP_TARGET_SCORE,
   SENSENOVA_PRESET,
 } from "../api/llm";
-import { DetectorConfig, DEFAULT_DETECTOR } from "../api/detector";
+import { DetectorConfig, DEFAULT_DETECTOR, ZHUQUE_OFFICIAL_DETECTOR } from "../api/detector";
 import { hasSecureStore } from "../store";
 import type { LocalSettings } from "../store";
 
@@ -122,8 +122,8 @@ export function SettingsModal({
         </label>
         {!hasSecureStore() && (
           <p className="modal-tip" style={{ marginTop: -6, color: "var(--warn)" }}>
-            ⚠️ Web 版 Key 以明文存储于浏览器 localStorage，关闭页面后仍在。
-            如担心安全，请使用 Electron 桌面版（系统级加密存储），或退出前手动清除浏览器数据。
+            ⚠️ Web 版 Key 以明文存储于浏览器 localStorage，关闭页面后仍在。 如担心安全，请使用
+            Electron 桌面版（系统级加密存储），或退出前手动清除浏览器数据。
           </p>
         )}
         <label className="row" style={{ alignItems: "flex-start" }}>
@@ -439,14 +439,12 @@ export function SettingsModal({
         </label>
 
         <div className="modal-divider">对标检测器（可选 · 如朱雀）</div>
-        <p className="modal-tip">
-          把 {`{text}`} POST 到你的检测器接口，从返回 JSON 按路径取分数。朱雀 API 用户填入 EdgeOne
-          网关域名 + Key 即可。
-        </p>
+        <p className="modal-tip">把 {`{text}`} POST 到你的检测器接口，从返回 JSON 按路径取分数。</p>
         <p className="modal-tip" style={{ marginTop: -6 }}>
-          <b>朱雀一键配置</b>：在腾讯云 EdgeOne 控制台创建 AI 网关后， 将网关域名和 API Key
-          填入下方，点「朱雀预设」自动配好路径和刻度。 网关路由 ={" "}
-          <code>{`/v1/providers/zhuque-text/classify`}</code>
+          <b>朱雀官方 API</b>（2026-09 起已开放，走腾讯云 EdgeOne Makers 内置模型{" "}
+          <code>@makers/zhuque-text</code>）：在 EdgeOne 控制台 <b>Makers → Models → API Key</b>{" "}
+          建一个 Key 填到下面即可，<b>不需要自建网关</b>——域名是固定的。每月 50 万 token{" "}
+          免费，只支持文本。点「填入朱雀默认值」配好路径和刻度，再自己勾「启用检测器」。
         </p>
         <label className="row">
           <span>朱雀预设</span>
@@ -454,12 +452,9 @@ export function SettingsModal({
             className="ghost sm"
             onClick={() =>
               updateDetector({
-                enabled: true,
-                url:
-                  (draftDetector.url.replace(/\/+$/, "") || "https://your-gateway.edgeone.app") +
-                  "/v1/providers/zhuque-text/classify",
-                scorePath: "softmax_confidence",
-                scale: "0-1",
+                url: ZHUQUE_OFFICIAL_DETECTOR.url,
+                scorePath: ZHUQUE_OFFICIAL_DETECTOR.scorePath,
+                scale: ZHUQUE_OFFICIAL_DETECTOR.scale,
               })
             }
           >

@@ -129,14 +129,15 @@ describe("SettingsModal（设置弹窗）", () => {
     expect(api.enabled).toBe(true);
   });
 
-  it("朱雀检测器预设：网关域名 + 分类路由 + softmax 路径 + 0-1 刻度", () => {
+  it("朱雀检测器预设：官方固定网关 + softmax 路径 + 0-1 刻度，且不替用户开启送检", () => {
     const onSave = vi.fn();
     const { getByText } = render(<SettingsModal {...base({ onSave })} />);
     fireEvent.click(getByText("填入朱雀默认值"));
     fireEvent.click(getByText("保存"));
     const det = onSave.mock.calls[0][1] as DetectorConfig;
-    expect(det.enabled).toBe(true);
-    expect(det.url).toBe("https://your-gateway.edgeone.app/v1/providers/zhuque-text/classify");
+    // 预设只填口径不改开关：勾上「启用检测器」等于每次去味都花外部账号的额度
+    expect(det.enabled).toBe(false);
+    expect(det.url).toBe("https://ai-gateway.edgeone.link/v1/providers/zhuque-text/classify");
     expect(det.scorePath).toBe("softmax_confidence");
     expect(det.scale).toBe("0-1");
   });

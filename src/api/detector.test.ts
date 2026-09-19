@@ -6,7 +6,12 @@
  * 换算错一位 = 全盘分数系统性偏差 100 倍，且 UI 上看不出来，必须锁死。
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { DEFAULT_DETECTOR, scoreViaDetector, type DetectorConfig } from "./detector";
+import {
+  DEFAULT_DETECTOR,
+  ZHUQUE_OFFICIAL_DETECTOR,
+  scoreViaDetector,
+  type DetectorConfig,
+} from "./detector";
 
 const realFetch = globalThis.fetch;
 
@@ -91,6 +96,47 @@ describe("scoreViaDetector（失败路径）", () => {
       "无法从响应解析分数",
     );
   });
+
+  it("HTTP 200 但自报失败（status=error + 分数为 0）必须抛错，不能读成 0 分=完全人类", async () => {
+    // 这是本模块最危险的一条路径：配额耗尽若被当成「人类写作」，
+    // 一次失败的去味会被记成一次完美的成功。
+    stubFetch({ body: { status: "error", msg: "quota exceeded", softmax_confidence: 0 } });
+    await expect(
+      scoreViaDetector("文本", cfg({ scorePath: "softmax_confidence", scale: "0-1" })),
+    ).rejects.toThrow(/quota exceeded/);
+  });
+
+  it("status 为失败词但没有 msg 时也抛错", async () => {
+    stubFetch({ body: { status: "failed", score: 0 } });
+    await expect(scoreViaDetector("文本", cfg())).rejects.toThrow(/status=failed/);
+  });
+
+  it("error 字段非空（朱雀未授权时的真实形态）抛错", async () => {
+    stubFetch({
+      body: { error: { message: "API key not found.", type: "auth_failed", code: "auth_failed" } },
+    });
+    await expect(scoreViaDetector("文本", cfg())).rejects.toThrow(/auth_failed/);
+  });
+
+  it("msg 非空即使分数正常也抛错（自相矛盾的响应不该产出分数）", async () => {
+    stubFetch({ body: { status: "success", msg: "degraded: fallback model", score: 5 } });
+    await expect(scoreViaDetector("文本", cfg())).rejects.toThrow(/degraded/);
+  });
+
+  it("error:false / msg 空串 / status=success 的正常响应不误伤", async () => {
+    stubFetch({ body: { status: "success", msg: "", error: false, score: 12 } });
+    await expect(scoreViaDetector("文本", cfg())).resolves.toBe(12);
+  });
+
+  it("没有 status 字段的第三方接口不受白名单影响（向后兼容）", async () => {
+    stubFetch({ body: { score: 41 } });
+    await expect(scoreViaDetector("文本", cfg())).resolves.toBe(41);
+  });
+
+  it("返回非对象 JSON（数组/裸数字）时抛错而不是崩在属性访问上", async () => {
+    stubFetch({ body: 42 });
+    await expect(scoreViaDetector("文本", cfg())).rejects.toThrow(/不是 JSON 对象/);
+  });
 });
 
 describe("scoreViaDetector（请求构造）", () => {
@@ -124,5 +170,35 @@ describe("DEFAULT_DETECTOR", () => {
     expect(DEFAULT_DETECTOR.enabled).toBe(false);
     expect(DEFAULT_DETECTOR.url).toBe("");
     expect(DEFAULT_DETECTOR.scale).toBe("0-100");
+  });
+});
+
+describe("ZHUQUE_OFFICIAL_DETECTOR（朱雀官方预设）", () => {
+  it("预设本身就是官方文档口径：固定网关 + softmax_confidence + 0-1 刻度", async () => {
+    expect(ZHUQUE_OFFICIAL_DETECTOR.url).toBe(
+      "https://ai-gateway.edgeone.link/v1/providers/zhuque-text/classify",
+    );
+    expect(ZHUQUE_OFFICIAL_DETECTOR.scorePath).toBe("softmax_confidence");
+    expect(ZHUQUE_OFFICIAL_DETECTOR.scale).toBe("0-1");
+    // 接上就自动送检会静默花掉外部账号的额度，预设不得替用户打开
+    expect(ZHUQUE_OFFICIAL_DETECTOR.enabled).toBe(false);
+  });
+
+  it("拿文档里的真实响应样例能跑出分数（0.0019 → 0 分，且不被失败守卫误杀）", async () => {
+    stubFetch({
+      body: {
+        status: "success",
+        softmax_confidence: 0.19,
+        ratio_confidence: 0,
+        labels_ratio: { "0": 1, "1": 0, "2": 0 },
+        segment_labels: [],
+        usage: { total_tokens: 7 },
+        msg: "",
+        makers_models_usage: { total_tokens: 12 },
+      },
+    });
+    await expect(
+      scoreViaDetector("hello world", { ...ZHUQUE_OFFICIAL_DETECTOR, apiKey: "k" }),
+    ).resolves.toBe(19);
   });
 });
