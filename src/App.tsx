@@ -30,7 +30,6 @@ import type { PplIssueLite } from "./components/FingerprintPanel";
 import type { PplFeature } from "./ppl/scorer-core";
 import {
   loadApi,
-  saveApi,
   loadIntensity,
   saveIntensity,
   loadDetector,
@@ -40,7 +39,7 @@ import {
   loadPplEnabled,
   savePplEnabled,
   hasSecureStore,
-  saveApiKeySecure,
+  persistApiConfig,
   saveDetectorKeySecure,
   loadFuseWeight,
   saveFuseWeight,
@@ -521,21 +520,21 @@ export default function App({
     );
   }
 
-  function handleSaveSettings(
+  async function handleSaveSettings(
     a: ApiConfig,
     d: DetectorConfig,
     z: boolean,
     ppl: boolean,
     l: LocalSettings,
   ) {
-    // 桌面版：主 API Key 与外部检测器 Key 都通过 safeStorage 加密存储；Web 版仍走 localStorage
+    // 桌面版：主 API Key 与 Key 池都经 safeStorage 加密落盘（persistApiConfig 里判定，
+    // 只有两个字段都确实写进加密存储才抹 localStorage 明文）；Web 版仍走 localStorage
+    await persistApiConfig(a);
     if (hasSecureStore()) {
-      void saveApiKeySecure(a.apiKey);
-      saveApi({ ...a, apiKey: "" }); // 只存非敏感字段到 localStorage
-      void saveDetectorKeySecure(d.apiKey);
-      saveDetector({ ...d, apiKey: "" }); // 检测器 Key 同样不落明文
+      const okDet = await saveDetectorKeySecure(d.apiKey);
+      if (okDet) saveDetector({ ...d, apiKey: "" });
+      else saveDetector(d);
     } else {
-      saveApi(a);
       saveDetector(d);
     }
     saveZhuqueMode(z);

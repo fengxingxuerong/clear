@@ -129,7 +129,48 @@ A 套件比的是 `calibration-data-v2-genres.json` 里**冻在 git 里的文本
 顺带把 `npm run test:regress12` 补进 `check:release`（此前这条门禁只在 CI 的 yml 里挂着，
 本地一键发布检查根本不调它）。
 
-**门禁**：`tsc --noEmit` 0、`eslint src/ scripts/` 0、`vitest run` **688 通过 / 43 文件**（上一版记的 673 之上 +15，全部是这道回归门禁的自测；
+**9) 桌面版 Key 池绕开 safeStorage 明文落 localStorage（P1 秘密存储）**
+核对《使用说明》时撞出来的。桌面版一直宣称"API Key 走系统级加密落盘"，代码确实有这条通道
+（`electron-app/main.js:107` 起，safeStorage 加密写 `userData/secure-config.json`），
+但**加密的字段只有一个**：
+  · `App.tsx` 收口时写 `saveApi({ ...a, apiKey: "" })`，只抹单 Key `apiKey`；
+  · Key 池 `apiKeys` 原样进 `saveApi` → `localStorage.setItem(K_API, JSON.stringify(c))`；
+  · `store.ts` 的 `loadApi` 还专门把 `apiKeys` 读回来（注释记着"v0.9.5 修复此前漏读导致
+    刷新后 Key 池丢失"——那次修复把池子接进了 localStorage 明文这条路，方向是对的、落点是错的）；
+  · `main.tsx` 启动只从安全存储取回 `apiKey` 一个字段；
+  · 而 `SettingsModal:165` 点「填入 SenseNova 常驻通道」写的**正是** `apiKeys`，
+    `effectiveKeys() = splitKeys(apiKey + apiKeys)` 又把两者合并使用。
+净效果：唯一会承载多个可用 Key 的那个字段，整条加密通道对它无效，明文躺在 userData 里。
+
+修法：`store.ts` 补齐 `loadApiKeysSecure/saveApiKeysSecure`，把"存哪儿"的决定从 `App.tsx`
+收进 `persistApiConfig()`（这一步同时决定 Key 会不会丢、会不会漏，放在组件里就没人测得到），
+`main.tsx` 走 `adoptSecureApiKeys()`；两个函数都**只在确认写进加密存储之后**才抹明文。
+最后这条不是形式主义：`main.js` 在 `safeStorage.isEncryptionAvailable()=false` 时返回 false，
+原先调用方把返回值丢了——所以"无条件抹明文"在这里等于**销毁用户的 Key**，
+那是拿数据安全的名义制造数据丢失。现在这种情形退回明文（与修复前一致，不会更差），
+如实返回 false，并写进《使用说明》。
+`adoptSecureApiKeys()` 顺手做升级迁移：老桌面版留在 localStorage 的明文池，
+下次启动自动搬进加密存储再抹掉，不用等用户再保存一次设置。Web 版返回空对象，
+启动路径逐字节不变（有测试锁这条）。
+
+红绿验证（`src/store.test.ts` 17 → 25 例）：把 `saveApi({...a, apiKey:"", apiKeys:""})`
+退回成只抹 `apiKey`，`localStorage 里搜不到任何 Key 片段` 立刻红
+（`expected '{"enabled":false,…' not to contain 'sk-POOL-A-0002'`）；
+把 `if (okMain && okPool)` 改成恒真，`safeStorage 不可用` 那条也立刻红。两处均已恢复。
+另：`main.tsx` 里那 15 行迁移逻辑一开始写在 bootstrap（无测试覆盖、且含销毁数据的分支），
+已挪进 `store.ts` 并逐条配上断言。
+
+**顺带修掉两份《使用说明》里的过期承诺**（都是逐条对代码核过的）：
+  · `electron-app/使用说明.txt` 头部停在 **v0.8.2**，而这份文件正是 `electron-dist/` 里
+    实际随 exe 发出去的那份（与产物内文件哈希一致）。"14 特征"实测是 16（`detector.ts` 数得）；
+    "内置 3 Key 轮换"**对桌面版根本不成立**——`loadPresetKeys()` 只读 `SENSENOVA_KEYS` 环境变量
+    或 `scripts/.sensenova-keys`，两者都不在打包产物里，按钮会置灰显示「（未配置 Key）」。
+    界面是诚实的，文档在骗人。已按实测重写，并补 v0.9.14 三条行为变化与迁移说明。
+  · 根目录 `使用说明.txt` 头部停在 v0.9.5，补到 v0.9.14 并加上好区收手 / 软上限 / 严格保真三条。
+核过没改的：`DEEP_MAX_ROUNDS=4`、攒 4 条出官方分估计 / 8 条启用留出验证（`calib-lab.ts:355`）、
+`DEFAULT_LOCAL={bestOf:true, candidates:8}`（store.ts:19）、样本 D 两点锚点 99.99/98.47。
+
+**门禁**：`tsc --noEmit` 0、`eslint src/ scripts/` 0、`vitest run` **696 通过 / 43 文件**（上一版记的 673 之上 +23：回归门禁自测 15 + Key 存储 8；
 其余为 好区 3 / 归属 2 / 否决 4 / 定锚 1 / 上层接线 2 / 复核兜底 2 / 预算停止重试与收场口径 3 / 刻度守卫 1。
 除真网关那批观测外，每条断言都做过红绿验证——把对应改动单独退回即红）、`scan-bugs` 0 违规、`verify-quality` 通过、
 `regression-12samples` D 10/10 · E 8/8 · 刻度守卫 ✅（本版首次在当前代码上绿）、`calib-sanity` 通过（6/6 点、Δmax 35——**两项都正好压在天花板上**，

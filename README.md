@@ -227,7 +227,14 @@ npm run repack           # = rebuild-app → prune-dist → verify-pruned
 ## 隐私
 
 - 本地引擎：原文只在你设备上处理，绝不上传。
-- API 模式：原文会发给你在设置里填的接口（你的 Key、你的服务商），Key 仅存浏览器 `localStorage`，不落盘到本项目、不上传到任何第三方。
+- API 模式：原文会发给你在设置里填的接口（你的 Key、你的服务商），不上传到任何第三方。
+  Key 的落盘位置按端不同：**Web 版**存浏览器 `localStorage`（明文，浏览器沙箱内）；
+  **Electron 桌面版**用系统级加密（`safeStorage`）写 `userData/secure-config.json`，
+  单 Key 与 **Key 池 `apiKeys` 两个字段都走这条通道**，localStorage 里只留非敏感字段。
+  > v0.9.14 之前桌面版只加密了单 Key，Key 池被明文写进 localStorage——已修，
+  > 并在启动时自动把老版本留下的明文池搬进加密存储。详见 CHANGELOG 第 9 条。
+  > 反过来说，**桌面版不内置任何 Key**：`SENSENOVA_KEYS` 与 `scripts/.sensenova-keys`
+  > 都不在打包产物里，设置里的「填入 SenseNova 常驻通道」会置灰显示「（未配置 Key）」。
 - 困惑度（PPL）通道的离线口径：**去味引擎完全离线**；PPL 需**首次联网**下载约 99MB 的
   `bert-base-chinese` 模型（Web 版经 hf-mirror 缓存进浏览器 Cache API，桌面版缓存在本地
   userData 目录），**下载完成后离线可用**。已断网实测验证：二次加载与打分全程零联网、零上传。

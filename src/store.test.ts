@@ -22,11 +22,15 @@ import {
   hasSecureStore,
   loadApiKeySecure,
   saveApiKeySecure,
+  loadApiKeysSecure,
+  saveApiKeysSecure,
   loadDetectorKeySecure,
   saveDetectorKeySecure,
+  adoptSecureApiKeys,
+  persistApiConfig,
   DEFAULT_LOCAL,
 } from "./store";
-import { DEFAULT_API } from "./api/llm-config";
+import { DEFAULT_API, effectiveKeys } from "./api/llm-config";
 import { DEFAULT_DETECTOR } from "./api/detector";
 import { DEFAULT_SEMANTIC_WEIGHT } from "./engine/zhuque";
 
@@ -212,31 +216,31 @@ describe("强度 / 朱雀模式 / 困惑度开关 / 融合权重 / 本地设置"
 });
 
 describe("Electron secureStore 桥接", () => {
-  it("Web 版（无 secureStore）：hasSecureStore=false，读返回 undefined，写静默跳过", async () => {
+  it("Web 版（无 secureStore）：hasSecureStore=false，读返回 undefined，写返回 false 且不抛", async () => {
     expect(hasSecureStore()).toBe(false);
     expect(await loadApiKeySecure()).toBeUndefined();
+    expect(await loadApiKeysSecure()).toBeUndefined();
     expect(await loadDetectorKeySecure()).toBeUndefined();
-    await expect(saveApiKeySecure("sk-x")).resolves.toBeUndefined();
-    await expect(saveDetectorKeySecure("sk-y")).resolves.toBeUndefined();
+    await expect(saveApiKeySecure("sk-x")).resolves.toBe(false);
+    await expect(saveApiKeysSecure("sk-y")).resolves.toBe(false);
+    await expect(saveDetectorKeySecure("sk-z")).resolves.toBe(false);
   });
 
   it("Electron 版（挂 secureStore 桥）：读写走桥接", async () => {
-    const store = new Map<string, string | null>();
-    (window as unknown as { secureStore: unknown }).secureStore = {
-      get: async (k: string) => store.get(k) ?? null,
-      set: async (k: string, v: string | null) => (store.set(k, v), true),
-    };
+    const store = bridge();
     try {
       expect(hasSecureStore()).toBe(true);
       await saveApiKeySecure("sk-main");
+      await saveApiKeysSecure("sk-pool-1\nsk-pool-2");
       await saveDetectorKeySecure("sk-det");
       expect(await loadApiKeySecure()).toBe("sk-main");
+      expect(await loadApiKeysSecure()).toBe("sk-pool-1\nsk-pool-2");
       expect(await loadDetectorKeySecure()).toBe("sk-det");
       // 空值清除
       await saveApiKeySecure("");
       expect(store.get("apiKey")).toBeNull();
     } finally {
-      delete (window as unknown as { secureStore?: unknown }).secureStore;
+      unbridge();
     }
   });
 
@@ -249,9 +253,149 @@ describe("Electron secureStore 桥接", () => {
     };
     try {
       expect(await loadApiKeySecure()).toBeUndefined();
+      expect(await loadApiKeysSecure()).toBeUndefined();
       expect(await loadDetectorKeySecure()).toBeUndefined();
     } finally {
-      delete (window as unknown as { secureStore?: unknown }).secureStore;
+      unbridge();
     }
+  });
+});
+
+/* ────────── Key 池明文泄漏（v0.9.14 修复）的回归锁 ──────────
+ * 修复前：桌面版加密通道只覆盖 apiKey，Key 池 apiKeys 被 saveApi 明文写进 localStorage，
+ * 而 loadApi 又会把它读回来——于是唯一承载多个可用 Key 的字段绕开了整条 safeStorage。
+ * 下面这组断言盯三件事：明文里一个 Key 都不许出现、重启后两个字段都能恢复、
+ * 以及"加密不可用时绝不抹掉用户已存的 Key"（抹了就是拿数据安全的名义制造数据丢失）。
+ */
+
+const K_API = "aihumanizer.api";
+const SECRET_MAIN = "sk-MAIN-SECRET-0001";
+const SECRET_POOL_A = "sk-POOL-A-0002";
+const SECRET_POOL_B = "sk-POOL-B-0003";
+
+function apiWithKeys() {
+  return {
+    ...DEFAULT_API,
+    baseUrl: "https://example.test/v1",
+    apiKey: SECRET_MAIN,
+    apiKeys: `${SECRET_POOL_A}\n${SECRET_POOL_B}`,
+  };
+}
+
+/** 桥接存储：set 返回 true 模拟 safeStorage 可用 */
+function bridge(fail = false): Map<string, string | null> {
+  const store = new Map<string, string | null>();
+  (window as unknown as { secureStore: unknown }).secureStore = {
+    get: async (k: string) => store.get(k) ?? null,
+    set: async (k: string, v: string | null) => {
+      if (fail) return false; // safeStorage.isEncryptionAvailable() === false
+      store.set(k, v);
+      return true;
+    },
+  };
+  return store;
+}
+
+function unbridge() {
+  delete (window as unknown as { secureStore?: unknown }).secureStore;
+}
+
+describe("persistApiConfig：桌面版不留明文", () => {
+  it("桥可用：两个 Key 字段都进加密存储，localStorage 里搜不到任何 Key 片段", async () => {
+    const store = bridge();
+    try {
+      expect(await persistApiConfig(apiWithKeys())).toBe(true);
+      expect(store.get("apiKey")).toBe(SECRET_MAIN);
+      expect(store.get("apiKeys")).toBe(`${SECRET_POOL_A}\n${SECRET_POOL_B}`);
+      const raw = localStorage.getItem(K_API) ?? "";
+      expect(raw).not.toContain(SECRET_MAIN);
+      expect(raw).not.toContain(SECRET_POOL_A);
+      expect(raw).not.toContain(SECRET_POOL_B);
+      // 非敏感字段照旧留存
+      expect(loadApi().baseUrl).toBe("https://example.test/v1");
+    } finally {
+      unbridge();
+    }
+  });
+
+  it("重启后两个字段都能注回来（effectiveKeys 用得上的那个池子不能丢）", async () => {
+    bridge();
+    try {
+      await persistApiConfig(apiWithKeys());
+      const adopted = await adoptSecureApiKeys();
+      expect(adopted.apiKey).toBe(SECRET_MAIN);
+      expect(adopted.apiKeys).toBe(`${SECRET_POOL_A}\n${SECRET_POOL_B}`);
+      const merged = { ...loadApi(), apiKey: adopted.apiKey ?? "", apiKeys: adopted.apiKeys };
+      expect(effectiveKeys(merged).sort()).toEqual(
+        [SECRET_MAIN, SECRET_POOL_A, SECRET_POOL_B].sort(),
+      );
+    } finally {
+      unbridge();
+    }
+  });
+
+  it("safeStorage 不可用：退回明文（不销毁用户已存的 Key），并如实返回 false", async () => {
+    const store = bridge(true);
+    try {
+      expect(await persistApiConfig(apiWithKeys())).toBe(false);
+      expect(store.size).toBe(0); // 什么都没写进"加密存储"
+      const raw = localStorage.getItem(K_API) ?? "";
+      expect(raw).toContain(SECRET_POOL_A); // 明文保留 = 用户的 Key 还在
+      expect(loadApi().apiKey).toBe(SECRET_MAIN);
+    } finally {
+      unbridge();
+    }
+  });
+
+  it("Web 版：走 localStorage，返回 false（没有加密通道可言）", async () => {
+    expect(await persistApiConfig(apiWithKeys())).toBe(false);
+    expect(loadApi().apiKeys).toBe(`${SECRET_POOL_A}\n${SECRET_POOL_B}`);
+  });
+});
+
+describe("adoptSecureApiKeys：把老版本留在 localStorage 的明文迁进加密存储", () => {
+  it("桌面版：明文池搬进加密存储后，localStorage 里的明文被抹掉", async () => {
+    saveApi(apiWithKeys()); // 模拟 v0.9.14 之前存下的明文
+    const store = bridge();
+    try {
+      const adopted = await adoptSecureApiKeys();
+      expect(adopted.apiKeys).toBe(`${SECRET_POOL_A}\n${SECRET_POOL_B}`);
+      expect(store.get("apiKeys")).toBe(`${SECRET_POOL_A}\n${SECRET_POOL_B}`);
+      expect(localStorage.getItem(K_API) ?? "").not.toContain(SECRET_POOL_A);
+      expect(localStorage.getItem(K_API) ?? "").not.toContain(SECRET_MAIN);
+    } finally {
+      unbridge();
+    }
+  });
+
+  it("加密存储里已有值时不被明文覆盖（用户可能已在界面上改过）", async () => {
+    saveApi(apiWithKeys());
+    const store = bridge();
+    try {
+      await saveApiKeysSecure("sk-NEWER-only");
+      const adopted = await adoptSecureApiKeys();
+      expect(adopted.apiKeys).toBe("sk-NEWER-only");
+      expect(store.get("apiKeys")).toBe("sk-NEWER-only");
+    } finally {
+      unbridge();
+    }
+  });
+
+  it("写不进加密存储时**不抹**明文（否则就是销毁用户的 Key）", async () => {
+    saveApi(apiWithKeys());
+    const store = bridge(true);
+    try {
+      await adoptSecureApiKeys();
+      expect(store.size).toBe(0);
+      expect(localStorage.getItem(K_API) ?? "").toContain(SECRET_POOL_A);
+    } finally {
+      unbridge();
+    }
+  });
+
+  it("Web 版返回空对象：启动路径不因这次修复而改变", async () => {
+    saveApi(apiWithKeys());
+    expect(await adoptSecureApiKeys()).toEqual({});
+    expect(loadApi().apiKeys).toBe(`${SECRET_POOL_A}\n${SECRET_POOL_B}`);
   });
 });
