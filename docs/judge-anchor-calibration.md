@@ -29,9 +29,13 @@ glm-5.2 作为交叉评判模型时存在**系统性严评偏置**：对人工�
 
 - 严评（首轮 86）→ 目标放宽至 ≤31
 - 宽评（首轮 45）→ ≤16
-- 首轮已低（≤28）→ 维持绝对目标
+- ~~首轮已低（≤28）→ 维持绝对目标~~ → **v0.9.14 起改为就地收手**：首轮 ≤ `JUDGE_GOOD_BAND`(28)
+  时有效目标取首轮分本身，不再开修订轮。原来那句"维持绝对目标"既没落到公式上、而且语义本身就是
+  "还要继续往下追"——实测两轮修订都没拿到更优分（15→49、89→92），继续只是白烧一整轮调用。
+  绝对目标 10 没有放宽：首轮 8 分那例目标仍是 10。
 
 **局限**：锚点放宽只能防止"白烧预算"，不能让分数恢复判别力——严评下 62 与 90 之间的差异仍主要反映模型偏置而非文本质量。
+且评委分**跨日不可比**（同模型同稿历史上判过 16/24/38），所以 28 这个"落在人写带就收手"的点位是保守选择，不是标定出来的阈值。
 
 ## 四、宽评模型对照实验（2026-09-09，deepseek-v4-pro 重评三篇闭环稿）
 
@@ -59,9 +63,11 @@ glm-5.2 作为交叉评判模型时存在**系统性严评偏置**：对人工�
 
 ## 六、相关文件
 
-- `src/api/llm-humanize.ts`：锚点放宽逻辑（`RELATIVE_TARGET_RATIO`）
+- `src/api/llm-humanize.ts`：锚点放宽逻辑（`RELATIVE_TARGET_RATIO` / `JUDGE_GOOD_BAND`）
 - `src/api/llm-judge.ts`：`judgeScoreStable` / `judgeWithCritique`
-- `artifacts/llm-closed-loop/闭环验证报告.md`：闭环完整数据
-- `artifacts/llm-closed-loop/lenient-judge.json` / `lenient-judge.log`：宽评对照实验原始数据
-- `artifacts/lenient-judge-compare.ts`：对照实验脚本（可复跑）
+- ⚠️ 下面四条在 `artifacts/` 下，**该目录已 gitignore → 只在本机存在，干净克隆拿不到**，
+  所以"可复跑"只对留有这些文件的本机成立：
+  - `artifacts/llm-closed-loop/闭环验证报告.md`：闭环完整数据
+  - `artifacts/llm-closed-loop/lenient-judge.json` / `lenient-judge.log`：宽评对照实验原始数据
+  - `artifacts/lenient-judge-compare.ts`：对照实验脚本
 - `docs/key-rotation-status.md`：网关 Key 管理

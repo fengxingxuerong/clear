@@ -196,15 +196,26 @@ UI 入口：「指纹体检」按钮；回归套件中同组规则以种子扫�
 | H2 | 人写 | 纯人写稿·朱雀档 0.9 去味（对照）| 0 | 17% | 人写分线 | v2 新增，同样不降反升 |
 
 v1 拼接交叉验证点（不进 v2 分层拟合，仅保留为副线证据）：
-- NEW-A / NEW-B / NEW-C（A/B/C 拼接 + 桥接段）：见上一版 §3.1.1 与 `scripts/zhuque-calibration.txt`
+- NEW-A / NEW-B / NEW-C（A/B/C 拼接 + 桥接段）：见上一版 §3.1.1 与 `scripts/archive/zhuque-calibration.txt`
 
-（复现脚本：`scripts/zhuque-v2-fit-12pt.ts`，完整残差档案：`scripts/zhuque-calibration-v2.txt`）
+（复现脚本：`scripts/archive/zhuque-v2-fit-12pt.ts`，完整残差档案：`scripts/archive/zhuque-calibration-v2.txt`
+ ——⚠️ 这两个都已归档、且 archive 下的拟合脚本读的是 v2 存档 x 值，**跑出来的不是当前引擎的 x**；
+ 当前引擎重算 x 的自检走 `npm run test:calib`。）
 
-> **2026-09-05 漂移修正**：v0.8.5 词表改动使对话体校准样本 D2/D3 的本地 aiScore 由 6/7 降至 0（`scripts/recheck-calib.ts` 体检发现，官方% 不受影响）。对话线已按漂移后 x 值重拟合：`y = clamp(0.8827x + 26.5, 0, 100)`，R²=0.999，过人线 x40 由 20.5 收紧至 15.3。全 12 点重验 MAE 1.71pp / 最大 5.8pp。同时 `zhuque.test.ts` 新增 9+3 锚点完整性守卫（误差 ≤8pp），此后任何引擎改动导致校准漂移都会在 CI 亮红并强制同步重拟合。
+> **2026-09-05 漂移修正**：v0.8.5 词表改动使对话体校准样本 D2/D3 的本地 aiScore 由 6/7 降至 0（当时用一次性体检脚本发现，官方% 不受影响）。对话线已按漂移后 x 值重拟合：`y = clamp(0.8827x + 26.5, 0, 100)`，R²=0.999，过人线 x40 由 20.5 收紧至 15.3。全 12 点重验 MAE 1.71pp / 最大 5.8pp。
+>
+> **2026-09-19 更正本段的归因**（原文写"此后任何引擎改动导致校准漂移都会在 CI 亮红并强制同步重拟合"，
+> 把守卫安错了地方）：`src/engine/zhuque.test.ts` 的「校准锚点完整性 ≤8pp」用的是
+> `calibration-data.json` 里**存档的 x**，全程不调 `humanize()`——它守的是"拟合线 vs 存档数据"，
+> 引擎改动把 x 推动多少它都照样绿。真正测漂移的是 `scripts/calib-sanity.ts` 的 x 轴重算 + 棘轮，
+> 而那是"只许变好"的棘轮：**2026-09-19 实测 6/18 点漂移、Δmax 35（D0），两项都正好压在天花板上**，
+> 再多一个漂移点或再大 1 分才红。所以"强制同步重拟合"并不成立——漂移会亮红，但亮红时该做什么
+> （重拟合 vs 抬天花板）仍然只靠人，见 README 开头「诚实声明」。
+> 这条更正不影响上面的拟合数字本身，它们是对**存档 x** 的拟合，自洽。
 
 ### 3.9 真实 API 实测记录（2026-09-05，SenseNova 网关）
 
-> 对 `scripts/api-test.ts` 全链路真实调用（deepseek-v4-flash 主力 + glm-5.2 交叉评判）的如实记录。
+> 对 `scripts/archive/api-test.ts` 全链路真实调用（deepseek-v4-flash 主力 + glm-5.2 交叉评判）的如实记录。
 
 | 能力 | 结果 | 关键数据 |
 |---|---|---|
