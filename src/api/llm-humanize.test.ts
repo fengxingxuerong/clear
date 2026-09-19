@@ -327,7 +327,7 @@ describe("首轮好区即收手，不再开修订轮（v0.9.13）", () => {
     expect(deep.roundScores).toEqual([15]);
     expect(deep.targetUsed).toBe(15); // 绝不往下追到 10
     expect(deep.hitTarget).toBe(true);
-    expect(deep.note).toContain("好区");
+    expect(deep.note).toContain("人写带");
     expect(deep.note).not.toMatch(/^；/); // 追加时不留前导分号
   });
 
@@ -424,5 +424,130 @@ describe("质检结论只描述真正交付的那一稿（v0.9.13）", () => {
     const deep = await humanizeViaApiDeep(TEXT, cfg, undefined, 10, 2, 0.6);
     expect(deep.qcPassed.length).toBeGreaterThanOrEqual(1);
     expect(deep.text.length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * v0.9.14 编造否决：严格保真开启时，收稿终审发现"原文没有的事实性新增"即拒绝交付。
+ *
+ * 依据（2026-09-19 s2 种草文真跑）：原文"重量仅为450克"→交付稿"**裸机**450克"、
+ * "完全满足日常需求"→"**出门一天**够用"、无第一人称→"**我觉得**算省心"。
+ * 当时终审抓到了，却只往 note 写一句"请人工核对"，稿子照样交付。
+ *
+ * 同时锁 v0.9.14 补的不对称：终审原先只在主循环收场那条路径上跑，
+ * "竞争段首轮就达标"的稿子反而不过终审——好区收手会让这条路径变多，故必须一致。
+ */
+describe("编造否决（strictFidelity 下终审不再只警告，v0.9.14）", () => {
+  const TEXT = "值得注意的是，人工智能正在深刻地改变着我们的生活方式。";
+  const GOOD = "时间往前倒几年，这类工具还没几个人用，现在情况已经完全不一样了，值得慢慢琢磨。";
+  const cfg = { ...DEFAULT_API, enabled: true, apiKey: "test-key", strictFidelity: true };
+  const fabsJson = (items: string[]) => JSON.stringify({ fabrications: items });
+
+  /** 候选期复核给 clean、终审按需给结果；分数固定 15（好区内，才会走提前收手） */
+  function stubStrict(finalReview: string, contest = false) {
+    let reviews = 0;
+    const calls: string[] = [];
+    const ok = (content: string) =>
+      new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    const fetch = vi.fn(async (_url: string, init?: { body?: string }) => {
+      const body = JSON.parse(init?.body ?? "{}") as {
+        messages: { role: string; content: string }[];
+      };
+      const sys = body.messages?.[0]?.content ?? "";
+      if (sys.includes("事实核查员")) {
+        reviews++;
+        calls.push("review");
+        return ok(reviews === 1 ? fabsJson([]) : finalReview);
+      }
+      if (sys.includes("质检员")) {
+        calls.push("qc");
+        return ok("PASS");
+      }
+      if (sys.includes("改写专家")) {
+        calls.push("rewrite");
+        return ok(GOOD);
+      }
+      calls.push("judge");
+      return ok("句长过于均匀\n15");
+    });
+    vi.stubGlobal("fetch", fetch);
+    return { reviews: () => reviews, calls, contest };
+  }
+
+  it("终审抓到编造 → 拒绝交付（不再只写 note）", async () => {
+    const s = stubStrict(fabsJson(["裸机450克：原文只说重量仅为450克"]));
+    await expect(humanizeViaApiDeep(TEXT, cfg, undefined, 10, 2, 0.6)).rejects.toThrow(
+      /编造复核否决.*裸机450克/,
+    );
+    expect(s.reviews()).toBe(2); // 候选期一次、终审一次
+  });
+
+  it("竞争段首轮即达标同样要过终审（此前这条路径不做终审）", async () => {
+    const s = stubStrict(fabsJson(["出门一天够用：原文无时长"]), true);
+    await expect(
+      humanizeViaApiDeep(TEXT, { ...cfg, contestSamples: 2 }, undefined, 10, 2, 0.6),
+    ).rejects.toThrow(/编造复核否决/);
+    // 两个候选都判 15 → 提前收手；终审必须仍发生
+    expect(s.reviews()).toBeGreaterThan(2);
+  });
+
+  it("终审干净 → 正常交付，且好区收手说明照写", async () => {
+    stubStrict(fabsJson([]));
+    const deep = await humanizeViaApiDeep(TEXT, cfg, undefined, 10, 2, 0.6);
+    expect(deep.text).toBe(GOOD);
+    expect(deep.hitTarget).toBe(true);
+    expect(deep.note).toContain("人写带");
+  });
+
+  it("终审通道本身异常（模型没给 JSON）不阻断交付——不把通路打死", async () => {
+    stubStrict("我不是 JSON");
+    const deep = await humanizeViaApiDeep(TEXT, cfg, undefined, 10, 2, 0.6);
+    expect(deep.text).toBe(GOOD);
+  });
+});
+
+/**
+ * v0.9.14 竞争段定锚口径回归：锚点必须取各候选有效分里的**最低分**，不是首个过检分。
+ * 同一篇两份合格稿判 46 与 15：抢先锚到 46 → 目标 17 → 15 分反而不达标 → 白开一轮修订。
+ */
+describe("竞争段按最低分定锚（v0.9.14）", () => {
+  const TEXT = "值得注意的是，人工智能正在深刻地改变着我们的生活方式。";
+  const GOOD = "时间往前倒几年，这类工具还没几个人用，现在情况已经完全不一样了，值得慢慢琢磨。";
+
+  it("单独回退定锚那一行即红：expected 16 to be 15（12.9 实测见 CHANGELOG）", async () => {
+    let judge = 0;
+    let writer = 0;
+    const seq = [46, 15, 15]; // 每候选 3 次评判取中位 → 首候选 46、次候选 15
+    const ok = (content: string) =>
+      new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: { body?: string }) => {
+        const body = JSON.parse(init?.body ?? "{}") as {
+          messages: { role: string; content: string }[];
+        };
+        const sys = body.messages?.[0]?.content ?? "";
+        if (sys.includes("事实核查员") || sys.includes("质检员")) return ok("PASS");
+        if (sys.includes("改写专家")) {
+          writer++;
+          return ok(GOOD);
+        }
+        const s = seq[Math.min(Math.floor(judge / 3), seq.length - 1)];
+        judge++;
+        return ok(`句长过于均匀\n${s}`);
+      }),
+    );
+    const cfg = { ...DEFAULT_API, enabled: true, apiKey: "test-key", contestSamples: 2 };
+    const deep = await humanizeViaApiDeep(TEXT, cfg, undefined, 10, 4, 0.6);
+    expect(deep.targetUsed).toBe(15); // 锚到首候选 46 会算出 16，15 分反而"不达标"
+    expect(deep.hitTarget).toBe(true);
+    expect(writer).toBe(2); // 两个竞争者，且没有第三个（修订轮没开）
+    expect(deep.note).toContain("人写带");
   });
 });

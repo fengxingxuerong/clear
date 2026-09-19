@@ -30,18 +30,45 @@ const RELATIVE_TARGET_RATIO = 0.35;
 /**
  * v0.9.13 首轮好区：评委分已落到这个值以内，就**不再进修订轮**。
  *
- * 依据（2026-09-19 四篇真送网关实测）：修订轮 2/2 都是负收益——
- *   s4 财报 首轮 15 → 修订 46/49（L1 守卫才止损）
- *   s1 议论文 首轮 89 → 修订 92
- * 而 s4 的 15 分按旧公式算 `max(绝对目标 10, 15×0.35=5)` = 目标 10，
- * 一个"已经好"的稿被拖着再改一轮、改坏、再白烧约一半调用预算。
- * v0.8.8 的注释早就写了"首轮已很低（≤28）→ 维持绝对目标不变"，
- * 但这句话在公式里从未落实——维持绝对目标 = 继续追更低分，正好是反效果。
+ * 依据（2026-09-19 四篇真送网关实测）：修订轮**没有一次拿到更优分**（0/2 收益）——
+ *   s4 财报 首轮最优 15 → 修订稿 49   s1 议论文 首轮 89 → 修订稿 92
+ * 两次修订都被"未优于当前最优"守卫拦住、没有接管交付（46 是 s4 竞争段第二候选，不是修订），
+ * 所以这里的实测代价是
+ * **白烧一整轮调用**，不是"把交付稿改坏"（措辞要准：唯一一次修订稿真被交出去的是 s2，
+ * 那是另一码事——见 FabricationVetoError）。
+ * 而 s4 的 15 分按旧公式算 `max(绝对目标 10, 15×0.35=5)` = 目标 10，一个已经好的稿子
+ * 因此还要再走一轮注定不划算的修订。v0.8.8 的注释写着"首轮已很低（≤28）→ 维持绝对
+ * 目标不变"，但这句话从未落到公式上，而且"维持绝对目标"本身就是继续往下追。
  *
  * 28 取自评判分与 aiScore 共用的"人写/机器"分界（见 humanize-metrics-calibration
  * 的分离区间 [27,30]）；这里只用作**收手**判据，不放宽任何绝对目标。
+ * ⚠️ 但评委分本身跨日不可比（同模型同稿历史上判过 16/24/38，本日同样判 46），
+ * 所以 28 是"落在人写带就收手"的保守点位，不是标定出来的阈值。
  */
 const JUDGE_GOOD_BAND = 28;
+
+/**
+ * v0.9.14 编造否决：严格保真开启时，收稿终审发现"原文没有的事实性新增"即拒绝交付。
+ *
+ * 触发实测（2026-09-19 s2 种草文）：原文"重量仅为450克"被写成"**裸机**450克"、
+ * "完全满足日常需求"被写成"**出门一天**够用"、原文无第一人称却出现"**我觉得**算省心"。
+ * 当时复核抓到了，却只往 note 里写一句"请人工核对"，稿子照样交付——营销文里凭空多出的
+ * 技术参数与时长断言是要发出去错的。
+ *
+ * 抛出后由上层（runHumanize）回退本地引擎并标 degrade：本地引擎只做换词/删套话，
+ * 结构上不具备新增事实断言的能力，是这里唯一干净的兜底。
+ * 注意：默认 strictFidelity=false，本否决只影响显式开启"严格保真"的用户。
+ */
+export class FabricationVetoError extends Error {
+  readonly fabrications: string[];
+  constructor(fabs: string[]) {
+    super(
+      `编造复核否决：交付稿有 ${fabs.length} 处原文没有的事实性新增（如「${(fabs[0] ?? "").slice(0, 28)}」），已拒绝交付`,
+    );
+    this.name = "FabricationVetoError";
+    this.fabrications = fabs;
+  }
+}
 
 /** 多候选并发的上限：与 Key 池容量（3）对齐。再高不增吞吐，只会加剧 429 反而更慢。 */
 const CONTEST_MAX_PARALLEL = 3;
@@ -236,7 +263,7 @@ export async function humanizeViaApiDeep(
   const targetHint = () => {
     if (anchorScore === null) return "";
     if (inGoodBand())
-      return `首轮 ${anchorScore} 分已在好区（≤${JUDGE_GOOD_BAND}），未进修订轮——实测修订常把稿改差（15→49、89→92）`;
+      return `首轮 ${anchorScore} 分已落在人写带（≤${JUDGE_GOOD_BAND}），未进修订轮——实测两轮修订都没拿到更优分（15→49、89→92），继续只是白烧调用`;
     const t = effTarget();
     return t > target ? `评判锚点：首轮 ${anchorScore} 分 → 达标线放宽至 ≤${t}` : "";
   };
@@ -250,6 +277,47 @@ export async function humanizeViaApiDeep(
   // 视为回退：拒收本轮、回滚上一轮底稿并停止（风格回退无法靠下一轮修复，
   // 实测第 2 轮"碎句化"修订把 cv 拉回 AI 特征带）。
   let prevFingerprintIssues: Set<string> = new Set();
+
+  /**
+   * 交付收口：两条返回路径（竞争段提前收手 / 主循环收场）**都必须**走这里。
+   *
+   * v0.9.14 补的洞：此前只有后者做收稿终审，即"首轮就达标"的稿子反而不过终审——
+   * 把好区收手接上提前 return 之后，这个不对称会被放大，所以统一到一个出口。
+   * 顺序：严格保真终审（发现编造即否决，抛 FabricationVetoError）→ 达标线说明 → 未达标提示。
+   *
+   * 为什么还要一次终审：每候选的编造复核有漏判率（实测 s1 竞争稿的"见效最快/比拍脑袋准"
+   * 漏网，修订轮同内容才被抓到），前移复核不能完全替代收稿检查。v0.9.13 之前这里只警告不
+   * 拦截，结果是 s2 带着三处新增断言照发——本版把"显式警告"升级为"拒绝交付"。
+   */
+  const deliver = async (hit: boolean): Promise<DeepResult> => {
+    let finalNote = note;
+    if (cfg.strictFidelity) {
+      try {
+        const fabs = await fabricationReview(text, bestText, cfg);
+        if (fabs.length) throw new FabricationVetoError(fabs);
+      } catch (e) {
+        if (e instanceof FabricationVetoError) throw e; // 否决不能被"通道异常"吞掉
+        // 快审通道本身异常不阻断交付（沿用原行为：不把通路打死，交由人工核对）
+      }
+    }
+    finalNote = appendNote(finalNote, targetHint());
+    if (!hit && roundScores.length > 0) {
+      finalNote = appendNote(
+        finalNote,
+        `仅完成 ${roundScores.length} 轮，未达目标 ≤${effTarget()} 分，结果可能仍偏 AI（可重试或换改写模型）`,
+      );
+    }
+    return {
+      text: bestText,
+      roundScores,
+      hitTarget: hit,
+      note: finalNote,
+      qcPassed,
+      qcIssues: qcIssuesByDraft.get(bestText) ?? [],
+      targetUsed: effTarget(),
+      shrinkRatio: shrinkRatioOf(text, bestText),
+    };
+  };
 
   // v0.5.1 双改写器竞争：主模型与备选模型各写一版第一稿，交叉评分择优当底稿。
   // 依据 A/B 实测：glm-5.2 改写被 deepseek 判 35，deepseek 改写被 glm 判 75（两样本一致）——
@@ -353,7 +421,10 @@ export async function humanizeViaApiDeep(
         continue;
       }
       roundScores.push(res.score ?? -1);
-      if (res.score !== null && res.score >= 0 && anchorScore === null) anchorScore = res.score;
+      // 定锚交给循环结束后的 bestScore（= 各有效分里的最低分）：此前这里按候选序号
+      // 抢先锚定"首个过检分"，与下方 v0.8.9 注释写明的意图相反。打桩实测两份合格稿
+      // 判 46 与 15：抢先锚到 46 → 目标 round(46×0.35)=16 → 15 分稿反而"不达标" → 再白开一轮
+      // 修订（正是本版要省掉的那种轮次）。单行回退该行即红 expected 16 to be 15。
       contestInfo.push(`${tag}:${res.score ?? "?"}`);
       const sc = res.score ?? 999;
       if (sc < bestScore) {
@@ -370,16 +441,7 @@ export async function humanizeViaApiDeep(
     // 用首个分定锚 → 达标线 ≤30；用最优分 70 定锚 → ≤24，才反映真实可达水平。
     if (anchorScore === null && bestScore < 999) anchorScore = bestScore;
     if (bestText && bestScore <= effTarget()) {
-      return {
-        text: bestText,
-        roundScores,
-        hitTarget: true,
-        note: appendNote(note, targetHint()),
-        qcPassed,
-        qcIssues: qcIssuesByDraft.get(bestText) ?? [],
-        targetUsed: effTarget(),
-        shrinkRatio: shrinkRatioOf(text, bestText),
-      };
+      return await deliver(true);
     }
   }
 
@@ -573,44 +635,6 @@ export async function humanizeViaApiDeep(
     throw new Error((note || "深度去味未获得任何可用结果") + "，已回退本地引擎");
   }
 
-  // v0.9.5 P1：严格保真补偿轮与收稿终审已移除——编造复核前移至 processCandidate
-  // （每候选质检后即审，走既有修复链），所有产出路径的候选均已被复核覆盖；
-  // 补偿轮「拿弃用候选的问题清单修最优稿」的语义错位随之消除。
-  //
-  // 但复核有漏判率（实测 s1：竞争稿的"见效最快/比拍脑袋准"漏网，修订轮同内容
-  // 才被抓到），前移复核不能完全替代收稿检查。折中：交付前对 bestText 做一次
-  // 只警告不修复的快审——+1 次调用，把"静默漏网"变"显式警告"，
-  // 守住「绝不静默带病交付」的底线（修复交给用户重跑，实测 LLM 修复编造成功率低）。
-  if (cfg.strictFidelity) {
-    try {
-      const fabs = await fabricationReview(text, bestText, cfg);
-      if (fabs.length) {
-        note =
-          (note ? `${note}；` : "") +
-          `⚠️ 收稿复核：交付稿仍存在 ${fabs.length} 项疑似新增（如「${fabs[0].slice(0, 24)}」），请人工核对——复核对首轮稿有漏判率，此为底线警告`;
-      }
-    } catch {
-      // 收稿快审通道异常不阻断交付
-    }
-  }
-
-  // v0.8.8 评判锚点可见化 + v0.9.13 好区收手：达标线为什么不是绝对目标，两条返回路径同一套说法
-  const targetUsed = effTarget();
-  note = appendNote(note, targetHint());
-  // v0.8.9：闭环提前收场且未达标时必须说清楚——此前 UI 静默交付"看起来完成"的未达标稿
-  if (!hitTarget && roundScores.length > 0) {
-    note =
-      (note ? `${note}；` : "") +
-      `仅完成 ${roundScores.length} 轮，未达目标 ≤${targetUsed} 分，结果可能仍偏 AI（可重试或换改写模型）`;
-  }
-  return {
-    text: bestText,
-    roundScores,
-    hitTarget,
-    note,
-    qcPassed,
-    qcIssues: qcIssuesByDraft.get(bestText) ?? [],
-    targetUsed,
-    shrinkRatio: shrinkRatioOf(text, bestText),
-  };
+  // v0.9.5 能力优化：终审与所有说明统一在 deliver() 里收口（含 v0.9.14 的编造否决）。
+  return await deliver(hitTarget);
 }

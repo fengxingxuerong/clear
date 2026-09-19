@@ -128,3 +128,63 @@ describe("runHumanize 分发", () => {
     expect(r.note).toMatch(/深度去味|评分/);
   });
 });
+
+/**
+ * v0.9.14 编造否决的**接线**验证：深模式抛出后，runHumanize 必须把它标成
+ * "编造否决 + 本地引擎产出"，而不是笼统的"API 调用失败"——两者对用户是不同的事实
+ * （前者是我们主动拒收一份有新增断言的稿，后者是通路故障）。只测 deep 层会漏掉这段。
+ */
+describe("编造否决在 runHumanize 里的落点（v0.9.14）", () => {
+  // 必须保留 SAMPLE 的英文术语 "AI"，且长度不低于原文 40%，否则 localHardGate 先把候选
+  // 打回，根本走不到编造复核（实测两条报错：英文术语 AI 在改写中丢失 / 严重缩水 41<116×40%）
+  const GOOD =
+    "时间往前倒几年，AI 写作工具还没几个人用。办公数字化把效率提上来、成本压下去，可怎么在创新和风险之间找平衡，仍是道难题。";
+
+  function stubStrictFidelity(finalReview: string) {
+    let reviews = 0;
+    const ok = (content: string) =>
+      new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_u: string, init?: { body?: string }) => {
+        const body = JSON.parse(init?.body ?? "{}") as {
+          messages: { role: string; content: string }[];
+        };
+        const sys = body.messages?.[0]?.content ?? "";
+        if (sys.includes("事实核查员")) {
+          reviews++;
+          // 复核要的是 JSON（extractJsonObject），给 "PASS" 会抛"未返回有效 JSON"
+          return ok(reviews === 1 ? '{"fabrications":[]}' : finalReview);
+        }
+        if (sys.includes("质检员")) return ok("PASS");
+        if (sys.includes("改写专家")) return ok(GOOD);
+        return ok("句长过于均匀\n15");
+      }),
+    );
+  }
+
+  it("终审否决 → engine=local，degrade 写「编造复核否决」、note 写「编造否决」，不写「API 调用失败」", async () => {
+    stubStrictFidelity('{"fabrications":["出门一天够用：原文只说完全满足日常需求"]}');
+    const cfg = { ...DEFAULT_API, enabled: true, apiKey: "k", strictFidelity: true };
+    const r = await runHumanize(SAMPLE, 0.7, cfg);
+    expect(r.engine).toBe("local");
+    expect(r.usedApi).toBe(false);
+    expect(r.degrade.join(" ")).toContain("编造复核否决");
+    expect(r.note).toContain("编造否决");
+    expect(r.note).toContain("出门一天够用");
+    expect(r.note).not.toContain("API 调用失败"); // 不能混成通路故障
+    expect(r.text.length).toBeGreaterThan(0); // 本地稿照交付，用户不该拿到空结果
+  });
+
+  it("终审干净 → 仍按 LLM 稿交付，不留降级痕迹", async () => {
+    stubStrictFidelity('{"fabrications":[]}');
+    const cfg = { ...DEFAULT_API, enabled: true, apiKey: "k", strictFidelity: true };
+    const r = await runHumanize(SAMPLE, 0.7, cfg);
+    expect(r.engine).toBe("llm");
+    expect(r.degrade).toEqual([]);
+    expect(r.text).toContain("时间往前倒几年");
+  });
+});

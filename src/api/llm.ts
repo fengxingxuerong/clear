@@ -19,7 +19,7 @@ import { humanize, aiScore, checkFidelityLocal, crossChunkCleanup } from "../eng
 import { humanizeBestOf } from "../engine/humanize-bestof";
 import { ApiConfig, DEEP_MAX_ROUNDS, DEEP_TARGET_SCORE, effectiveKeys } from "./llm-config";
 import { CHUNK_THRESHOLD, splitIntoChunks } from "./llm-chunk";
-import { humanizeViaApi, humanizeViaApiDeep } from "./llm-humanize";
+import { humanizeViaApi, humanizeViaApiDeep, FabricationVetoError } from "./llm-humanize";
 import { resetApiCallCount } from "./llm-chat";
 import { errMsg } from "./llm-judge";
 
@@ -148,7 +148,7 @@ export async function runHumanize(
               allScores.push(...deep.roundScores);
               allQc.push(...deep.qcPassed);
               if (deep.qcIssues.length) anyIssue = true;
-            } catch {
+            } catch (e: unknown) {
               // 单块失败（如预算耗尽且该块零产出/各轮质检全挂）只回退该块本地引擎，
               // 不再让整篇抛错丢弃已完成块的 API 成果（v0.8.6 行为修正）
               // v0.9.5 P4：回退块强制温和档（≤0.5、不开朱雀）——深度稿是自然口语，
@@ -158,7 +158,13 @@ export async function runHumanize(
               parts.push(humanize(chunks[i], { intensity: Math.min(intensity, 0.5) }));
               anyIssue = true;
               localChunks++;
-              degrade.push(`第 ${i + 1}/${chunks.length} 块 LLM 未产出，已由本地引擎温和档补位`);
+              // v0.9.14：编造否决要说成"被拒收"，不是"API 失败"——两者对用户是完全
+              // 不同的事实（一个是主动拦下有问题的稿，一个是通路坏了）
+              degrade.push(
+                `第 ${i + 1}/${chunks.length} 块 ${
+                  e instanceof FabricationVetoError ? "LLM 稿编造否决" : "LLM 未产出"
+                }，已由本地引擎温和档补位`,
+              );
             }
           } else {
             parts.push(await humanizeViaApi(chunks[i], cfg, intensity));
@@ -249,8 +255,17 @@ export async function runHumanize(
       outText = r.text;
       bestOf = r.bestOf;
       engine = "local";
-      degrade.push("API 调用失败，整稿由本地引擎产出（非 LLM）");
-      note = `API 调用失败，已回退本地引擎：${errMsg(e)}`;
+      // v0.9.14：编造否决与"API 失败"是两件事，必须分开说——前者是我们主动拦下
+      // 一份有事实性新增的稿（用户该知道 LLM 稿被拒收），后者是通路故障。
+      const veto = e instanceof FabricationVetoError;
+      degrade.push(
+        veto
+          ? "编造复核否决：LLM 稿含原文没有的事实性新增，整稿改由本地引擎产出（非 LLM）"
+          : "API 调用失败，整稿由本地引擎产出（非 LLM）",
+      );
+      note = veto
+        ? `编造否决，已回退本地引擎：${errMsg(e)}`
+        : `API 调用失败，已回退本地引擎：${errMsg(e)}`;
     }
   } else {
     const r = runLocal(text, intensity, zhuqueMode, genre, cfg.style, local);
