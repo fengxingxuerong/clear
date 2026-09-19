@@ -1,0 +1,3 @@
+{"ts":"2026-09-05T08:08:49.225Z","x":6,"y":24.5,"track":"main","pred":31.144,"src":"prepare-submit 手动回填"}
+{"ts":"2026-09-05T08:08:50.395Z","x":6,"y":31.2,"track":"main","pred":31.144,"src":"prepare-submit 手动回填"}
+{"ts": "2026-09-05T16:33:01.627168", "x": 10, "y": 48.01, "track": "main", "pred": 39.199999999999996, "detail": {"ai": 48.01, "suspect": 25.68, "human": 26.31}, "src": "prepare-submit 自动送检(agent-browser) 真实官方结果"}

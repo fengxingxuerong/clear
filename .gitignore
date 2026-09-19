@@ -20,12 +20,15 @@ Thumbs.db
 # 敏感信息（v0.8.6 起，Key 池明文，勿提交）
 scripts/.sensenova-keys
 
-# 标定数据（含真实调用记录）
-scripts/calib-lab-points.jsonl
-
-# v4 标定送检产物（文本包可随时用 pipeline 重新生成）
-scripts/zhuque-v4-out/
-scripts/calibration-input-v4.tsv
+# 标定证据——2026-09-19 起改为跟踪（原来三条 ignore 的理由已失效）：
+# 旧注释写"文本包可随时用 pipeline 重新生成"，但 v0.9.9 之后的词表/守卫改动与 v0.9.13
+# 的错别字项修正都会改变 humanize 的输出字节，重新生成得到的已不是 2026-09-07 送检那份文本；
+# 而 scripts/zhuque-v4-fit.ts 缺 calibration-input-v4.tsv 直接跑不起来（克隆后无法复现拟合）。
+# 这三处存的都是"当时到底送检了什么"的唯一记录 → 是凭证，不是再生品。
+# （calib-lab-points.jsonl 里是真实官方点位；zhuque-v4-out/ 是 9 篇待送检原文。）
+# 但拟合脚本的**产物**仍是再生品（由 TSV + 当前引擎决定，结论已抄进 docs §3.0.1）：
+scripts/calibration-data-v4-genres.json
+scripts/zhuque-calibration-v4.txt
 
 # 扫描输出 / 临时测试目录
 _scan_out.txt
@@ -36,7 +39,7 @@ artifacts/
 .tmp-ppl-model/
 endpoints.local.json
 
-# git �Eb4��Uv0.9.5 b(�bФ	
+# git �Eb4��Uv0.9.5 b(�bФ	
 .git-restored/
 .git-restored2/
 

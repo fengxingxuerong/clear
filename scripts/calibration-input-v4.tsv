@@ -1,0 +1,10 @@
+id	genre	level	aiScore	chars	file	zhuqueOfficialPct	comment
+O4	expository	中段0.3档	16	702	O4-论说文-中段0.3档.txt	100	v4·论说中段（2026-09-08 实测：AI生成占比100%） x≈16
+O5	expository	原文	92	697	O5-论说文-原文.txt		v4·论说原文 x≈92 高端校准（v0.7 旧标 33 已漂移）
+N4	narrative	中段0.1档	18	448	N4-叙事文-中段0.1档.txt		v4·叙事中段 x≈18
+D4	dialogue	中段0.3档	22	640	D4-对话体-中段0.3档.txt		v4·对话中段低 x≈22
+D5	dialogue	中段0.1档	35	634	D5-对话体-中段0.1档.txt		v4·对话中段高 x≈35
+H-NEW1	humanHand	无处理	19	760	H-NEW1-纯人写稿-无处理.txt		v4·人写·夜宵碎念
+H-NEW2	humanHand	无处理	19	718	H-NEW2-纯人写稿-无处理.txt		v4·人写·宜家半日游
+H-NEW3	humanHand	无处理	16	696	H-NEW3-纯人写稿-无处理.txt		v4·人写·楼下早餐摊
+H-NEW4	humanHand	无处理	10	429	H-NEW4-纯人写稿-无处理.txt		v4·人写·搬家记
