@@ -19,7 +19,8 @@
  *      AI 原文 ≥ AI_SCORE_MACHINE_MIN，且分离度 ≥ SEP_MIN。
  *      → 换了权重也拦得住「两类糊到一起」，这才是评分器真正该守的东西。
  *   D2 方向棘轮（看基线）：每条按 want 只许朝好的方向走，朝坏方向动 1 分即红。
- *      aiScore 纯确定性 ⇒ slack=0；要放行恶化必须显式 --rebaseline 并写原因。
+ *      aiScore 纯确定性 ⇒ slack=0；放行恶化必须 --rebaseline "<原因>" 且用
+ *      --accept-worse "<id,id>" 点名到具体哪几条，名单与当前红灯不吻合照样拒绝。
  * 【E 引擎退化组】输入 = 当前引擎在同一 seed 下的产物，8 条 intensity>0。
  *   对锁里的记录做只降不升棘轮。记录缺失即红——旧版 loadOrInitLock 会在锁不在时
  *   把「今天的输出」直接写成明天的真值，那是自欺。
@@ -371,6 +372,8 @@ function checkBand(rows: Record<string, number>, sepMin: number) {
 
 type Opts = {
   rebaseline: string | null;
+  /** 显式点名"允许这几条往坏移动"的 id；不点名一律拒绝（见 main 里的 exact-set 校验） */
+  acceptWorse: string[];
   lockPath: string;
   sepMin: number;
   usageError: string | null;
@@ -378,7 +381,8 @@ type Opts = {
 
 const USAGE =
   "用法：npx tsx scripts/regression-12samples.ts [--lock <path>] [--sep-min <n>]\n" +
-  '     收紧/重建基线：npx tsx scripts/regression-12samples.ts --rebaseline "<为什么这批数字是新常态>"';
+  '     收紧/重建基线：npx tsx scripts/regression-12samples.ts --rebaseline "<为什么这批数字是新常态>"\n' +
+  '     放行恶化（须点名 + 写原因）：… --rebaseline "<原因>" --accept-worse "O2,O3"';
 
 function flagValue(argv: string[], name: string): string | undefined {
   const i = argv.indexOf(name);
@@ -388,6 +392,7 @@ function flagValue(argv: string[], name: string): string | undefined {
 function parseArgs(argv: string[]): Opts {
   const opts: Opts = {
     rebaseline: null,
+    acceptWorse: [],
     lockPath: DEFAULT_LOCK_PATH,
     sepMin: SEP_MIN,
     usageError: null,
@@ -401,6 +406,22 @@ function parseArgs(argv: string[]): Opts {
       return opts;
     }
     opts.rebaseline = reason;
+  }
+  if (argv.includes("--accept-worse")) {
+    const ids = (flagValue(argv, "--accept-worse") ?? "")
+      .split(/[,，\s]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (!ids.length) {
+      opts.usageError =
+        '❌ --accept-worse 需要点名至少一条 id（如 --accept-worse "O2,O3"）——不给名单就等于整表放行。';
+      return opts;
+    }
+    if (!opts.rebaseline) {
+      opts.usageError = "❌ --accept-worse 只在配合 --rebaseline \"<原因>\" 时有意义。";
+      return opts;
+    }
+    opts.acceptWorse = ids;
   }
   if (argv.includes("--lock")) {
     const lp = (flagValue(argv, "--lock") ?? "").trim();
@@ -534,6 +555,15 @@ export function main(argv: string[] = process.argv.slice(2)): number {
     band.fails.length -
     driftRows.filter((r) => r.missing).length -
     e2eRows.filter((r) => r.missing).length;
+  // 真退化的那几条具体是谁：--accept-worse 必须与这个集合**完全相等**才放行。
+  // 只给"点名"不给"整表"，是为了让每次放宽都留下一份可查的、指名道姓的记录。
+  const redIds = [
+    ...driftRows.filter((r) => !r.ok && !r.missing).map((r) => r.id),
+    ...e2eRows.filter((r) => !r.ok && !r.missing).map((r) => r.id),
+  ];
+  const sameSet =
+    redIds.length === opts.acceptWorse.length &&
+    redIds.every((id) => opts.acceptWorse.includes(id));
   console.log("\n══════════════════════════════════════════════════════════════");
   if (band.fails.length) {
     console.log("  ❌ D1 绝对刻度守卫失败：");
@@ -543,23 +573,38 @@ export function main(argv: string[] = process.argv.slice(2)): number {
     ` D 组 ${driftRows.length - failD}/${driftRows.length} · E 组 ${e2eRows.length - failE}/${e2eRows.length} · 刻度守卫 ${band.fails.length ? "❌" : "✅"}`,
   );
 
-  if (opts.rebaseline && regressed === 0 && band.fails.length === 0) {
+  const allowWrite = regressed === 0 || (opts.acceptWorse.length > 0 && sameSet);
+  if (opts.rebaseline && allowWrite && band.fails.length === 0) {
+    const reason =
+      regressed === 0
+        ? opts.rebaseline
+        : `【接受恶化 ${redIds.join("/")}】${opts.rebaseline}`;
     const changes = writeRebaseline(
       lock,
       samples,
       driftNow,
       e2eNow,
-      opts.rebaseline,
+      reason,
       opts.lockPath,
     );
     console.log(
-      `\n🗝️  已重写棘轮基线（${changes.length} 条变动），原因与差值记入 rebaseLog：\n    「${opts.rebaseline}」\n    ${changes.join("、") || "（无变动）"}`,
+      `\n🗝️  已重写棘轮基线（${changes.length} 条变动），原因与差值记入 rebaseLog：\n    「${reason}」\n    ${changes.join("、") || "（无变动）"}`,
     );
+    if (regressed > 0)
+      console.log(
+        ` ⚠️ 本次是**指名放行**的恶化（${redIds.join("、")}），代理分变高但理由已记账；` +
+          `下次不带 --accept-worse 同样这几条会重新红。`,
+      );
     console.log("══════════════════════════════════════════════════════════════");
     return 0;
   }
   if (opts.rebaseline) {
-    console.log(` ❌ 还有 ${fails} 项红灯，拒绝 --rebaseline：先把真实回归查掉，再谈改基线。`);
+    if (regressed > 0 && opts.acceptWorse.length && !sameSet)
+      console.log(
+        ` ❌ --accept-worse 点名的 id 与当前红灯不吻合：名单 ${opts.acceptWorse.join("/")}，实际红灯 ${redIds.join("/") || "（无）"}。` +
+          ` 要么改名单，要么先查掉真实回归——不接受"顺手整表放行"。`,
+      );
+    else console.log(` ❌ 还有 ${fails} 项红灯，拒绝 --rebaseline：先把真实回归查掉，再谈改基线。`);
   }
   console.log(
     ` 总体结果：${fails === 0 ? "✅ 全部及格 ✅" : `❌ ${fails} 项未通过，见上方 ❌ 行 ❌`}`,

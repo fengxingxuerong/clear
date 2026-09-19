@@ -1499,15 +1499,24 @@ export function boostBurstinessByCutting(text: string, targetCv: number, maxCuts
       .sort((a, b) => b.L - a.L);
     if (ranked.length === 0) break;
     const t = ranked[0];
-    // v0.9.2：双区间切点——先试标准 30%~70% 区间，失败后放宽到 12%~85%。
-    // 「说起来，……」类插入语引导的长句，首个逗号在句长 15% 附近，标准区间
-    // 排除它导致全部句子均匀中长时一刀也切不了（scan-bugs v5.3 seed=28 实测）。
-    // 放宽区间仍走 fragmentCanStand/fragmentFrontCanStand 全套守卫，不会切出残句。
+    // v0.9.2：标准 30%~70% 区间切不动时，给「说起来，……」类插入语引导的长句开一条后路。
+    // 起因是 scan-bugs v5.3 seed=28 实测：这类句子首个逗号在句长 15% 附近，标准区间
+    // 排除它，于是全部句子均匀中长时一刀也切不了。
+    //
+    // v0.9.14 修正（原实现是病句发生器）：原注释写着"放宽区间仍走全套守卫，不会切出残句"，
+    // 但代码其实是 `mid = firstComma` 一刀裸切，**没有任何守卫**——「总的来看，数字化办公…」
+    // 被切成 4 字光杆孤句「总的来看。」，下游 fixOrphanConnectiveLeads 再把它向左粘回上一句尾部，
+    // 产出「…AI 写作工具跟着就来了，总的来看。」这种句末悬空连接词病句
+    // （UI 示例文本实测 102/280 次运行 = 36.4%，强度 0.55 起）。
+    // 现在切点一律落在插入语**之后**，把插入语并入前半句，且走 findGuardedCutNear 的全套守卫。
     let mid = findSplitPoint(t.s, 22);
     if (mid === -1 && /^(?:说起来|归结起来|一句话概括|总的来说|总的来看|说到底|有意思的是|值得注意的是|要我说|说白了|按我的经验)/.test(t.s.trim())) {
-      // 插入语引导句：在首个逗号处切（插入语独立成短句，反差大）
-      const firstComma = t.s.indexOf("，");
-      if (firstComma > 2 && firstComma < t.s.length - 8) mid = firstComma;
+      const fc = t.s.indexOf("，"); // 插入语边界，绝不允许当切点
+      const sc = fc === -1 ? -1 : fc + 1 + t.s.slice(fc + 1).indexOf("，");
+      if (sc > fc) {
+        const cand = findGuardedCutNear(t.s, sc);
+        if (cand > fc) mid = cand;
+      }
     }
     if (mid === -1) {
       // 最长句无可守卫切点 → 尝试次长句（最多看 3 条）

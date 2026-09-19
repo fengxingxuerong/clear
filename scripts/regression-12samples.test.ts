@@ -151,6 +151,46 @@ describe("regression-12samples：不允许把今天的输出顺手当明天真�
     );
   });
 
+  it("真退化 + --accept-worse 点名吻合 → 放行，且原因里带上是谁被放行", () => {
+    const real = readRealLock();
+    lockTweaked((l) => {
+      l.drift["H0"].score = 6;
+    });
+    expect(
+      main([
+        "--rebaseline",
+        "修病句的代价，H0 代理分 +1",
+        "--accept-worse",
+        "H0",
+        "--lock",
+        lock,
+      ]),
+    ).toBe(0);
+    const l = JSON.parse(fs.readFileSync(lock, "utf8")) as LockShape;
+    expect(l.drift["H0"].score).toBe(real.drift["H0"].score); // 回到引擎当前真值
+    const last = l.rebaseLog[l.rebaseLog.length - 1];
+    expect(last.reason.startsWith("【接受恶化 H0】")).toBe(true);
+    expect(last.changes.join("、")).toContain("D/H0:6→");
+  });
+
+  it("--accept-worse 点名与实际红灯不吻合 → 仍拒绝且不写锁（不接受整表放行）", () => {
+    const before = lockTweaked((l) => {
+      l.drift["H0"].score = 6;
+    });
+    expect(
+      main(["--rebaseline", "随便写个原因", "--accept-worse", "O2,O3", "--lock", lock]),
+    ).toBe(1);
+    const l = JSON.parse(fs.readFileSync(lock, "utf8")) as LockShape;
+    expect(l.drift["H0"].score).toBe(before.drift["H0"].score);
+    expect(l.rebaseLog).toHaveLength(before.rebaseLog.length); // 没有偷偷追加
+  });
+
+  it("--accept-worse 缺名单或没配 --rebaseline → 退出码 2", () => {
+    expect(main(["--accept-worse", "--lock", lock])).toBe(2);
+    expect(main(["--accept-worse", "H0", "--lock", lock])).toBe(2);
+    expect(fs.existsSync(lock)).toBe(false);
+  });
+
   it("v1 扁平锁只在内存里迁移，不回写文件", () => {
     const v1 = { N1_e2e: { score: 8, note: "seed=20260826" } };
     writeLock(v1);

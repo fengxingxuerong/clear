@@ -8,6 +8,7 @@
  */
 import { describe, it, expect } from "vitest";
 import {
+  boostBurstinessByCutting,
   capParticleSentenceDensity,
   clampAvgSentenceLenUnder25,
   ensureEmDashCountHardCap,
@@ -163,5 +164,37 @@ describe("capParticleSentenceDensity（语气词密度上限）", () => {
     const t = "续航不错哦。嗯。也还行吧。哦。";
     const once = capParticleSentenceDensity(t, 1);
     expect(capParticleSentenceDensity(once, 1)).toBe(once);
+  });
+});
+
+/**
+ * v0.9.14（#24/#27）：切分器不得制造光杆连接词孤句。
+ * boostBurstinessByCutting 的插入语分支曾在首个逗号一刀裸切，产出「值得注意的是。」
+ * 这种 4 字孤句，再被 anti-fingerprint 的 fixOrphanConnectiveLeads 向左粘回上一句尾部，
+ * 变成「…工作方式，值得注意的是。」病句。该缺陷在外部样本上的实测命中率是 79/180（44%），
+ * 且此前 scan-bugs 全绿——因为它唯一的"贡献"是把 CV 抬上去，而 CV 是指标里最弱的一项。
+ */
+describe("boostBurstinessByCutting（不得切出光杆连接词）", () => {
+  const cases: Array<[string, string]> = [
+    ["值得注意的是", "值得注意的是，远程办公不仅提高了工作效率，还显著提升了员工的工作生活平衡。"],
+    ["总的来看", "总的来看，数字化办公不仅极大地提升了工作效率，而且有效地降低了运营成本。"],
+    ["归结起来", "归结起来，人工智能正在深刻改变教育行业，首先可以实现个性化学习，其次能减轻教师负担。"],
+  ];
+  for (const [name, s] of cases) {
+    for (const target of [0.3, 0.55, 0.8]) {
+      it(`${name} @target cv=${target}：不产出句末光杆孤句，插入语仍与后文同句`, () => {
+        const out = boostBurstinessByCutting(s, target, 8);
+        expect(out).not.toMatch(new RegExp(`[，、]?(?:${name})[。！？]`));
+        if (out.includes(name)) expect(out).toMatch(new RegExp(`${name}[，、]`));
+      });
+    }
+  }
+
+  it("没有把分支一关了之：普通长句该切还是要切（否则上面那组断言是永真式）", () => {
+    const s = "远程办公在过去三年里普及得非常快，员工的时间安排随之变了，企业也开始重新评估固定工位的必要性。";
+    const before = s.split("。").filter((x) => x.trim()).length;
+    const out = boostBurstinessByCutting(s, 0.8, 8);
+    const after = out.split("。").filter((x) => x.trim()).length;
+    expect(after).toBeGreaterThan(before);
   });
 });

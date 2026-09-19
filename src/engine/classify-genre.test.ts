@@ -55,15 +55,34 @@ describe("P7 引擎级体裁联动", () => {
     expect(a.length).toBeGreaterThan(0);
   });
 
-  it("humanHand 与普通档输出不同（降级行为可区分）", () => {
+  it("humanHand 降级行为可区分：高强度下与人写稿钳制档不同", () => {
     const clamped = humanize(EXPO_TEXT, {
       intensity: 0.9,
       zhuqueMode: true,
       genre: "humanHand",
       seed: 42,
     });
-    const normal = humanize(EXPO_TEXT, { intensity: 0.48, zhuqueMode: false, seed: 42 });
-    expect(clamped).not.toBe(normal);
+    const main = humanize(EXPO_TEXT, { intensity: 0.9, zhuqueMode: true, seed: 42 });
+    // 真降级：main@0.9 会注入自问自答/垫词，humanHand 一律不注入
+    expect(clamped).not.toBe(main);
+    // 且注入痕迹只能出现在 main 那侧（反向断言，防"两边都不注入"把差异混掉）
+    expect(main.length).toBeGreaterThan(clamped.length);
+  });
+
+  it("humanHand 强度硬钳制到 ≤0.48：0.9 与 0.48 两档输出必须逐字相同", () => {
+    const at09 = humanize(EXPO_TEXT, {
+      intensity: 0.9,
+      zhuqueMode: true,
+      genre: "humanHand",
+      seed: 42,
+    });
+    const at048 = humanize(EXPO_TEXT, {
+      intensity: 0.48,
+      zhuqueMode: true,
+      genre: "humanHand",
+      seed: 42,
+    });
+    expect(at09).toBe(at048);
   });
 
   it("mechanicalShuffle 独立入口也吃 genre 联动", () => {
