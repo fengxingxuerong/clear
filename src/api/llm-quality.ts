@@ -282,7 +282,12 @@ export async function fabricationReview(
     ],
     { temperature: 0, maxTokens: 8000, model: cfg.judgeModel.trim() || undefined },
   );
-  const obj = extractJsonObject(r.content);
+  // 与 qualityCheck 同口径（见本文件 :52 `content || reasoning`）：chat() 把正文与
+  // reasoning 分开返回、不做合并，只读 content 等于把这条防线挂在模型当次的输出位置上。
+  // 2026-09-19 真网关跑 s2 时确实抛过一次"未返回有效 JSON"（当时没截到原始响应，
+  // 无法断言就是 reasoning-only；但候选期抛错=静默丢稿、终审抛错=静默放行，两种后果
+  // 都不该由一次解析失败决定，所以按既有约定补上兜底）。
+  const obj = extractJsonObject(r.content || r.reasoning);
   if (!obj) throw new Error("编造复核：模型未返回有效 JSON");
   const fabs = obj.fabrications;
   if (!Array.isArray(fabs)) return [];

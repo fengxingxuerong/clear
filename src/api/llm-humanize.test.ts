@@ -502,10 +502,13 @@ describe("编造否决（strictFidelity 下终审不再只警告，v0.9.14）", 
     expect(deep.note).toContain("人写带");
   });
 
-  it("终审通道本身异常（模型没给 JSON）不阻断交付——不把通路打死", async () => {
+  it("终审通道本身异常（模型没给 JSON）不阻断交付，但必须说明「未做否决」", async () => {
     stubStrict("我不是 JSON");
     const deep = await humanizeViaApiDeep(TEXT, cfg, undefined, 10, 2, 0.6);
     expect(deep.text).toBe(GOOD);
+    // 静默跳过会让用户以为稿子过了事实核查——这比多一次失败更糟
+    expect(deep.note).toContain("编造复核未能完成");
+    expect(deep.note).toContain("未经事实核查");
   });
 });
 

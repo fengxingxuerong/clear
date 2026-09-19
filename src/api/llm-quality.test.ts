@@ -352,3 +352,31 @@ describe("空格口径必须与硬门槛一致（v0.8.8「空格跟随原文排�
     expect(restoreMixedSpacing(noSpace, noSpace)).toBe(noSpace);
   });
 });
+
+/**
+ * v0.9.14 编造复核的取值口径：chat() 把正文与 reasoning 分开返回、不合并，
+ * 只读 content 会让一次输出位置偏移变成"复核失败"——候选期=静默丢稿，终审=静默放行。
+ * 兜底与 qualityCheck（本文件 :52）同口径。
+ */
+describe("fabricationReview 取值兜底（v0.9.14）", () => {
+  const cfg = { ...DEFAULT_API, enabled: true, apiKey: "k", judgeModel: "glm-5.2" };
+  const resp = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
+
+  it("JSON 只在 reasoning 里也要能解析出编造项", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        resp({
+          choices: [{ message: { content: "", reasoning_content: '{"fabrications":["裸机450克：原文无此限定"]}' } }],
+        }),
+      ),
+    );
+    const fabs = await fabricationReview("重量仅为450克。", "裸机450克，放包里不沉。", cfg);
+    expect(fabs).toEqual(["裸机450克：原文无此限定"]);
+  });
+
+  it("两处都没有 JSON 才抛错（调用方据此说明「未做否决」）", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => resp({ choices: [{ message: { content: "我看没有新增" } }] })));
+    await expect(fabricationReview("原文。", "改写。", cfg)).rejects.toThrow(/未返回有效 JSON/);
+  });
+});

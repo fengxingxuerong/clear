@@ -260,7 +260,7 @@ export async function runHumanize(
       const veto = e instanceof FabricationVetoError;
       degrade.push(
         veto
-          ? "编造复核否决：LLM 稿含原文没有的事实性新增，整稿改由本地引擎产出（非 LLM）"
+          ? "编造复核否决：LLM 稿含原文没有的事实性新增，整稿改由本地引擎产出（非 LLM；复核本身有漏判率，不担保干净）"
           : "API 调用失败，整稿由本地引擎产出（非 LLM）",
       );
       note = veto

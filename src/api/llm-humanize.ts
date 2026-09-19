@@ -297,7 +297,12 @@ export async function humanizeViaApiDeep(
         if (fabs.length) throw new FabricationVetoError(fabs);
       } catch (e) {
         if (e instanceof FabricationVetoError) throw e; // 否决不能被"通道异常"吞掉
-        // 快审通道本身异常不阻断交付（沿用原行为：不把通路打死，交由人工核对）
+        // 复核通道本身异常不阻断交付（不把通路打死），但**必须说出来**：
+        // 静默跳过等于让用户以为稿子过了事实核查，而它根本没查。
+        finalNote = appendNote(
+          finalNote,
+          `⚠️ 编造复核未能完成（${(e as Error).message.slice(0, 40)}），本次未做否决——交付稿未经事实核查`,
+        );
       }
     }
     finalNote = appendNote(finalNote, targetHint());
