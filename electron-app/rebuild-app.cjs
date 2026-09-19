@@ -31,7 +31,7 @@ const SKIP_PKGS = [/^onnxruntime-web$/];
 /** 拷贝时直接跳过的路径：非 win32 平台二进制（88MB，无谓复制后再删） */
 const SKIP_PATH_RE = /[\\/]bin[\\/]napi-v6[\\/](linux|darwin)([\\/]|$)/;
 
-/** app 顶层需要复制的文件/目录（使用说明.txt 属于交付压缩包根目录，不进 app 内部） */
+/** app 顶层需要复制的文件/目录（使用说明.txt 属于交付目录根，由下面的 2b 步单独放） */
 const APP_ENTRIES = ["main.js", "preload.js", "ppl-engine.cjs", "package.json", "index.html", "assets"];
 
 function sizeOf(p) {
@@ -124,6 +124,21 @@ for (const entry of APP_ENTRIES) {
   fs.cpSync(src, path.join(APP, entry), { recursive: true });
 }
 console.log(`    app 顶层文件已复制：${APP_ENTRIES.join(" / ")}`);
+
+/* 2b. 随包《使用说明.txt》——放交付目录根，不进 app 内部。
+ * 为什么 repack 要管它：这一层此前只有 electron-packager 会写，而 repack 才是日常重建路径，
+ * 结果产物根目录那份文档一直停在 v0.8.2、里面还写着"内置 3 Key 轮换"（桌面版从 v0.8.6 起
+ * 根本不内置 Key）。用户真正读的是根目录这份，不是 resources/app 里那份。
+ * verify-pruned.cjs 会逐字节比对它，落后即不给发布。 */
+for (const doc of ["使用说明.txt"]) {
+  const src = path.join(__dirname, doc);
+  if (!fs.existsSync(src)) {
+    console.error(`✗ 随包文档缺失：${src}`);
+    process.exit(1);
+  }
+  fs.copyFileSync(src, path.join(DIST, doc));
+  console.log(`    随包文档已刷新：${doc}（→ 交付目录根）`);
+}
 
 /* 3. 补齐运行时缺失文件
  * electron-packager 的 --overwrite 会先清空目标目录再重建；它中途卡死时，

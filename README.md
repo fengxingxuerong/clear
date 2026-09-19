@@ -159,7 +159,12 @@ npm run repack           # = rebuild-app → prune-dist → verify-pruned
 可先 `npm run prune -- --dry-run` 预览裁剪清单。
 
 **自检**：`npm run verify` 确认裁剪项已移除、关键文件齐全，并按包名从产物目录解析
-`@huggingface/transformers`。⚠️ 必须按「包名 + 产物目录」解析 —— 若按脚本自身位置解析，
+`@huggingface/transformers`；v0.9.14 起还比对随包《使用说明.txt》与源文件逐字节一致、
+`resources/app/package.json` 与仓库根同版本，任一不符即退出码 1 并明确写"不要发布"。
+（加这项的原因：曾经产物目录里那份文档停在 v0.8.2、`resources/app` 停在 0.9.0，
+而校验器一路报"可以发布"——它当时只查模块可加载，不查产物是否来自当前代码树。
+`repack` 现在也会刷新交付目录根那份文档。）
+⚠️ 必须按「包名 + 产物目录」解析 —— 若按脚本自身位置解析，
 会落到源 `node_modules`，等于没验证。
 
 > `build:electron` 里的同步脚本（`scripts/sync-dist.mjs`）会把最新 Web 构建复制进
