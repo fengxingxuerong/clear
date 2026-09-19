@@ -40,6 +40,29 @@ if command -v git >/dev/null 2>&1; then
   fi
 fi
 
+# ── 凭证账本 append-only（只在账本被碰过时才跑，不给普通提交加 tsx 启动开销）──────
+# 起因：evidence/zhuque/ledger.jsonl 的全部价值是"历史行不会被动"，而 zhuque-evidence.ts
+# 的 audit 只查得到字段对不上的篡改——删整行、重排、改不参与复算的自由文本字段它都看不见。
+# 判据取最强的一条：HEAD 的每一行必须按原顺序原样出现在新内容开头，只许往后追加。
+LEDGER_REL="evidence/zhuque/ledger.jsonl"
+if command -v git >/dev/null 2>&1 && git diff --cached --name-only | grep -q "^${LEDGER_REL}\$"; then
+  if command -v npx >/dev/null 2>&1; then
+    echo "[pre-commit] 凭证账本 append-only 检查…"
+    if ! npx tsx scripts/check-ledger-appendonly.ts --staged; then
+      printf '\n'
+      echo "❌ 凭证账本的历史行被动过了，提交已阻止。"
+      echo "   → 要更正一条记录请**追加**一条新记录，让 audit 的 pct-conflict 去暴露矛盾"
+      echo "   → 确属误报：git commit --no-verify"
+      exit 1
+    fi
+    echo "[pre-commit] ✅ 凭证账本只追加了，历史一字未动"
+  else
+    printf '\n'
+    echo "⚠️  [pre-commit] 环境缺少 npx，凭证账本 append-only 检查已跳过（未验证！）"
+    echo "   → 请手动确认：npx tsx scripts/check-ledger-appendonly.ts --staged"
+  fi
+fi
+
 echo "[pre-commit] 类型检查中…（约 7 秒）"
 $TSC --noEmit
 rc=$?

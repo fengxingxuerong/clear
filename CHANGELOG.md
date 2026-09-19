@@ -170,11 +170,39 @@ A 套件比的是 `calibration-data-v2-genres.json` 里**冻在 git 里的文本
 核过没改的：`DEEP_MAX_ROUNDS=4`、攒 4 条出官方分估计 / 8 条启用留出验证（`calib-lab.ts:355`）、
 `DEFAULT_LOCAL={bestOf:true, candidates:8}`（store.ts:19）、样本 D 两点锚点 99.99/98.47。
 
-**门禁**：`tsc --noEmit` 0、`eslint src/ scripts/` 0、`vitest run` **696 通过 / 43 文件**（上一版记的 673 之上 +23：回归门禁自测 15 + Key 存储 8；
+**10) 凭证账本的 append-only 从"自觉"变成会拦的门禁**
+账本（`evidence/zhuque/ledger.jsonl`）整套价值都在"历史行不会被动"，`seal` 也确实只 `appendFileSync`。
+但 `audit` 查的是**字段对不对得上**，三类被动它看不见：整行被删（少看一条，剩下的一致就报通过）、
+行被重排（它不关心顺序）、改不参与复算的自由文本字段如 `note`（复算不到，静默通过）。
+新增 `scripts/check-ledger-appendonly.ts`，判据只取最强的一条：**HEAD 的每一行必须按原顺序
+原样出现在新内容的开头**，只许往后追加——删除/改写/重排在"最长公共前缀断裂"这一步一律现形，
+不需要维护第二套规则（删一行和改一行在前缀断裂上本来就是同一个现象，硬拆成两种报错只会给读者假精确）。
+
+接线三处：`.githooks/pre-commit`（只在 `git diff --cached --name-only` 命中账本路径时才跑，
+普通提交不付 tsx 启动开销；命中即阻止并提示"要更正就追加一条新的，让 pct-conflict 去暴露矛盾"）、
+CI 新增 `Ledger append-only` 步骤（顺手补上此前只在本地跑的 `Evidence audit` 步骤）、
+`npm run check:ledger` 并入 `check:release`。
+**今天这条在 check:release/CI 上是平凡通过的**（账本 0 行、覆盖率 0/18），它要到第一笔 `seal`
+入账才开始承重——写清楚是为了不让人误以为它已经在保护什么。
+
+测试 `scripts/check-ledger-appendonly.test.ts` 19 例，逐条造一次篡改打穿：改一个字节、
+只改 `note`、删中间一行、重排、截断尾部、整本清空、"先删一行再追加一行"（最像正常修订的那一种），
+以及反向的三条不误伤（纯追加 / 零追加 / HEAD 本来就空的首次建账本）+ CRLF 与尾随空行不算篡改。
+git 取数那两路（`git show HEAD:<path>` 与索引 `:<path>`）另在临时仓库里端到端跑一遍——只用文件对照测
+的话，"HEAD 读不到""索引里才是待提交版本"这类接线错误会全躲过去。
+hook 本身也在临时仓库实测三种形态：纯追加放行、改写历史行拦下（退出 1，且发生在类型检查之前）、
+完全不碰账本时这道检查根本不运行。
+
+写这一版时自己踩到一个"看着接了线其实没接"：`parseArgs` 里 `--head-file/--staged-file` 只做了
+非空校验、忘了把值赋回 `o.headFile/o.stagedFile`，于是文件对照分支永远进不去、静默回落到真仓库的
+git——按 import 跑测试会全绿而测的完全是另一条路。已修，并补一条断言：`--head-file` 指向不存在的
+文件时按"无历史"处理且 `--repo` 指到一个不存在的目录也必须退出 0（真回落到 git 就不成立）。
+
+**门禁**：`tsc --noEmit` 0、`eslint src/ scripts/` 0、`vitest run` **715 通过 / 44 文件**（上一版记的 673 之上 +42：回归门禁自测 15 + Key 存储 8 + 账本 append-only 19；
 其余为 好区 3 / 归属 2 / 否决 4 / 定锚 1 / 上层接线 2 / 复核兜底 2 / 预算停止重试与收场口径 3 / 刻度守卫 1。
 除真网关那批观测外，每条断言都做过红绿验证——把对应改动单独退回即红）、`scan-bugs` 0 违规、`verify-quality` 通过、
 `regression-12samples` D 10/10 · E 8/8 · 刻度守卫 ✅（本版首次在当前代码上绿）、`calib-sanity` 通过（6/6 点、Δmax 35——**两项都正好压在天花板上**，
-下次引擎再动刻度就会红，那是 T16 重拟合欠的账，不要把天花板再抬高一格混过去）、`check:release` 退出 0。
+下次引擎再动刻度就会红，那是 T16 重拟合欠的账，不要把天花板再抬高一格混过去）、`check:ledger` 通过（当前平凡）、`check:release` 退出 0。
 `llm-humanize.ts` / `llm-quality.ts` / `humanize-metrics.ts` 未跑 prettier：这三个文件在本次改动之前
 就不 clean（实测 `d018910` 版同样 warn；CI 无 prettier 步骤），`--write` 会连带重写没碰过的旧代码，
 故只对齐自己改动部分；新增/改写的测试文件（`llm-chat.test.ts`、`humanize-metrics-calibration.test.ts`）

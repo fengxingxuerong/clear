@@ -46,5 +46,11 @@ jobs:
       - name: Calibration sanity (标定数据源/参数/漂移自检)
         run: npx tsx scripts/calib-sanity.ts
 
+      - name: Evidence audit (官方送检凭证哈希复算 + 页面原文互证)
+        run: npx tsx scripts/zhuque-evidence.ts audit
+
+      - name: Ledger append-only (凭证账本历史行不可改)
+        run: npx tsx scripts/check-ledger-appendonly.ts
+
       - name: Production build
         run: npm run build

@@ -208,6 +208,8 @@ npm run repack           # = rebuild-app → prune-dist → verify-pruned
 │  ├─ verify-quality.ts         #   词典泄漏质量门禁
 │  ├─ regression-12samples.ts   #   12 样本回归：D 评分器漂移棘轮 / E 引擎退化棘轮
 │  ├─ regression-12samples.test.ts  #   上面这道门禁的"故意造一次退化"自测
+│  ├─ zhuque-evidence.ts        #   官方送检凭证账本（seal / audit）
+│  ├─ check-ledger-appendonly.ts#   账本历史行不可改（pre-commit 与 CI 都跑）
 │  ├─ calib-sanity.ts           #   标定数据源 / 参数 / 漂移自检
 │  ├─ humanize-cli.ts           #   批量去味 CLI
 │  └─ bench.ts                  #   性能基准
@@ -250,7 +252,8 @@ npm run test:regress12 # 12 样本回归：评分器漂移棘轮 + 引擎退化�
 npm run test:quality   # 词典泄漏质量门禁
 npm run test:calib     # 标定数据源自检（参数一致/拟合误差/x 轴漂移棘轮，退出码可拦）
 npm run test:evidence  # 官方送检凭证审计（哈希复算 + 页面原文互证，见下节）
-npm run check:release  # 上面五条 + 单测，全绿才允许打 tag
+npm run check:ledger   # 凭证账本 append-only（历史行被删/改/重排即拦；hook 里也跑这条）
+npm run check:release  # 上面六条 + 单测，全绿才允许打 tag
 npm run bench          # 性能基准（实测 2026-09-19：1x/571字 3ms、10x/5710字 14ms、50x/2.85万字 57ms）
 ```
 
@@ -395,6 +398,19 @@ npm run check:publish   # = audit --strict：连"历史点无凭证"一起拦 �
   两者同源于同一次手抄，一起抄反就永远自洽）。`audit` 再解析一次，防的是账本被手改之后。
 - **与标定数据源互证**：同一 id 的 `--pct` 必须等于 `calibration-data.json` 的 `y`，否则两边必有一处错。
 - 其余硬伤：坏行（含 git 冲突标记）、文件缺失、id 不在标定集（孤儿凭证）、送检不足 350 字（按文件真实内容判，不信任账本字段）。
+- **账本自身不可篡改（`scripts/check-ledger-appendonly.ts`）**：`seal` 用 `appendFileSync` 写账本，
+  整套外部真值都建立在"历史行不会被动"上——但 `audit` 只查得到**字段对不上**的篡改：
+  整行被删、行被重排、改的是不参与复算的自由文本字段（note 一类），它全都看不见。
+  现在这条由门禁兜住，判据取最强的一条：**HEAD 的每一行必须按原顺序原样出现在新内容的开头**，
+  只许往后追加；删除/改写/重排在这一步一律现形。
+  ```bash
+  npm run check:ledger        # HEAD vs 工作区
+  npx tsx scripts/check-ledger-appendonly.ts --staged   # HEAD vs git 索引（hook 走这条）
+  ```
+  `.githooks/pre-commit` 只在账本被 `git add` 过时才跑它（普通提交不付这份 tsx 启动开销），
+  命中即阻止提交并提示：**要更正一条记录请追加一条新记录**，让 `audit` 的 `pct-conflict` 去暴露矛盾。
+  已在临时仓库端到端验过三种形态：纯追加放行、改写历史行拦下（退出 1，且早于类型检查）、
+  完全不碰账本时这道检查根本不运行。
 - **仍存在的缝隙**（账本管不了，靠人）：粘错窗口的原文、截图拿错页、事后重新生成的送检文本与当时送检的字节不一致
   ——所以送检前先把要粘的文本落盘，再 `seal`。
 
