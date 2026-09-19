@@ -25,10 +25,25 @@ export function getApiCallCount(): number {
   return apiCallCount;
 }
 
+/**
+ * 预算到点、拒绝再发起下一次重试。与"通道故障"区分开：后者可以降级放行/换 Key，
+ * 而这个必须一路上抛到深模式闭环，被误当成"质检通道异常"会让**未核查的稿被放行**。
+ */
+export class BudgetStoppedError extends Error {
+  constructor() {
+    super("已达调用预算/时限，停止后续重试");
+    this.name = "BudgetStopped";
+  }
+}
+
 export async function chat(
   cfg: ApiConfig,
   messages: ChatMessage[],
   opts: { temperature: number; maxTokens: number; model?: string },
+  /** 调用方传入才生效，且**只用于决定是否继续重试/换 Key**——首个请求永远允许发出。
+   *  预算的语义只有调用方知道：这里是"别再烧下一轮"，而收稿终审那类安全调用
+   *  必须允许越过时限跑完（否则"未核查的稿"会被静默交付）。 */
+  overBudget?: () => boolean,
 ): Promise<{ content: string; reasoning: string }> {
   const url = cfg.baseUrl.replace(/\/+$/, "") + "/chat/completions";
   // Key 池：429/401/403 先换下一个 Key 立即重试（Key 轮换），池耗尽或网络瞬断
@@ -50,6 +65,8 @@ export async function chat(
   // kimi-k3 网关限制 temperature 只能为 1（实测 400 报错）
   const temperature = /kimi/i.test(model) ? 1 : opts.temperature;
   for (let attempt = 0; ; attempt++) {
+    // 到点就不再发起**下一次**尝试（首个请求已在上面发出）。429 换 Key 与退避都走这里。
+    if (attempt > 0 && overBudget?.()) throw new BudgetStoppedError();
     // 仅退避后重选 Key：跳过已鉴权失效的（401/403），首个可用 Key 优先。
     // 不能按 attempt>0 判断——换 Key 立即重试也是新 attempt，会覆盖 keyIdx++ 轮换。
     if (afterBackoff) {

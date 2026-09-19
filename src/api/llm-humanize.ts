@@ -160,14 +160,24 @@ async function chatNonEmpty(
   for (let i = 0; i < attempts.length; i++) {
     if (i > 0 && isOverBudget()) break;
     try {
-      const r = await chat(cfg, messages, {
-        temperature: opts.temperature,
-        maxTokens: attempts[i].maxTokens,
-        model: attempts[i].model,
-      });
+      const r = await chat(
+        cfg,
+        messages,
+        {
+          temperature: opts.temperature,
+          maxTokens: attempts[i].maxTokens,
+          model: attempts[i].model,
+        },
+        // 到点只掐掉"下一次尝试"（429 换 Key / 退避 2+5+12s 的重试链）。
+        // 首个请求与收稿终审都不受此影响：前者是"这一稿该不该发"由上面 i>0 判定，
+        // 后者压根不传 predicate——安全核查不能被时限静默取消。
+        isOverBudget,
+      );
       if (r.content) return { content: r.content, via: attempts[i].label };
     } catch {
-      // 单档失败交给下一档降级；全部失败由调用方按空内容处理
+      // 单档失败交给下一档降级；全部失败由调用方按空内容处理。
+      // 预算到点(BudgetStopped)也走这里：其结果是"本轮拿不到内容"，与既有
+      // "超预算带已有最优结果收场"是同一条路径，不改变交付语义。
     }
   }
   return { content: "", via: "" };

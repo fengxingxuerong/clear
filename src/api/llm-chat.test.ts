@@ -228,3 +228,51 @@ describe("错误详情透传（v0.8.7：网关响应体里的具体原因）", (
     ).rejects.toThrow(/^API 返回 404$/);
   });
 });
+
+/**
+ * v0.9.14 预算到点后不再发起「下一次尝试」。
+ * 语义要说准：首个请求永远允许发出（该不该发这一稿由调用方的 attempts 循环决定），
+ * 这里掐的是 429 换 Key / 退避 2+5+12s 的重试链——到点后不再sleep、不再试。
+ */
+describe("预算到点停止重试（v0.9.14）", () => {
+  it("predicate 为真时：只发首个请求，之后抛 BudgetStopped（不 sleep、不再换 Key）", async () => {
+    let n = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        n++;
+        return resp(429);
+      }),
+    );
+    let budget = false;
+    const p = () => budget;
+    const pr = chat(
+      cfg,
+      [{ role: "user", content: "原文" }],
+      { temperature: 0.9, maxTokens: 100 },
+      p,
+    );
+    await vi.waitFor(async () => {
+      budget = true;
+    });
+    await expect(pr).rejects.toThrow(/预算|时限/);
+    expect(n).toBe(1); // 首个请求已发出；退避与换 Key 都被停住
+  });
+
+  it("不传 predicate 时行为不变：429 仍按 Key 池轮换", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        calls.push(authOf(init));
+        return calls.length <= 2 ? resp(429) : resp(200);
+      }),
+    );
+    const r = await chat(cfg, [{ role: "user", content: "原文" }], {
+      temperature: 0.9,
+      maxTokens: 100,
+    });
+    expect(r.content).toBeTruthy();
+    expect(calls).toHaveLength(3);
+  });
+});

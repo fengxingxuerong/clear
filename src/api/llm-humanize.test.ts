@@ -554,3 +554,53 @@ describe("竞争段按最低分定锚（v0.9.14）", () => {
     expect(deep.note).toContain("人写带");
   });
 });
+
+/**
+ * v0.9.14 预算到点的收场必须说成"预算"，不能被转述成"复核未完成"——
+ * 后者会让用户以为事实核查出了故障，而实际是时间到了、核查根本没排上。
+ */
+describe("预算到点的收场口径（v0.9.14）", () => {
+  it("超时限收场：note 讲预算，不出现「编造复核未能完成」", async () => {
+    const TEXT = "值得注意的是，人工智能正在深刻地改变着我们的生活方式。";
+    const GOOD = "时间往前倒几年，这类工具还没几个人用，现在情况已经完全不一样了，值得慢慢琢磨。";
+    let clock = 0;
+    const realNow = Date.now;
+    Date.now = () => clock;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: { body?: string }) => {
+        clock += 30_000; // 每次调用"花掉" 30 秒
+        const body = JSON.parse(init?.body ?? "{}") as {
+          messages: { role: string; content: string }[];
+        };
+        const sys = body.messages?.[0]?.content ?? "";
+        // 本文件的 okJson 收的是整个响应体，不是 content 字符串
+        const content = sys.includes("事实核查员")
+          ? '{"fabrications":[]}'
+          : sys.includes("质检员")
+            ? "PASS"
+            : sys.includes("改写专家")
+              ? GOOD
+              : "句长过于均匀\n45"; // 45 分：不在好区，才会继续要下一轮
+        return okJson({ choices: [{ message: { content } }] });
+      }),
+    );
+    const cfg = {
+      ...DEFAULT_API,
+      enabled: true,
+      apiKey: "k",
+      strictFidelity: true,
+      maxWaitSeconds: 100,
+      maxApiCalls: 0,
+    };
+    try {
+      const deep = await humanizeViaApiDeep(TEXT, cfg, undefined, 10, 4, 0.6);
+      expect(deep.note).toContain("最长等待");
+      expect(deep.note).not.toContain("编造复核未能完成");
+      expect(deep.text.length).toBeGreaterThan(0); // 带已有最优稿收场，不空手
+    } finally {
+      Date.now = realNow;
+      vi.unstubAllGlobals();
+    }
+  });
+});
