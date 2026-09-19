@@ -238,7 +238,10 @@ export function fragmentFrontCanStand(front: string): boolean {
   // 「…的同时」「…的时候」等复合状语尾
   if (/(?:的同时|的时候|的情形|的情况下|的基础上)$/.test(front)) return false;
   // 名词残片：末段过短且无谓语标记（「工艺」）；或量词开头的同位语短语且无谓语标记
-  const lastSeg = front.split(/[，、；]/).pop() ?? front;
+  // 分隔符必须含冒号：「…入手：首先」按逗号切只得到 5 字 lastSeg「入手：首先」，
+  // 长度门槛(≤4)量不到它，于是切点被放行、产出光杆句「…入手：首先。」
+  // （实测 UI 论说样本 69/210 次 = 32.9%，强度 ≥0.5 起）。
+  const lastSeg = front.split(/[，、；：:]/).pop() ?? front;
   if (lastSeg.length <= 4 && !CLAUSE_PREDICATE_RE.test(lastSeg)) return false;
   if (QUANTIFIER_HEAD_RE.test(lastSeg) && !CLAUSE_PREDICATE_RE.test(lastSeg)) return false;
   // v0.9 长尾：末段为悬空状语/时间名词短语（「说到底，在后摩尔时代」切点在时代后）

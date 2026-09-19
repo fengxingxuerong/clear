@@ -13,6 +13,7 @@ import {
   clampAvgSentenceLenUnder25,
   ensureEmDashCountHardCap,
 } from "./humanize-shuffle.ts";
+import { fragmentFrontCanStand } from "./humanize-primitives.ts";
 
 /** 按句末标点切句，返回去掉空白后的纯字数序列（够用，不引第三方分词） */
 function sentLens(text: string): number[] {
@@ -196,5 +197,27 @@ describe("boostBurstinessByCutting（不得切出光杆连接词）", () => {
     const out = boostBurstinessByCutting(s, 0.8, 8);
     const after = out.split("。").filter((x) => x.trim()).length;
     expect(after).toBeGreaterThan(before);
+  });
+});
+
+/**
+ * v0.9.14：切点守卫取"末段"必须认冒号。
+ * fragmentFrontCanStand 原来只按 ，、； 切末段，于是「…入手：首先」被当成 5 字末段
+ * 混过 ≤4 字光杆门槛，切点放行后产出「…入手：首先。」这种枚举标记独立成句的病句
+ * （UI 论说样本实测 69/210 次 = 32.9%，强度 ≥0.5 起）。
+ */
+describe("fragmentFrontCanStand（末段切分必须含冒号）", () => {
+  it("冒号后是光杆枚举标记 → 否决（句号化即无谓语残句）", () => {
+    expect(fragmentFrontCanStand("具体来说，可以从以下三个方面入手：首先")).toBe(false);
+    expect(fragmentFrontCanStand("这件事有三个原因：第二")).toBe(false);
+  });
+
+  it("冒号后是完整小句 → 照常放行（别把守卫改成一律否决）", () => {
+    expect(fragmentFrontCanStand("具体来说，可以从以下三个方面入手：趋势已经很明显了")).toBe(true);
+  });
+
+  it("逗号路径的原有否决不受影响（≤4 字无谓语仍拦）", () => {
+    expect(fragmentFrontCanStand("这套工艺")).toBe(false);
+    expect(fragmentFrontCanStand("这套工艺已经成熟量产了")).toBe(true);
   });
 });
