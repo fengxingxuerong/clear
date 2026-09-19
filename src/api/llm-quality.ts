@@ -316,6 +316,63 @@ export function deletionStubIssues(original: string, rewritten: string): string[
   return [`疑似删减残留：孤词成句「${stubs[0]}」在原文中是更长表述的一部分，主谓残缺`];
 }
 
+/** v0.9.14 增殖守卫：truncationIssues 只守"缩水"，膨胀侧此前完全没人守——
+ *  而编造最确定的代理信号恰恰是膨胀：模型要"接地气"就得补内容，补出来的一定更长。
+ *
+ *  阈值来自实测分布，不是照抄 README 那句「不超过原文 110%」：
+ *    真 LLM 深度产物 9 份（s1~s7，out-deep / out-phase2-deep）长度比
+ *      58% 63% 83% 83% 90% 95% 96% 109% **113%**   ← 合法上限 113%
+ *    本地引擎 225 次（3 体裁 × 3 档 × 25 种子）最大 **100%**（只换词不增词）
+ *    异常样本 artifacts/deai-test/out/s1-议论文.llm-deep.txt = **250%**（第一人称 0→16）
+ *  所以硬线放在 150%：离合法上限 113% 留 37pp 余量（避免误杀），又能稳稳咬住 250%。
+ *  README 的 110% 是**给模型的提示词要求**，实测有 113% 的合格稿，拿它当硬否决会误杀，
+ *  故 110~150% 这段只做披露（见 addedContentSignals），>150% 才打回。
+ *
+ *  ⚠️ 比例必须有**规模下限**才成立：原文 5 字、改写 21 字就是 420%，但那只是"短句被
+ *  补全成完整句"的正常现象。这条是接上之后被既有测试当场抓出来的（夹具原文只有 5 字），
+ *  所以除了比例，还要求原文 ≥60 字、绝对增量 >60 字——三个条件同时成立才算增殖。
+ *  对照 s1 异常样本：391 字 → 977 字，250% / 增量 +586，三条全中。 */
+const INFLATION_VETO_RATIO = 1.5;
+const INFLATION_WARN_RATIO = 1.1;
+const INFLATION_MIN_ORIG = 60; // 原文小于此字数时，比例没有意义
+const INFLATION_MIN_ABS = 60; // 绝对增量小于此，不算"凭空长出一倍内容"
+export function inflationIssues(original: string, rewritten: string): string[] {
+  const chars = (s: string) => s.replace(/\s+/g, "").length;
+  const o = chars(original);
+  const r = chars(rewritten);
+  if (o < INFLATION_MIN_ORIG || r <= 0) return [];
+  if (r > o * INFLATION_VETO_RATIO && r - o > INFLATION_MIN_ABS) {
+    return [
+      `信息增殖：候选稿 ${r} 字 = 原文 ${o} 字的 ${Math.round((r / o) * 100)}%（多出 ${r - o} 字），远超 150% 硬线（改写不该凭空长出一倍内容）`,
+    ];
+  }
+  return [];
+}
+
+/** 第一人称 / 具体化标记的"新增量"——**只披露，不否决**。
+ *  为什么不否决：合法样本里第一人称增量最高到 +10（s5-长文分块.run.txt），
+ *  异常样本是 +16，两者在 n=9 上根本分不开；拿这个当硬线就是拍脑袋误杀。
+ *  但它必须让用户看见：交付稿里凭空多出十几处「我/我们」，是"这段经历原文没有"的
+ *  最强提示，而现有的 FABRICATION_SIGNALS 是亲属/熟人**短语表**，永远追不上模型的花样
+ *  （s1 那 16 处第一人称一个都没命中）。结构性计数补的就是这个缺口。 */
+const FIRST_PERSON_RE = /我们|我(?!们)[的]?/g;
+const SPECIFICITY_RE =
+  /去年|上个月|前阵子|那天|我认识|我同事|我家|我朋友|楼下|小区|说白了|讲真|有一说一/g;
+export function addedContentSignals(original: string, rewritten: string): string[] {
+  const cnt = (s: string, re: RegExp) => (s.match(re) || []).length;
+  const out: string[] = [];
+  const dFP = cnt(rewritten, FIRST_PERSON_RE) - cnt(original, FIRST_PERSON_RE);
+  const dSP = cnt(rewritten, SPECIFICITY_RE) - cnt(original, SPECIFICITY_RE);
+  if (dFP >= 3) out.push(`新增第一人称表述 ${dFP} 处（原文没有这么多"我"——经历类内容请自行核对）`);
+  if (dSP >= 2) out.push(`新增口语化具体化 ${dSP} 处（"去年/我认识/楼下"这类，可能是凭空补的）`);
+  const chars = (s: string) => s.replace(/\s+/g, "").length;
+  const o = chars(original);
+  const ratio = o > 0 ? chars(rewritten) / o : 0;
+  if (ratio > INFLATION_WARN_RATIO && ratio <= INFLATION_VETO_RATIO)
+    out.push(`篇幅为原文的 ${Math.round(ratio * 100)}%（提示词要求 ≤110%，未超 150% 硬线）`);
+  return out;
+}
+
 export function localHardGate(original: string, rewritten: string): string[] {
   const issues: string[] = [];
   // 不参与否决的两类：① 统计型节奏项（交评分修订收敛，硬拦会空烧 API）；
@@ -333,6 +390,7 @@ export function localHardGate(original: string, rewritten: string): string[] {
   issues.push(...coherenceIssues(rewritten)); // v0.8.5：重排后的衔接断裂
   issues.push(...fabricationIssues(original, rewritten)); // v0.8.9：编造兜底
   issues.push(...truncationIssues(original, rewritten)); // v0.9.4：截断/严重缩水守卫（P0）
+  issues.push(...inflationIssues(original, rewritten)); // v0.9.14：增殖守卫（缩水有守、膨胀没守的那半边）
   issues.push(...deletionStubIssues(original, rewritten)); // v0.9.5 P4：删减残留孤词句
   // 谓语被删光的光杆主语：上面两条都漏（deletionStub 只管 2~6 字且含"在/被"即放行，
   // 且要求残段在原文逐字出现）；而 aiScore 对这种塌句给 0 分 = 奖励删除，

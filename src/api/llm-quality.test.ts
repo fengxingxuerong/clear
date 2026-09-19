@@ -1,6 +1,16 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { localHardGate, processCandidate, coherenceIssues, fabricationIssues, truncationIssues, fabricationReview, deletionStubIssues } from "./llm-quality";
-import { fingerprintCheck } from "../engine/humanize";
+import {
+  localHardGate,
+  processCandidate,
+  coherenceIssues,
+  fabricationIssues,
+  truncationIssues,
+  fabricationReview,
+  deletionStubIssues,
+  inflationIssues,
+  addedContentSignals,
+} from "./llm-quality";
+import { fingerprintCheck, humanize } from "../engine/humanize";
 import { restoreMixedSpacing } from "../engine/humanize-shuffle";
 import { buildRevisionPrompt } from "./llm-prompts";
 import { ZHUQUE_DETECT_SYSTEM } from "./zhuque-semantic";
@@ -272,8 +282,14 @@ describe("fabricationReview 编造专项复核（v0.9.4 P1.5）", () => {
   }
 
   it("正常 JSON：提取编造清单", async () => {
-    stubReviewer('{"fabrications": ["「我踩过不少坑」：原文无此经历", "「一定」：原文为往往，概率变绝对"]}');
-    const fabs = await fabricationReview(orig, "数字化转型能提升运营效率。我踩过不少坑，率先布局的一定占先机。", cfg);
+    stubReviewer(
+      '{"fabrications": ["「我踩过不少坑」：原文无此经历", "「一定」：原文为往往，概率变绝对"]}',
+    );
+    const fabs = await fabricationReview(
+      orig,
+      "数字化转型能提升运营效率。我踩过不少坑，率先布局的一定占先机。",
+      cfg,
+    );
     expect(fabs).toHaveLength(2);
     expect(fabs[0]).toContain("我踩过不少坑");
   });
@@ -285,7 +301,9 @@ describe("fabricationReview 编造专项复核（v0.9.4 P1.5）", () => {
   });
 
   it("JSON 内含花括号与引号转义：状态机不被内容截断", async () => {
-    stubReviewer('{"fabrications": ["改写稿新增「{方法论}体系」：原文无，且引号内出现\\"嵌套\\""]}');
+    stubReviewer(
+      '{"fabrications": ["改写稿新增「{方法论}体系」：原文无，且引号内出现\\"嵌套\\""]}',
+    );
     const fabs = await fabricationReview(orig, "改写稿内容。", cfg);
     expect(fabs).toHaveLength(1);
   });
@@ -308,7 +326,8 @@ describe("processCandidate（修复成功路径）", () => {
         const user: string = msgs[1]?.content ?? "";
         reqs.push({ sys, user });
         let content = "PASS"; // 质检默认放行
-        if (sys.includes("改写专家")) content = "改写稿：营收增长23%，海外占比提升。"; // 修好了
+        if (sys.includes("改写专家"))
+          content = "改写稿：营收增长23%，海外占比提升。"; // 修好了
         else if (sys.includes("复刻检测员")) content = "句长过于均匀\n18"; // 评分行
         return new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
           status: 200,
@@ -367,7 +386,14 @@ describe("fabricationReview 取值兜底（v0.9.14）", () => {
       "fetch",
       vi.fn(async () =>
         resp({
-          choices: [{ message: { content: "", reasoning_content: '{"fabrications":["裸机450克：原文无此限定"]}' } }],
+          choices: [
+            {
+              message: {
+                content: "",
+                reasoning_content: '{"fabrications":["裸机450克：原文无此限定"]}',
+              },
+            },
+          ],
         }),
       ),
     );
@@ -376,7 +402,102 @@ describe("fabricationReview 取值兜底（v0.9.14）", () => {
   });
 
   it("两处都没有 JSON 才抛错（调用方据此说明「未做否决」）", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => resp({ choices: [{ message: { content: "我看没有新增" } }] })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => resp({ choices: [{ message: { content: "我看没有新增" } }] })),
+    );
     await expect(fabricationReview("原文。", "改写。", cfg)).rejects.toThrow(/未返回有效 JSON/);
+  });
+});
+
+/* ─────────── v0.9.14 增殖守卫 + 新增内容披露 ───────────
+ * 阈值不是拍的，来自实测：真 LLM 深度产物 9 份长度比 58%~113%（合法上限 113%），
+ * 本地引擎 225 次最大 100%，异常样本 artifacts/deai-test/out/s1-议论文.llm-deep.txt = 250%。
+ * 所以硬线 150%、110~150% 只披露。下面全部用这些真实数字当夹具。
+ */
+describe("inflationIssues：增殖守卫（truncationIssues 缺的半边）", () => {
+  const ORIG = "数字化转型提升了效率。".repeat(20); // 220 字
+  const rep = (src: string, times: number) => src.repeat(times);
+
+  it("250% 的稿子（实测异常样本的比例）必须被打回", () => {
+    const inflated = rep(ORIG, 5); // 500%
+    const r = inflationIssues(ORIG, inflated);
+    expect(r).toHaveLength(1);
+    expect(r[0]).toContain("信息增殖");
+  });
+
+  it("113% 的合格稿不得误杀（实测合法上限）", () => {
+    const base = "这段内容讲的是行业变化。".repeat(30); // 420 字
+    const grown = base + "补充了一句背景说明。".repeat(6); // ≈110~115%
+    const ratio = grown.replace(/\s/g, "").length / base.replace(/\s/g, "").length;
+    expect(ratio).toBeLessThanOrEqual(1.5);
+    expect(inflationIssues(base, grown)).toEqual([]);
+  });
+
+  it("必须真接在 localHardGate 上（只定义不接线等于没有）", () => {
+    const issues = localHardGate(ORIG, rep(ORIG, 4));
+    expect(issues.some((i) => i.includes("信息增殖"))).toBe(true);
+  });
+
+  it("本地引擎产物一律不得触发（它是只换词不增词的参照系）", () => {
+    for (const src of [
+      "值得注意的是，随着人工智能技术的发展，相关工具应运而生。综上所述，效率得到了提升。",
+      "张总：这个季度的指标完成得怎么样了？李工：主流程已经联调完毕。",
+    ]) {
+      for (const [intensity, zhuque] of [
+        [0.6, false],
+        [0.9, true],
+        [1, true],
+      ] as [number, boolean][]) {
+        for (let seed = 0; seed < 8; seed++) {
+          const o = humanize(src, { intensity, zhuqueMode: zhuque, seed });
+          expect(inflationIssues(src, o)).toEqual([]);
+        }
+      }
+    }
+  });
+});
+
+describe("addedContentSignals：新增内容只披露、不否决", () => {
+  it("凭空多出 16 处第一人称 → 必须说出来（s1 实测值）", () => {
+    const orig = "AI 工具改变了工作方式。".repeat(10);
+    const out =
+      orig +
+      "我家楼下的快递柜".repeat(4) +
+      "我认识一个做质检的老哥".repeat(4) +
+      "我朋友说可以".repeat(8);
+    const sig = addedContentSignals(orig, out);
+    expect(sig.some((x) => x.includes("第一人称"))).toBe(true);
+  });
+
+  it("正常改写（第一人称 +1）不得报警，避免把口语化误当编造", () => {
+    const orig = "这个方案能提升效率。".repeat(12);
+    const out = orig + "我觉得还行。";
+    expect(addedContentSignals(orig, out).some((x) => x.includes("第一人称"))).toBe(false);
+  });
+
+  it("110%~150% 这段给提示但不否决", () => {
+    const base = "内容略。".repeat(100); // 200 字
+    const grown = base + "追加一点。".repeat(12); // ≈130%
+    const sig = addedContentSignals(base, grown);
+    expect(sig.some((x) => x.includes("篇幅"))).toBe(true);
+    expect(inflationIssues(base, grown)).toEqual([]);
+  });
+});
+
+describe("inflationIssues 的规模下限（被既有测试抓出来后钉住）", () => {
+  it("原文只有 5 字时不得按比例否决（短句补全是正常现象）", () => {
+    // 这正是接入后第一个撞红的既有夹具：原文 5 字、mock 改写 21 字 = 420%
+    expect(inflationIssues("挺好的", "这个方案确实挺好的，用起来也方便。")).toEqual([]);
+  });
+  it("比例超线但绝对增量不足 60 字时也不否决", () => {
+    const orig = "这段文字讲行业变化。".repeat(5); // 60 字，刚好过下限
+    const out = orig + "补一句。".repeat(5); // 80 字 = 133%，增量 20
+    expect(inflationIssues(orig, out)).toEqual([]);
+  });
+  it("三条件齐备才否决（对照 s1 实测：391→977）", () => {
+    const orig = "行业正在发生变化，企业需要适应新的节奏。".repeat(10); // 200 字
+    const out = orig.repeat(3) + "另外我还认识几个做这行的朋友，去年聊过。".repeat(4);
+    expect(inflationIssues(orig, out).length).toBe(1);
   });
 });

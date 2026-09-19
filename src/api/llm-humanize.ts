@@ -12,7 +12,7 @@ import {
   styleDirective,
 } from "./llm-prompts";
 import { chat, resetApiCallCount, getApiCallCount } from "./llm-chat";
-import { processCandidate, fabricationReview } from "./llm-quality";
+import { processCandidate, fabricationReview, addedContentSignals } from "./llm-quality";
 import { restoreMixedSpacing } from "../engine/humanize-shuffle.ts";
 import { fingerprintCheck } from "../engine/humanize.ts";
 import { errMsg } from "./llm-judge";
@@ -316,6 +316,12 @@ export async function humanizeViaApiDeep(
           `⚠️ 编造复核未能完成（${(e as Error).message.slice(0, 40)}），本次未做否决——交付稿未经事实核查`,
         );
       }
+    }
+    // 本地"新增内容"披露：**放在 strictFidelity 之外**，因为它是纯本地计数、零成本，
+    // 而不开严格保真的用户同样该知道"交付稿凭空多出十几处『我』"。
+    // 只披露不否决（阈值在 n=9 上分不开合法与编造，硬拦就是误杀）。
+    for (const sig of addedContentSignals(text, bestText)) {
+      finalNote = appendNote(finalNote, `ℹ️ ${sig}`);
     }
     finalNote = appendNote(finalNote, targetHint());
     if (!hit && roundScores.length > 0) {
