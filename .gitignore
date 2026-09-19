@@ -39,7 +39,7 @@ artifacts/
 .tmp-ppl-model/
 endpoints.local.json
 
-# git �Eb4��Uv0.9.5 b(�bФ	
+# git 恢复操作留在工作区的备份目录（v0.9.5 一次误恢复的产物，不是内容）
 .git-restored/
 .git-restored2/
 
