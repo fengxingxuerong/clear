@@ -57,6 +57,26 @@ const PAD_SENTENCE_WORDS = new Set([
   "差不多得了",
 ]);
 
+/**
+ * aiScore 的「人写 ←→ 机器」打分边界（v0.9.7 权重标定产物）
+ * ---------------------------------------------------------
+ * 三个数都要留住，它们各有身份，历史上曾被人当成同一个：
+ *  - HUMAN_MAX 27：真人写样本里量到的最高分（H6 正式公文 26、H8 技术说明 27）
+ *  - MACHINE_MIN 30：引擎污染样本里量到的最低分
+ *  - CUTOFF 29：判定线，取上面两者的中间值
+ *
+ * 27~30 之间是**刻意保留的灰区**（见 aiScore 内"已知灰区"注释）：分数 20~36 同时躺着
+ * 真人稿与污染稿，继续上调权重会把真人稿推过 40，那是不可接受的误伤。
+ *
+ * 为什么要从引擎导出：这三个数此前只活在 gitignore 的标定草稿和测试文件里，
+ * 改 aiScore 权重/加检测器时**没有任何东西会拦住你**——直到某次改动把真人稿推到
+ * 30 以上或把污染稿压到 27 以下，而全套测试仍然全绿。现在 humanize-metrics-calibration
+ * 的分离性守卫直接以这三个常量为断言对象。
+ */
+export const AI_SCORE_HUMAN_MAX = 27;
+export const AI_SCORE_MACHINE_MIN = 30;
+export const AI_SCORE_CUTOFF = 29;
+
 export interface ScoreBreakdown {
   /** 0~100，越高越像 AI 写的（也越高说明质量越差） */
   score: number;

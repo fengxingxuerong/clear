@@ -88,11 +88,25 @@ note 就会冒出「编造复核未能完成」——新增的收场口径用例
 无限循环。相关说法已按实测改掉，探针文件用完即删，不再拿它撑结论。
 另外长文停在 87~90 说明该改的是改写提示词/模型选型，不是再烧一轮修订。
 
-**门禁**：`tsc --noEmit` 0、`eslint src/ scripts/` 0、`vitest run` **672 通过**（本版 +17：好区 3 / 归属 2 / 否决 4 / 定锚 1 / 上层接线 2 /
-复核兜底 2 / 预算停止重试与收场口径 3；除真网关那批观测外，每条断言都做过红绿验证——把对应改动单独退回即红）、`scan-bugs` 0 违规、`verify-quality` 通过、
+**7) aiScore 的打分边界导成引擎常量并加刻度守卫**
+27 / 29 / 30 这三个数此前只存在于 gitignore 的标定草稿和测试文件里，引擎侧没有导出常量——
+**调权重、加检测器时没有任何东西会拦住你**。现在 `humanize-metrics.ts` 导出
+`AI_SCORE_HUMAN_MAX`(真人实测上限 27) / `AI_SCORE_MACHINE_MIN`(污染实测下限 30) /
+`AI_SCORE_CUTOFF`(判定线 29)，标定测试的 `CUTOFF` 改为导入。
+新增守卫刻意比"分离性检验"更严：分离性只要求两组不重叠，**整条尺子一起平移时它照样绿**；
+守卫把两组样本钉在标定带内（2026-09-19 实测量在 humanMax=13 / machineMin=32），
+任何一次权重改动把真人稿推过 27 或把污染稿压到 30 以下都会红。摘掉验证过：把带界收到 12
+即红（`真人稿最高分 13 被推过人写带上限 12`），恢复即绿。
+顺带把 `JUDGE_GOOD_BAND = 28` 的注释改准：那是**评委尺度**上的收手点，与上面三个数不是同一
+量纲，只是数值靠近、容易被误读成同源。
+
+**门禁**：`tsc --noEmit` 0、`eslint src/ scripts/` 0、`vitest run` **673 通过**（本版 +18：好区 3 / 归属 2 / 否决 4 / 定锚 1 / 上层接线 2 /
+复核兜底 2 / 预算停止重试与收场口径 3 / 刻度守卫 1；除真网关那批观测外，每条断言都做过红绿验证——把对应改动单独退回即红）、`scan-bugs` 0 违规、`verify-quality` 通过、
 `calib-sanity` 通过（6/6）、`check:release` 退出 0。
-`llm-humanize.ts` / `llm-quality.ts` 未跑 prettier：这两个文件在改动前就不 clean（CI 无 prettier 步骤），
-`--write` 会连带重写没碰过的旧代码，故只对齐自己改动部分；新增的 `llm-chat.test.ts` 用例已按格式收齐。
+`llm-humanize.ts` / `llm-quality.ts` / `humanize-metrics.ts` 未跑 prettier：这三个文件在本次改动之前
+就不 clean（实测 `d018910` 版同样 warn；CI 无 prettier 步骤），`--write` 会连带重写没碰过的旧代码，
+故只对齐自己改动部分；新增/改写的测试文件（`llm-chat.test.ts`、`humanize-metrics-calibration.test.ts`）
+已按格式收齐。
 
 ## v0.9.13 更新（标尺错别字项误伤清算 + 官方送检凭证账本）
 

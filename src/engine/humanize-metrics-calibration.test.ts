@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { aiScore } from "./humanize-metrics";
+import {
+  aiScore,
+  AI_SCORE_CUTOFF,
+  AI_SCORE_HUMAN_MAX,
+  AI_SCORE_MACHINE_MIN,
+} from "./humanize-metrics";
 
 /**
  * 标尺区分度回归（v0.9.7 新增）
@@ -26,8 +31,11 @@ import { aiScore } from "./humanize-metrics";
  * 不要为了让测试变绿而删样本——样本是标定资产。
  */
 
-/** 判定线：实测分离区间 [27, 30] 取中位 */
-const CUTOFF = 29;
+/**
+ * 判定线改为从引擎导入（v0.9.14）：此前 29 只写在本文件与 gitignore 的标定草稿里，
+ * 调权重/加检测器时没有任何测试会拦住"把真人稿推到机器带"这件事。
+ */
+const CUTOFF = AI_SCORE_CUTOFF;
 
 /* ------------- HUMAN：真人写，应全部 < CUTOFF ------------- */
 
@@ -63,10 +71,7 @@ const HUMAN_CASES: [string, string][] = [
 张总（项目经理）：那明天能不能提测？客户那边催得挺紧。
 李工（前端负责人）：可以，今晚我加个班收个尾，明早第一件事就同步给你。`,
   ],
-  [
-    "短促节奏·有意的短句",
-    `雨停了。我出门。巷子里没什么人。只有一只猫。它看了我一眼。又低下头去。`,
-  ],
+  ["短促节奏·有意的短句", `雨停了。我出门。巷子里没什么人。只有一只猫。它看了我一眼。又低下头去。`],
   [
     "对话·含「大家」（v0.9.13 错别字项误伤回归）",
     `张总（项目经理）：大家早上好，今天我们来开本周的项目周会。
@@ -86,10 +91,7 @@ const MACHINE_CASES: [string, string][] = [
     "碎片句乱插",
     `周末去了趟菜市场。你懂的。西红柿涨价了。说白了。摊主说雨下了半个月。差不多得了。`,
   ],
-  [
-    "语气词句中撒放",
-    `那天下午雨很大嗼。我撑伞走在路上呵。看见老王蹲在屋檐下啊。他抬头笑了笑哦。`,
-  ],
+  ["语气词句中撒放", `那天下午雨很大嗼。我撑伞走在路上呵。看见老王蹲在屋檐下啊。他抬头笑了笑哦。`],
   [
     "病词替换",
     `总的来看，企业需要盯紧数据治理，还要把关数据质量。搭起的体系得不断完善，摆平了历史包袱才谈得上落地。`,
@@ -115,9 +117,10 @@ describe("标尺区分度：真人写 vs 引擎污染（v0.9.7 盲区修复）",
     for (const [label, text] of HUMAN_CASES) {
       it(`${label}：score < ${CUTOFF}`, () => {
         const r = aiScore(text);
-        expect(r.score, `误伤：真人写被判 ${r.score} 分（structure=${r.structureHits}）`).toBeLessThan(
-          CUTOFF,
-        );
+        expect(
+          r.score,
+          `误伤：真人写被判 ${r.score} 分（structure=${r.structureHits}）`,
+        ).toBeLessThan(CUTOFF);
       });
     }
   });
@@ -136,7 +139,9 @@ describe("标尺区分度：真人写 vs 引擎污染（v0.9.7 盲区修复）",
 
   it("盲区回归：垫词堆叠必须被判高分（旧标尺给 0 分）", () => {
     // 这是本文件存在的直接原因——旧标尺对这段给 0 分，导致 bestOf 专挑此类稿
-    const r = aiScore("说真的，其实说白了，在当前背景下，企业要转型。讲真，老实讲，不是一蹴而就的。");
+    const r = aiScore(
+      "说真的，其实说白了，在当前背景下，企业要转型。讲真，老实讲，不是一蹴而就的。",
+    );
     expect(r.score).toBeGreaterThanOrEqual(CUTOFF);
   });
 
@@ -153,6 +158,28 @@ describe("标尺区分度：真人写 vs 引擎污染（v0.9.7 盲区修复）",
       machineMin,
     );
   });
+
+  /**
+   * 刻度守卫（v0.9.14）：分离性只保证"两组不重叠"，权重被推动时它仍然绿——
+   * 因为整条尺子一起平移。这里把两组样本钉在标定过的绝对带上：真人稿不得越过
+   * AI_SCORE_HUMAN_MAX(27)，引擎污染稿不得掉到 AI_SCORE_MACHINE_MIN(30) 以下。
+   * 2026-09-19 实测量在 humanMax=13 / machineMin=32，两侧都留着足够余量。
+   * 改权重/加检测器若把任何一侧推出带外，本用例即红——这正是此前缺的那道拦子。
+   */
+  it("打分边界守卫：两组样本都留在标定带内（不随权重整体平移）", () => {
+    const humanMax = Math.max(...HUMAN_CASES.map(([, t]) => aiScore(t).score));
+    const machineMin = Math.min(...MACHINE_CASES.map(([, t]) => aiScore(t).score));
+    expect(
+      humanMax,
+      `真人稿最高分 ${humanMax} 被推过人写带上限 ${AI_SCORE_HUMAN_MAX}`,
+    ).toBeLessThanOrEqual(AI_SCORE_HUMAN_MAX);
+    expect(
+      machineMin,
+      `污染稿最低分 ${machineMin} 掉进机器带以下 ${AI_SCORE_MACHINE_MIN}（标尺失效或样本被删）`,
+    ).toBeGreaterThanOrEqual(AI_SCORE_MACHINE_MIN);
+    expect(AI_SCORE_HUMAN_MAX).toBeLessThan(AI_SCORE_CUTOFF);
+    expect(AI_SCORE_CUTOFF).toBeLessThanOrEqual(AI_SCORE_MACHINE_MIN);
+  });
 });
 
 /**
@@ -165,7 +192,8 @@ describe("标尺区分度：真人写 vs 引擎污染（v0.9.7 盲区修复）",
  */
 describe("错别字项：不误伤「大家」，且命中数可外露诊断（v0.9.13）", () => {
   it("真人写法「大家早上好 / 提醒大家 / 请大家」零罚分", () => {
-    const t = "大家早上好，今天我们来开周会。不过需要提醒大家的是，支付模块做了一次比对。请大家在上线当天保持通讯畅通。";
+    const t =
+      "大家早上好，今天我们来开周会。不过需要提醒大家的是，支付模块做了一次比对。请大家在上线当天保持通讯畅通。";
     const r = aiScore(t);
     expect(r.typoHits).toBe(0);
   });
@@ -187,7 +215,9 @@ describe("错别字项：不误伤「大家」，且命中数可外露诊断（v
 
   it("任何被打分的文本都外露 typoHits（杜绝再一次隐藏计分）", () => {
     for (const t of ["", "今天很好。", "大这家店不错。", "值得注意的是，这事儿成了。"]) {
-      expect(aiScore(t).typoHits, `aiScore(${JSON.stringify(t)}) 未外露 typoHits`).toBeTypeOf("number");
+      expect(aiScore(t).typoHits, `aiScore(${JSON.stringify(t)}) 未外露 typoHits`).toBeTypeOf(
+        "number",
+      );
     }
   });
 });
