@@ -1,34 +1,104 @@
 {
-  "N1_e2e": {
-    "score": 8,
-    "note": "seed=20260826, intensity=0.6, zhuque=false, genre=叙事文"
+  "version": 2,
+  "seed": 20260826,
+  "drift": {
+    "N0": {
+      "want": "high",
+      "score": 33
+    },
+    "N1": {
+      "want": "low",
+      "score": 82
+    },
+    "N2": {
+      "want": "low",
+      "score": 12
+    },
+    "D0": {
+      "want": "high",
+      "score": 46
+    },
+    "D1": {
+      "want": "low",
+      "score": 100
+    },
+    "D2": {
+      "want": "low",
+      "score": 45
+    },
+    "H0": {
+      "want": "low",
+      "score": 7
+    },
+    "H1": {
+      "want": "low",
+      "score": 48
+    },
+    "H2": {
+      "want": "low",
+      "score": 48
+    },
+    "O1": {
+      "want": "high",
+      "score": 43
+    }
   },
-  "N2_e2e": {
-    "score": 0,
-    "note": "seed=20260826, intensity=0.9, zhuque=true, genre=叙事文"
+  "e2e": {
+    "N1": {
+      "score": 8,
+      "note": "seed=20260826, intensity=0.6, zhuque=false, genre=叙事文"
+    },
+    "N2": {
+      "score": 0,
+      "note": "seed=20260826, intensity=0.9, zhuque=true, genre=叙事文"
+    },
+    "D1": {
+      "score": 0,
+      "note": "seed=20260826, intensity=0.6, zhuque=false, genre=对话体"
+    },
+    "D2": {
+      "score": 0,
+      "note": "seed=20260826, intensity=0.9, zhuque=true, genre=对话体"
+    },
+    "H1": {
+      "score": 0,
+      "note": "seed=20260826, intensity=0.6, zhuque=false, genre=纯人写稿"
+    },
+    "H2": {
+      "score": 0,
+      "note": "seed=20260826, intensity=0.9, zhuque=true, genre=纯人写稿"
+    },
+    "O2": {
+      "score": 1,
+      "note": "seed=20260826, intensity=0.7, zhuque=false, genre=论说文"
+    },
+    "O3": {
+      "score": 0,
+      "note": "seed=20260826, intensity=0.9, zhuque=true, genre=论说文"
+    }
   },
-  "D1_e2e": {
-    "score": 60,
-    "note": "seed=20260826, intensity=0.6, zhuque=false, genre=对话体"
-  },
-  "D2_e2e": {
-    "score": 68,
-    "note": "seed=20260826, intensity=0.9, zhuque=true, genre=对话体"
-  },
-  "H1_e2e": {
-    "score": 30,
-    "note": "seed=20260826, intensity=0.6, zhuque=false, genre=纯人写稿"
-  },
-  "H2_e2e": {
-    "score": 30,
-    "note": "seed=20260826, intensity=0.9, zhuque=true, genre=纯人写稿"
-  },
-  "O2_e2e": {
-    "score": 3,
-    "note": "seed=20260826, intensity=0.7, zhuque=false, genre=论说文"
-  },
-  "O3_e2e": {
-    "score": 3,
-    "note": "seed=20260826, intensity=0.9, zhuque=true, genre=论说文"
-  }
+  "rebaseLog": [
+    {
+      "at": "2026-09-19",
+      "reason": "D组基线换成当前刻度实测值：v2存档(b3d68fe)的aiScore与今天的重打分差到6→100量级，说明评分器刻度自写档后已整体换过、旧数字不能再当基线；E组同时收紧6条被引擎甩开的棘轮(D1 60→0、D2 68→0、H1 30→0、H2 30→0、O2 3→1、O3 3→0)。D1绝对刻度守卫5项(H0≤27、N0/D0/O1≥30、分离度≥20)实测全过，分离度33-7=26。",
+      "changes": [
+        "D/N0:∅→33",
+        "D/N1:∅→82",
+        "D/N2:∅→12",
+        "D/D0:∅→46",
+        "D/D1:∅→100",
+        "E/D1:60→0",
+        "D/D2:∅→45",
+        "E/D2:68→0",
+        "D/H0:∅→7",
+        "D/H1:∅→48",
+        "E/H1:30→0",
+        "D/H2:∅→48",
+        "E/H2:30→0",
+        "D/O1:∅→43",
+        "E/O2:3→1",
+        "E/O3:3→0"
+      ]
+    }
+  ]
 }

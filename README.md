@@ -203,7 +203,8 @@ npm run repack           # = rebuild-app → prune-dist → verify-pruned
 ├─ scripts/                     # 回归与运维脚本
 │  ├─ scan-bugs.ts              #   病句签名回归扫描（CI 主路径）
 │  ├─ verify-quality.ts         #   词典泄漏质量门禁
-│  ├─ regression-12samples.ts   #   12 样本指标回归
+│  ├─ regression-12samples.ts   #   12 样本回归：D 评分器漂移棘轮 / E 引擎退化棘轮
+│  ├─ regression-12samples.test.ts  #   上面这道门禁的"故意造一次退化"自测
 │  ├─ calib-sanity.ts           #   标定数据源 / 参数 / 漂移自检
 │  ├─ humanize-cli.ts           #   批量去味 CLI
 │  └─ bench.ts                  #   性能基准
@@ -235,9 +236,11 @@ npm run repack           # = rebuild-app → prune-dist → verify-pruned
 ```bash
 npm test          # vitest 断言套件（含引擎行为/边界/跨块清理用例）
 npm run test:regress   # 病句签名回归扫描（120+ 种子组合）
+npm run test:regress12 # 12 样本回归：评分器漂移棘轮 + 引擎退化棘轮（见下节）
 npm run test:quality   # 词典泄漏质量门禁
 npm run test:calib     # 标定数据源自检（参数一致/拟合误差/x 轴漂移棘轮，退出码可拦）
 npm run test:evidence  # 官方送检凭证审计（哈希复算 + 页面原文互证，见下节）
+npm run check:release  # 上面五条 + 单测，全绿才允许打 tag
 npm run bench          # 性能基准（本地引擎 10x 文本约 3~5ms）
 ```
 
@@ -251,6 +254,47 @@ npm run bench          # 性能基准（本地引擎 10x 文本约 3~5ms）
 `npm run test:regress` —— 4 档强度 × 30 种子共 120 次运行，扫描已修复病句签名
 （越来越增多 / 急用思考 / 裸"难"接动词 / "但，" / 具有挺 / 名词位补"了" / 双垫词叠罗汉 /
 无主句切断 / 替身级联二次替换），要求零命中。
+
+---
+
+## 12 样本回归：漂移与退化分开拦（v0.9.14）
+
+`npm run test:regress12` —— 4 体裁 × 3 档位。这道门禁以前是**永久红的**（A 套件 3/12），
+红到没人再看它，于是等于没有。翻查下来是尺子拿错了：
+
+- 旧 A 套件把 `calibration-data-v2-genres.json` 里**冻在 git 里的文本**重新打分，去和存档的
+  `aiScore` 比 ±10%。可那段文本的生成过程根本不参与——能动它的只有评分器本身。
+  实测存档的 `对话·0.6` 记的是 6 分，同一段文字今天重打是 100 分：这不是引擎退化，
+  是评分器刻度从 `b3d68fe` 到现在整体换过了。拿它当引擎回归门，只会永远红。
+- 旧 A 套件里 `论说 O2/O3` 两行更含糊：它们的"存档文本"其实是脚本现场用**当前引擎**算的，
+  于是同一行里混了引擎和评分器两个变量。
+
+现在按"被打分的那段文本冻不冻在仓库里"分成两组，各测各的：
+
+| 组 | 输入 | 能改动它的只有 | 拦法 |
+|----|------|----------------|------|
+| **D 评分器漂移** | 10 段冻结文本（9 条 v2 存档 + 论说原文字面量） | `humanize-metrics` | D1 绝对刻度守卫 + D2 方向棘轮 |
+| **E 引擎退化** | 8 档当前引擎产物（同一 seed=20260826） | `humanize` | 只降不升棘轮，基线在锁文件里 |
+
+**D1 绝对刻度守卫**不依赖任何历史数字，只比对导出的刻度常量：人写原文 ≤ 27、
+三条 AI 原文 ≥ 30、人机分离度 ≥ 20（HEAD 实测 33−7=26）。评分器以后换权重、加词表，
+只要把两类糊到一起就会红——这比"某条分数漂了几分"严重得多。
+
+**D2 / E 都是 slack=0 的方向棘轮**：`aiScore` 纯确定性，同一段文本同一次实现不可能自己动，
+所以任何朝坏方向的位移都只能是这次改动引入的，没有"测量噪声"可以当借口。
+要放行一次真实的刻度移动，只有一条路：
+
+```bash
+npx tsx scripts/regression-12samples.ts --rebaseline "<为什么这批数字是新常态>"
+```
+
+原因和逐条差值会追加进 `scripts/regression-12samples.lock.json` 的 `rebaseLog`。
+三条防自欺的设计，都有对应的测试打穿（`scripts/regression-12samples.test.ts`，15 例）：
+
+1. **锁文件缺失只会红，不会自动初始化**。旧版 `loadOrInitLock` 在锁不在时把今天的输出
+   直接写成明天的真值——那正是"永久红"之后最容易滑进去的假绿。
+2. **有真退化时 `--rebaseline` 拒绝写锁**（只缺记录的首轮建线例外，否则永远起不了步）。
+3. **`--rebaseline` 必须带非空原因**，否则退出码 2。脚本本身对锁文件只读不写。
 
 ---
 

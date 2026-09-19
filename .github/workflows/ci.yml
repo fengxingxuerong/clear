@@ -37,7 +37,7 @@ jobs:
         env:
           SCAN_TIER: fast
 
-      - name: 12-sample metric regression
+      - name: 12-sample regression (D 评分器漂移棘轮 / E 引擎退化棘轮)
         run: npx tsx scripts/regression-12samples.ts
 
       - name: Quality gate (verify-quality)
