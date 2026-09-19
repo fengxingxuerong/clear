@@ -274,3 +274,155 @@ describe("修订提示词：质检反馈分类（v0.8.9）", () => {
     expect(q).not.toContain("必须先修的事实错误");
   });
 });
+
+/**
+ * v0.9.13 ① 首轮好区即收手（省掉一半调用）
+ *
+ * 依据：2026-09-19 四篇真送网关，修订轮 2/2 负收益（15→46/49、89→92）。
+ * 旧达标线 `max(绝对目标 10, 首轮×0.35)` 在首轮 15 分时算出目标 10，
+ * 于是把一个已经在好区的稿子拖着再改一轮、改坏，再白烧约一半预算。
+ */
+describe("首轮好区即收手，不再开修订轮（v0.9.13）", () => {
+  const cfg = { ...DEFAULT_API, enabled: true, apiKey: "test-key" };
+  const TEXT = "值得注意的是，人工智能正在深刻地改变着我们的生活方式。";
+  const A = "时间往前倒几年，这类工具还没几个人用，现在情况已经完全不一样了，值得慢慢琢磨。";
+  const B = "往回看几年，用这东西的没几个，如今完全不同了，值得琢磨琢磨。";
+
+  /** 按调用序打桩：质检员 → 改写专家（第 1 次给 A，其后给 B）→ 评判（每轮 3 样本取中位） */
+  function stub(scores: number[], qcVerdicts: string[]) {
+    let judge = 0;
+    let qc = 0;
+    let writer = 0;
+    const ok = (content: string) =>
+      new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    const fetch = vi.fn(async (_url: string, init?: { body?: string }) => {
+      const body = JSON.parse(init?.body ?? "{}") as {
+        messages: { role: string; content: string }[];
+      };
+      const sys = body.messages?.[0]?.content ?? "";
+      if (sys.includes("质检员")) {
+        const v = qcVerdicts[Math.min(qc, qcVerdicts.length - 1)];
+        qc++;
+        return ok(v);
+      }
+      if (sys.includes("改写专家")) {
+        writer++;
+        return ok(writer === 1 ? A : B);
+      }
+      const s = scores[Math.min(Math.floor(judge / 3), scores.length - 1)];
+      judge++;
+      return ok(`句长过于均匀\n${s}`);
+    });
+    return { fetch, writers: () => writer, qcCalls: () => qc };
+  }
+
+  it("首轮 15 分：好区内，改写调用只有 1 次（修订轮根本没开）", async () => {
+    const s = stub([15, 49], ["PASS"]);
+    vi.stubGlobal("fetch", s.fetch);
+    const deep = await humanizeViaApiDeep(TEXT, cfg, undefined, 10, 4, 0.6);
+    expect(s.writers()).toBe(1);
+    expect(deep.roundScores).toEqual([15]);
+    expect(deep.targetUsed).toBe(15); // 绝不往下追到 10
+    expect(deep.hitTarget).toBe(true);
+    expect(deep.note).toContain("好区");
+    expect(deep.note).not.toMatch(/^；/); // 追加时不留前导分号
+  });
+
+  it("首轮 8 分：绝对目标 10 仍然生效（好区不放宽目标，只停止修订）", async () => {
+    const s = stub([8], ["PASS"]);
+    vi.stubGlobal("fetch", s.fetch);
+    const deep = await humanizeViaApiDeep(TEXT, cfg, undefined, 10, 4, 0.6);
+    expect(deep.targetUsed).toBe(10);
+    expect(s.writers()).toBe(1);
+  });
+
+  it("对照：首轮 86 分不在好区 → 修订轮照开，自适应放宽不受影响", async () => {
+    const s = stub([86, 30], ["PASS"]);
+    vi.stubGlobal("fetch", s.fetch);
+    const deep = await humanizeViaApiDeep(TEXT, cfg, undefined, 10, 4, 0.6);
+    expect(s.writers()).toBeGreaterThanOrEqual(2);
+    expect(deep.roundScores).toEqual([86, 30]);
+    expect(deep.targetUsed).toBe(Math.max(10, Math.round(86 * 0.35)));
+    expect(deep.note).toContain("评判锚点");
+  });
+});
+
+/**
+ * v0.9.13 ② 质检结论按稿归属
+ *
+ * 依据：s3 真跑交付的是过检稿，日志却报着被淘汰候选的两条"谓语丢失"
+ * （实测交付稿里根本没有那两处），等于让人去核对一个不存在的缺陷。
+ */
+describe("质检结论只描述真正交付的那一稿（v0.9.13）", () => {
+  const cfg = { ...DEFAULT_API, enabled: true, apiKey: "test-key" };
+  const TEXT = "值得注意的是，人工智能正在深刻地改变着我们的生活方式。";
+
+  it("第 2 轮被淘汰稿的问题不算到交付稿头上", async () => {
+    let qc = 0;
+    let writer = 0;
+    const ok = (content: string) =>
+      new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: { body?: string }) => {
+        const body = JSON.parse(init?.body ?? "{}") as {
+          messages: { role: string; content: string }[];
+        };
+        const sys = body.messages?.[0]?.content ?? "";
+        if (sys.includes("质检员")) {
+          qc++;
+          // 第 1 稿过检，第 2 稿（修订版）被判塌句 → 本轮弃用
+          return ok(qc === 1 ? "PASS" : "FAIL\n人工智能技术。：谓语丢失");
+        }
+        if (sys.includes("改写专家")) {
+          writer++;
+          return ok(
+            writer === 1
+              ? "时间往前倒几年，这类工具还没几个人用，现在情况已经完全不一样了，值得慢慢琢磨。"
+              : "人工智能技术。说白了就是这样的。",
+          );
+        }
+        return ok(`句长过于均匀\n60`); // 首轮 60 分：不在好区，才会进修订轮
+      }),
+    );
+    const deep = await humanizeViaApiDeep(TEXT, cfg, undefined, 10, 2, 0.6);
+    expect(qc).toBeGreaterThanOrEqual(2); // 确实跑到了被判 FAIL 的那一轮（修复链也调质检，故 ≥2）
+    expect(deep.qcPassed).toEqual([true, false]);
+    expect(deep.qcIssues, "被淘汰稿的质检问题被算到了交付稿上").toEqual([]);
+    expect(deep.text).toContain("时间往前倒几年");
+  });
+
+  it("质检通道无输出（异常放行）时不崩，仍交付非空稿", async () => {
+    let writer = 0;
+    const ok = (content: string) =>
+      new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: { body?: string }) => {
+        const body = JSON.parse(init?.body ?? "{}") as {
+          messages: { role: string; content: string }[];
+        };
+        const sys = body.messages?.[0]?.content ?? "";
+        if (sys.includes("质检员")) {
+          writer++;
+          // 第 2 次质检通道无输出 → 走"通道异常放行"，issues 非空但 pass=true
+          return ok(writer === 1 ? "PASS" : "");
+        }
+        if (sys.includes("改写专家")) return ok("人工智能技术。说白了就是这样的。");
+        return ok(`句长过于均匀\n60`);
+      }),
+    );
+    const deep = await humanizeViaApiDeep(TEXT, cfg, undefined, 10, 2, 0.6);
+    expect(deep.qcPassed.length).toBeGreaterThanOrEqual(1);
+    expect(deep.text.length).toBeGreaterThan(0);
+  });
+});

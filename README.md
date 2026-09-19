@@ -1,4 +1,4 @@
-# 趣AI味 · QuAiWei v0.9.13
+# 趣AI味 · QuAiWei v0.9.14
 
 把 AI 写的文章改得更像人写的。**默认不配置任何 API 也能用**（本地引擎离线运行、零成本），
 想更强就接一个 OpenAI 兼容的 LLM（各家通吃，实测支持 OpenRouter / SenseNova / OpenAI）。

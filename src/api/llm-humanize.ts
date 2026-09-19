@@ -27,6 +27,22 @@ import { errMsg } from "./llm-judge";
  *  "改写稿显著优于底稿"的语义带内，且不需要按模型硬编码宽严表。 */
 const RELATIVE_TARGET_RATIO = 0.35;
 
+/**
+ * v0.9.13 首轮好区：评委分已落到这个值以内，就**不再进修订轮**。
+ *
+ * 依据（2026-09-19 四篇真送网关实测）：修订轮 2/2 都是负收益——
+ *   s4 财报 首轮 15 → 修订 46/49（L1 守卫才止损）
+ *   s1 议论文 首轮 89 → 修订 92
+ * 而 s4 的 15 分按旧公式算 `max(绝对目标 10, 15×0.35=5)` = 目标 10，
+ * 一个"已经好"的稿被拖着再改一轮、改坏、再白烧约一半调用预算。
+ * v0.8.8 的注释早就写了"首轮已很低（≤28）→ 维持绝对目标不变"，
+ * 但这句话在公式里从未落实——维持绝对目标 = 继续追更低分，正好是反效果。
+ *
+ * 28 取自评判分与 aiScore 共用的"人写/机器"分界（见 humanize-metrics-calibration
+ * 的分离区间 [27,30]）；这里只用作**收手**判据，不放宽任何绝对目标。
+ */
+const JUDGE_GOOD_BAND = 28;
+
 /** 多候选并发的上限：与 Key 池容量（3）对齐。再高不增吞吐，只会加剧 429 反而更慢。 */
 const CONTEST_MAX_PARALLEL = 3;
 
@@ -190,16 +206,40 @@ export async function humanizeViaApiDeep(
   let bestScore = Infinity;
   let hitTarget = false;
   let lastCritique: string[] = [];
-  let qcIssues: string[] = [];
+  /**
+   * v0.9.13 质检状态按稿归属：原先是一个"随轮次滚动"的 qcIssues 变量，谁最后失败就
+   * 显示谁的问题——实测 s3 交付的是过检稿，日志却报着被淘汰候选的两条"谓语丢失"，
+   * 让人去核对一个交付稿里根本不存在的缺陷。改成 稿文本 → 该稿自己的质检清单，
+   * 返回时只报真正交付那一稿的状态（过检稿也照记它的 issues，如"质检通道异常放行"）。
+   */
+  const qcIssuesByDraft = new Map<string, string[]>();
   let note = "";
   let writerModel: string | undefined; // 竞争胜者覆盖后续修订轮的改写模型
   // v0.8.8 评判锚点：以首个有效正分为宽严锚点（全程只锚一次，后续轮不再抬锚，
   // 避免"越改越宽"），有效目标 = max(绝对目标, 首轮分 × RELATIVE_TARGET_RATIO)
   let anchorScore: number | null = null;
+  /** 首轮分是否已落在好区（决定还要不要开修订轮，见 JUDGE_GOOD_BAND） */
+  const inGoodBand = () => anchorScore !== null && anchorScore <= JUDGE_GOOD_BAND;
   const effTarget = () =>
     anchorScore === null
       ? target
-      : Math.max(target, Math.round(anchorScore * RELATIVE_TARGET_RATIO));
+      : // 好区内：目标就是它自身（绝不低于绝对目标，也绝不继续往下追）
+        inGoodBand()
+        ? Math.max(target, anchorScore)
+        : Math.max(target, Math.round(anchorScore * RELATIVE_TARGET_RATIO));
+  /** 往 note 上追加一句（note 为空时不能带前导分号） */
+  const appendNote = (n: string, extra: string) => (extra ? (n ? `${n}；${extra}` : extra) : n);
+  /**
+   * 达标线为什么不是绝对目标——两种情形都要让用户看见：首轮已进好区就地收手，
+   * 或严评下按锚点放宽。两条返回路径（竞争段提前收手 / 主循环收场）共用同一套说法。
+   */
+  const targetHint = () => {
+    if (anchorScore === null) return "";
+    if (inGoodBand())
+      return `首轮 ${anchorScore} 分已在好区（≤${JUDGE_GOOD_BAND}），未进修订轮——实测修订常把稿改差（15→49、89→92）`;
+    const t = effTarget();
+    return t > target ? `评判锚点：首轮 ${anchorScore} 分 → 达标线放宽至 ≤${t}` : "";
+  };
   // v0.9.6 未改进即停·L1（痕迹收敛守卫）：上一轮交叉定罪痕迹集合。
   // 修订轮定罪清单中若与上轮重合度 ≥2 项，说明定向修订没有消除目标痕迹——
   // 实测（panel-revision 实验）：合议庭痕迹可精确执行消除（虚构事例 ✅），
@@ -307,9 +347,9 @@ export async function humanizeViaApiDeep(
       }
       if (res.kind !== "cand") continue;
       qcPassed.push(res.qcPass);
+      qcIssuesByDraft.set(res.text, res.issues);
       if (!res.qcPass) {
         contestInfo.push(`${tag}:质检未过`);
-        qcIssues = res.issues;
         continue;
       }
       roundScores.push(res.score ?? -1);
@@ -334,9 +374,9 @@ export async function humanizeViaApiDeep(
         text: bestText,
         roundScores,
         hitTarget: true,
-        note,
+        note: appendNote(note, targetHint()),
         qcPassed,
-        qcIssues,
+        qcIssues: qcIssuesByDraft.get(bestText) ?? [],
         targetUsed: effTarget(),
         shrinkRatio: shrinkRatioOf(text, bestText),
       };
@@ -424,10 +464,10 @@ export async function humanizeViaApiDeep(
 
     const cand = await processCandidate(text, content, cfg, intensity);
     qcPassed.push(cand.qc.pass);
-    if (cand.qc.pass) qcIssues = []; // 后续轮通过即清空——最终稿以返回稿对应轮为准报状态
+    // 按稿归属：这一稿自己的质检结论，只有它真被交付时才对外报
+    qcIssuesByDraft.set(cand.shuffled, cand.qc.issues);
 
     if (!cand.qc.pass) {
-      qcIssues = cand.qc.issues;
       // 弃用本轮，并把质检问题喂给下一轮修订（优先保义再降 AI 味）
       lastCritique = cand.qc.issues;
       if (!bestText && round === maxRounds) {
@@ -554,12 +594,9 @@ export async function humanizeViaApiDeep(
     }
   }
 
-  // v0.8.8 评判锚点可见化：达标线被放宽时写进 note，用户知道为什么"分高也算达标"
+  // v0.8.8 评判锚点可见化 + v0.9.13 好区收手：达标线为什么不是绝对目标，两条返回路径同一套说法
   const targetUsed = effTarget();
-  if (anchorScore !== null && targetUsed > target) {
-    note =
-      (note ? `${note}；` : "") + `评判锚点：首轮 ${anchorScore} 分 → 达标线放宽至 ≤${targetUsed}`;
-  }
+  note = appendNote(note, targetHint());
   // v0.8.9：闭环提前收场且未达标时必须说清楚——此前 UI 静默交付"看起来完成"的未达标稿
   if (!hitTarget && roundScores.length > 0) {
     note =
@@ -572,7 +609,7 @@ export async function humanizeViaApiDeep(
     hitTarget,
     note,
     qcPassed,
-    qcIssues,
+    qcIssues: qcIssuesByDraft.get(bestText) ?? [],
     targetUsed,
     shrinkRatio: shrinkRatioOf(text, bestText),
   };
