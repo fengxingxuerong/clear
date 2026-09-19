@@ -4,6 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>趣AI味 · QuAiWei</title>
+    <!-- 内联 SVG 图标：此前没有任何 icon 声明，浏览器每次加载都发一次 /favicon.ico 拿 404。
+         data: URI 已被 CSP 的 img-src 'self' data: 放行，不需要额外静态资源、不进构建产物。 -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%E2%9A%A1%3C/text%3E%3C/svg%3E"
+    />
   </head>
   <body>
     <div id="root"></div>
