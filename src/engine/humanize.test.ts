@@ -293,3 +293,44 @@ describe("softenPassive（被动软化白名单）", () => {
     }
   });
 });
+
+describe("标点相撞与搭配病句（UI 实测发现，v0.9.14）", () => {
+  // 来源：在真浏览器里点「示例」→「去味」，界面直接印出
+  //   「往后看，搞出完善的监管体系，推进可持续发展，。」
+  //   「数字化办公非常提高了工作效率」
+  // 前者是第 3 步的标点归一跑在 stripAICliches 之前（删掉句尾套话后留下悬空「，」），
+  // 后者是 humanize-vocab 把「极大地」换成不能修饰「V+了」的「非常/特别」。
+  // aiScore 对这两种残缺都看不见（中位 6 分），所以只能由测试钉住。
+  const SAMPLE = `值得注意的是，随着人工智能技术的快速发展，AI 写作工具应运而生。
+综上所述，数字化办公不仅极大地提升了工作效率，而且有效地降低了运营成本。
+然而，技术的变革也带来了一系列值得关注的挑战。与此同时，如何平衡创新与风险，成为至关重要的课题。
+从长远来看，建立完善的监管体系，推动可持续发展，具有十分重要的意义。
+因此，我们需要在实践中逐步优化相关流程，进而实现更高质量的发展。`;
+
+  const run = (intensity: number, zhuqueMode: boolean, seed: number) =>
+    humanize(SAMPLE, { intensity, zhuqueMode, seed });
+
+  const SEEDS = Array.from({ length: 40 }, (_, i) => 20260800 + i);
+
+  it("40 种子 × 2 档：不留下任何相撞标点（，。/。。/，，/行首标点）", () => {
+    for (const seed of SEEDS) {
+      for (const [i, z] of [
+        [0.6, false],
+        [0.9, true],
+      ] as [number, boolean][]) {
+        const o = run(i, z, seed);
+        expect(o).not.toMatch(/[，、]{2}/);
+        expect(o).not.toMatch(/。{2,}/);
+        expect(o).not.toMatch(/[，、]。/);
+        expect(o).not.toMatch(/(^|\n)[，、。；：]/);
+      }
+    }
+  });
+
+  it("「极大地」的替换项不得产出「非常/特别 + V + 了」这类搭配病句", () => {
+    for (const seed of SEEDS) {
+      const o = run(0.6, false, seed);
+      expect(o).not.toMatch(/(?:非常|特别)[^，。！？\n]{0,4}了/);
+    }
+  });
+});

@@ -1184,6 +1184,18 @@ function humanizeSingle(text: string, opts: HumanizeOptions = {}): string {
     result = boostBurstinessSingle(result, rng2, 0.5 * intensity);
   }
 
+  // 6) 标点相撞兜底 —— 必须放在**最后**。
+  //    上面第 3 步已经做过一次同样的归一，但第 4/5 步会重新造出坏标点：
+  //    stripAICliches 删掉句尾套话（「具有十分重要的意义」）后留下悬空的「，」，
+  //    接上原句的「。」就是「，。」——示例文本实测 80 次里 40 次命中，
+  //    而 aiScore 对这种标点残缺给中位 6 分（它只看词与结构，看不见坏标点）。
+  //    injectHalfWidth 掺的是半角「,」，这里只收全角相撞形态，不会互相抵消。
+  result = result
+    .replace(/([，、])\1+/g, "$1")
+    .replace(/，。|。，/g, "。")
+    .replace(/。{2,}/g, "。")
+    .replace(/(^|\n)[，、。；：]+/g, "$1");
+
   return result;
 }
 
