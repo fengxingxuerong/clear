@@ -49,3 +49,6 @@ scripts/eval/
 
 # 覆盖率产物
 coverage/
+
+# 构建期盖章产物（npm run build 生成），不是源
+electron-app/build-info.json

@@ -32,7 +32,17 @@ const SKIP_PKGS = [/^onnxruntime-web$/];
 const SKIP_PATH_RE = /[\\/]bin[\\/]napi-v6[\\/](linux|darwin)([\\/]|$)/;
 
 /** app 顶层需要复制的文件/目录（使用说明.txt 属于交付目录根，由下面的 2b 步单独放） */
-const APP_ENTRIES = ["main.js", "preload.js", "ppl-engine.cjs", "package.json", "index.html", "assets"];
+const APP_ENTRIES = [
+  "main.js",
+  "preload.js",
+  "ppl-engine.cjs",
+  "package.json",
+  "index.html",
+  "assets",
+  // 源码指纹章，由 npm run build 的最后一环（scripts/sync-dist.mjs）盖。
+  // 它必须来自 build 而不是 repack：见 build-fingerprint.cjs 头部说明。
+  "build-info.json",
+];
 
 function sizeOf(p) {
   let total = 0;
@@ -120,7 +130,17 @@ console.log(`    依赖拷贝完成：${copied} 项${missing ? `（${missing} �
 
 for (const entry of APP_ENTRIES) {
   const src = path.join(__dirname, entry);
-  if (!fs.existsSync(src)) { console.log(`    ⚠️  app 条目缺失：${entry}`); continue; }
+  if (!fs.existsSync(src)) {
+    // 缺指纹章 = 没跑过 npm run build，或者跑的是旧版构建链。这种产物无法证明来自当前源码，
+    // 直接停在这里，比让它带着旧 bundle 出门、再指望 verify 兜住便宜得多。
+    if (entry === "build-info.json") {
+      console.error(`✗ 缺 ${entry} —— electron-app/ 里没有源码指纹章。`);
+      console.error("  说明这批 assets 不是刚由 npm run build 产出的。请先跑：npm run build");
+      process.exit(1);
+    }
+    console.log(`    ⚠️  app 条目缺失：${entry}`);
+    continue;
+  }
   fs.cpSync(src, path.join(APP, entry), { recursive: true });
 }
 console.log(`    app 顶层文件已复制：${APP_ENTRIES.join(" / ")}`);

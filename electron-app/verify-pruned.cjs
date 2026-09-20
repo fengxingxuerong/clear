@@ -12,6 +12,9 @@
  *   4. 产物目录里已不存在被裁掉的包（onnxruntime-web / 非 win32 平台二进制）
  *      ＋ 随包《使用说明.txt》与源文件逐字节一致、产物 package.json 版本与仓库根一致
  *      （见下方 [3] 节：2026-09-19 发现产物里那份文档停在 v0.8.2 并写着已不存在的"内置 3 Key"）
+ *   5. 新鲜度：产物里的 build-info.json 源码指纹必须与当前代码树一致
+ *      （见下方 [4] 节：2026-09-20 发现产物落后 7 个提交、带着当天刚修掉的两个病句，
+ *       而只比版本号的自检照样全绿）
  *
  * 用法：node verify-pruned.cjs [--dist <目录>]
  * 退出码 0 = 通过，1 = 失败
@@ -104,8 +107,45 @@ try {
   bad(`版本核对失败：${e.message}`);
 }
 
-/* 4. 依赖链实测 */
-console.log("\n[4] 依赖链实测（按产物绝对路径加载）");
+/* 4. 新鲜度：产物必须来自当前代码树 */
+// 起因（2026-09-20）：这一节存在之前，产物已经落后 7 个提交——里面还带着当天刚修掉的
+// 两个病句（外部样本 44% / 32.9%）和「检测器故障被读成 0 分=完全人类」那个 bug，
+// 而本脚本照样全绿：因为它比的是版本号，而版本号要等发版才动。
+// 「版本相等」从来不等于「来自当前代码树」，所以这里改成比真正的输入文件指纹。
+console.log("\n[4] 新鲜度（产物 vs 当前源码指纹）");
+const BUILD_INFO = path.join(APP, "build-info.json");
+try {
+  const require2 = createRequire(path.join(__dirname, "_probe.cjs"));
+  const { fingerprint, diffGroups } = require2(path.join(__dirname, "build-fingerprint.cjs"));
+  const current = fingerprint(path.join(__dirname, ".."));
+  if (!fs.existsSync(BUILD_INFO)) {
+    bad(
+      `产物里没有 build-info.json —— 无法证明这批 assets 来自当前代码树。` +
+        `跑 npm run build && npm run repack 重打（指纹由 build 盖章，不是 repack）`,
+    );
+  } else {
+    const info = JSON.parse(fs.readFileSync(BUILD_INFO, "utf8"));
+    const changed = diffGroups(info, current);
+    const stamp = `盖章于 ${info.builtAt}，HEAD=${info.head}${info.dirty === true ? "（当时工作区未提交）" : ""}`;
+    if (changed.length === 0) {
+      ok(`源码指纹一致（${current.files} 个文件进指纹）—— ${stamp}`);
+      if (info.dirty === true)
+        console.log("  ⚠️  盖章时工作区有未提交改动：这份产物不对应任何一次提交，别拿去发布。");
+    } else {
+      bad(
+        `产物落后于源码，变了的组：${changed.join(" / ")}。\n` +
+          `     ${stamp}\n` +
+          `     当前指纹 ${current.combined.slice(0, 16)}… ≠ 产物记录 ${(info.combined || "").slice(0, 16)}…\n` +
+          `     重打：npm run build && npm run repack`,
+      );
+    }
+  }
+} catch (e) {
+  bad(`新鲜度核对本身跑不起来：${e.message}`);
+}
+
+/* 5. 依赖链实测 */
+console.log("\n[5] 依赖链实测（按产物绝对路径加载）");
 (async () => {
   try {
     // 关键：按 ppl-engine.cjs 的实际方式解析——从产物 app 目录按"包名"解析，
@@ -139,6 +179,8 @@ console.log("\n[4] 依赖链实测（按产物绝对路径加载）");
     process.exit(1);
   }
   console.log("结果：✅ 全部通过。依赖链完整，可以发布。");
-  console.log("提示：本脚本只验证「模块可加载」与「随包文档/版本一致」，未跑端到端模型推理。");
-  console.log("      首次使用 PPL 功能时会下载约 99MB 模型，建议在真机上点一次确认。");
+  console.log("提示：本脚本验证「模块可加载」「随包文档/版本一致」「产物来自当前源码指纹」三件事，");
+  console.log("      未跑端到端模型推理。首次使用 PPL 功能时会下载约 99MB 模型，建议在真机上点一次确认。");
+  console.log("      指纹只覆盖进产物的文件（src / 前端入口 / 主进程脚本 / 随包文档）；");
+  console.log("      改 scripts/ 下的门禁或 docs/ 不会让产物过期——那样天天误报，最后只会被 --no-verify。");
 })();
