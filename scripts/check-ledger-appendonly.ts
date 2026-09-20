@@ -102,11 +102,15 @@ type Opts = {
   repo: string;
   quiet: boolean;
   usageError: string | null;
+  /** 与哪个 ref 比（CI 用）。不给就是本地模式：HEAD vs 索引/工作区 */
+  headRef: string | null;
 };
 
 const USAGE =
   "用法：npx tsx scripts/check-ledger-appendonly.ts [--staged] [--ledger <仓库内相对路径>] [--repo <目录>]\n" +
-  "     离线/自测：npx tsx scripts/check-ledger-appendonly.ts --head-file <a.jsonl> --staged-file <b.jsonl>";
+  "     CI：npx tsx scripts/check-ledger-appendonly.ts --head-ref origin/<base>   （需 fetch-depth: 0）\n" +
+  "     离线/自测：npx tsx scripts/check-ledger-appendonly.ts --head-file <a.jsonl> --staged-file <b.jsonl>\n" +
+  "     默认模式比的是 HEAD vs 工作区/索引——在 CI 的干净检出上永远相等，等于没查。";
 
 function flag(argv: string[], name: string): string | undefined {
   const i = argv.indexOf(name);
@@ -125,7 +129,9 @@ export function parseArgs(argv: string[]): Opts {
     repo: path.resolve(flag(argv, "--repo") ?? process.cwd()),
     quiet: argv.includes("--quiet"),
     usageError: null,
+    headRef: flag(argv, "--head-ref") ?? null,
   };
+  if (argv.includes("--head-ref") && !o.headRef) o.usageError = "❌ --head-ref 需要一个 ref";
   const hf = flag(argv, "--head-file");
   const sf = flag(argv, "--staged-file");
   if (argv.includes("--head-file") && !hf) o.usageError = "❌ --head-file 需要一个文件路径";
@@ -163,6 +169,22 @@ function gitShow(repo: string, spec: string): string | null {
   }
 }
 
+/**
+ * ref 到底存不存在。**必须**与"该 ref 下没有这个文件"区分开：
+ * 浅克隆里 `origin/main` 不存在，若按"无历史"处理，这道门禁在 CI 上就永远不会红——
+ * 而它存在的唯一理由，正是防有人绕过本地 hook 改历史行。
+ */
+function refExists(repo: string, ref: string): boolean {
+  try {
+    execFileSync("git", ["-C", repo, "rev-parse", "--verify", "--quiet", `${ref}^{commit}`], {
+      stdio: "ignore",
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function main(argv: string[] = process.argv.slice(2)): number {
   const o = parseArgs(argv);
   if (o.usageError) {
@@ -179,8 +201,18 @@ export function main(argv: string[] = process.argv.slice(2)): number {
     headText = o.headText ?? "";
     stagedText = o.stagedText ?? "";
   } else {
-    // 走 git：HEAD 一侧 + 索引或工作区一侧
+    // 走 git：HEAD（或 --head-ref）一侧 + 索引或工作区一侧
     const rel = o.ledgerRel.split(path.sep).join("/");
+    if (o.headRef) {
+      if (!refExists(o.repo, o.headRef)) {
+        console.error(
+          `❌ --head-ref ${JSON.stringify(o.headRef)} 在这个检出里解析不出来（浅克隆？ref 拼错？fetch-depth 没设 0？）。\n` +
+            `   拒绝把"拿不到基准"当成"没有历史"放过去——那等于这道门禁在 CI 上永远不会红。`,
+        );
+        return 2;
+      }
+      headText = gitShow(o.repo, `${o.headRef}:${rel}`) ?? "";
+    }
     if (headText === null) headText = gitShow(o.repo, `HEAD:${rel}`) ?? "";
     if (stagedText === null) {
       stagedText = o.useStagedIndex

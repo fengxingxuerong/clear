@@ -10,6 +10,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 默认 depth 1 会让下面的 append-only 检查拿不到基准 ref；这里必须全量
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -50,7 +53,19 @@ jobs:
         run: npx tsx scripts/zhuque-evidence.ts audit
 
       - name: Ledger append-only (凭证账本历史行不可改)
-        run: npx tsx scripts/check-ledger-appendonly.ts
+        # 默认模式比的是 HEAD vs 干净检出的工作区——在 CI 上永远相等，等于没查。
+        # 所以这里显式给基准：PR 比目标分支，push 比推送前的那个 SHA。
+        # 拿不到基准时宁可显式警告并跳过，也不假装查过了。
+        run: |
+          if [ -n "${{ github.base_ref }}" ]; then
+            BASE="origin/${{ github.base_ref }}"
+          elif [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            BASE="${{ github.event.before }}"
+          else
+            echo "::warning::首次推送、没有可比基准——本轮 append-only 检查不覆盖任何东西"
+            exit 0
+          fi
+          npx tsx scripts/check-ledger-appendonly.ts --head-ref "$BASE"
 
       - name: Production build
         run: npm run build

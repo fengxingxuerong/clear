@@ -182,4 +182,66 @@ describe("git 取数路径（临时仓库端到端）", () => {
       main(["--repo", repo, "--ledger", "evidence/zhuque/never-committed.jsonl", "--quiet"]),
     ).toBe(0);
   });
+
+  /* ---- --head-ref：CI 唯一能真正生效的那条路 ----
+   * 默认模式比的是 HEAD vs 干净检出，在 CI 上永远相等；只有显式给基准 ref，
+   * 才能抓到"绕过本地 hook 提交了改写历史行"的那一次推送。 */
+
+  it("--head-ref 指向当前提交且未改动 → 退出 0", () => {
+    const sha = git("rev-parse", "HEAD").trim();
+    expect(main(["--repo", repo, "--head-ref", sha, "--quiet"])).toBe(0);
+  });
+
+  it("--head-ref 指向旧提交 + 之后改写了历史行 → 退出 1（CI 靠这条抓 --no-verify）", () => {
+    const base = git("rev-parse", "HEAD").trim();
+    fs.writeFileSync(path.join(repo, LEDGER_REL), HEAD.replace('"pct":85', '"pct":86'));
+    git("add", "-A");
+    git("-c", "user.name=t", "-c", "user.email=t@e.st", "commit", "-q", "-m", "tamper");
+    expect(main(["--repo", repo, "--head-ref", base, "--quiet"])).toBe(1);
+    // 同一次改动在默认模式下是**漏网**的：HEAD 已经和被改的工作区一致
+    expect(main(["--repo", repo, "--quiet"])).toBe(0);
+  });
+
+  it("ref 解析不出来 → 退出 2，不许退化成「无历史」而假绿", () => {
+    expect(main(["--repo", repo, "--head-ref", "no-such-ref-xyz", "--quiet"])).toBe(2);
+  });
+
+  it("--head-ref 给了但没给值 → 用法错 2", () => {
+    expect(main(["--repo", repo, "--head-ref"])).toBe(2);
+  });
+
+  it("--head-ref 指向账本还不存在的提交 → 按无历史处理，退出 0", () => {
+    const empty = fs.mkdtempSync(path.join(os.tmpdir(), "ledger-ao-empty-"));
+    git(
+      "-c",
+      "core.autocrlf=false",
+      "-c",
+      "user.name=t",
+      "-c",
+      "user.email=t@e.st",
+      "-C",
+      empty,
+      "init",
+      "-q",
+    );
+    fs.mkdirSync(path.join(empty, "x"), { recursive: true });
+    fs.writeFileSync(path.join(empty, "x", "f"), "1");
+    git("-C", empty, "add", "-A");
+    git(
+      "-C",
+      empty,
+      "-c",
+      "user.name=t",
+      "-c",
+      "user.email=t@e.st",
+      "commit",
+      "-q",
+      "-m",
+      "no ledger",
+    );
+    const sha = git("-C", empty, "rev-parse", "HEAD").trim();
+    // 仓库里账本已存在（repo 那份），基准却是"还没有账本"的提交
+    expect(main(["--repo", empty, "--head-ref", sha, "--quiet"])).toBe(0);
+    fs.rmSync(empty, { recursive: true, force: true });
+  });
 });
