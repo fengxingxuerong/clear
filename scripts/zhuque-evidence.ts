@@ -77,6 +77,18 @@ export const countChars = (s: string) => Array.from(s).filter((c) => !/\s/.test(
 const rel = (base: string, abs: string) => path.relative(base, abs).replace(/\\/g, "/");
 const inside = (base: string, abs: string) => path.resolve(abs).startsWith(path.resolve(base) + path.sep);
 
+/**
+ * 凭证强度分级。**这三级不可互相冒充**，audit 与 --strict 都按级区别对待：
+ *   screenshot       页面截图 + 逐字原文：唯一能证明"官方真给过这个数"的形态
+ *   text+transcript  送检文本原文已归档可复核，官分只有档案里的转录值
+ *   transcript-only  连送检文本都没留下，只有档案里那行数字（最弱，仅记账）
+ */
+export type ProofKind = "screenshot" | "text+transcript" | "transcript-only";
+export const PROOF_KINDS: ProofKind[] = ["screenshot", "text+transcript", "transcript-only"];
+/** 只有这一级算"真凭证"；其余在 --strict 下依旧不通过 */
+export const isCertified = (e: Pick<Evidence, "proof">): boolean =>
+  (e.proof ?? "screenshot") === "screenshot";
+
 export interface Evidence {
   id: string;
   ts: string;
@@ -90,6 +102,10 @@ export interface Evidence {
   screenshot: string;
   screenshotSha256: string;
   by: string;
+  /** 缺字段按 screenshot 解释（v0.9.14 之前的账本行没有这一项） */
+  proof?: ProofKind;
+  /** 官分是从哪份档案的哪一行转录来的，例如 scripts/archive/zhuque-calibration-v2.txt:3 */
+  proofSource?: string;
 }
 
 export function readLedger(store: Store = DEFAULT_STORE): Evidence[] {
@@ -111,6 +127,8 @@ export interface SealInput {
   label: ZhuqueLabel;
   screenshot: string;
   by?: string;
+  /** 可选注记：截图之外的来源说明。不改变 proof 分级，只作溯源。 */
+  proofSource?: string;
 }
 
 /** 输入路径必须落在 base 之内：否则可以把仓库外任意文件抄进已跟踪的 evidence/ 里 */
@@ -189,6 +207,87 @@ export function seal(input: SealInput, store: Store = DEFAULT_STORE): { rec: Evi
     screenshot: rel(store.base, destShot),
     screenshotSha256: shot.hash,
     by: input.by || process.env.USER || "unknown",
+    proof: "screenshot",
+    proofSource: input.proofSource ?? "",
+  };
+  fs.mkdirSync(path.dirname(store.ledgerFile), { recursive: true });
+  fs.appendFileSync(store.ledgerFile, JSON.stringify(rec) + "\n");
+  return { rec, warnings };
+}
+
+export interface RetroInput {
+  id: string;
+  /** 当时真正贴进朱雀的文本；传了才有 L1，不传就只记数字出处 */
+  text?: string;
+  pct: number;
+  /** 官分的转录出处，必须写到"文件:行"这一层，例如 scripts/archive/zhuque-calibration-v2.txt:3 */
+  proofSource: string;
+  by?: string;
+}
+
+/**
+ * 回填历史点的**低强度**凭证。存在的意义只有一个：把"这个数字从哪来"从口头传说
+ * 变成每次 audit 都会重算哈希、重比档案的账目。
+ *
+ * 它**不是**截图的替代品：proof 明确写 text+transcript / transcript-only，
+ * audit 会继续把没有截图的点算作未认证，--strict（check:publish）照旧不放过。
+ * 想升到 screenshot 只有一条路——重新送检。
+ */
+export function sealRetro(
+  input: RetroInput,
+  store: Store = DEFAULT_STORE,
+): { rec: Evidence; warnings: string[] } {
+  const { id, pct, text } = input;
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id))
+    throw new Error(`--id 只能用作文件名（字母数字 . _ -），实得 ${JSON.stringify(id)}`);
+  if (!Number.isFinite(pct) || pct < 0 || pct > 100) throw new Error(`官分需在 0~100，实得 ${pct}`);
+  // 出处要能顺着找到那一行：至少写成"某文件:行号"
+  const src = (input.proofSource ?? "").trim();
+  if (!/^[^\s]+[^\s]:\d+(-\d+)?$/.test(src))
+    throw new Error(
+      `proofSource 要写成"文件:行号"才可查，例如 scripts/archive/zhuque-calibration-v2.txt:3；实得 ${JSON.stringify(input.proofSource)}`,
+    );
+  const y = Y_BY_ID.get(id);
+  if (y === undefined) throw new Error(`${id} 不在标定数据源 points 里，历史回填只认已登记的点`);
+  if (Math.abs(y - pct) > 0.01)
+    throw new Error(`${id} 标定数据源记 y=${y}%，你要回填 ${pct}%——两边对不上，先查是谁抄错了`);
+
+  const warnings: string[] = [];
+  let destText = "";
+  let hash = "";
+  let chars = 0;
+  if (text !== undefined && text !== "") {
+    chars = countChars(text);
+    if (chars < ZHUQUE_MIN_CHARS)
+      warnings.push(`送检文本 ${chars} 字 < 朱雀下限 ${ZHUQUE_MIN_CHARS}，这个官分本身可疑`);
+    destText = path.join(store.evidenceDir, "retro", `${id}.txt`);
+    if (!inside(store.base, path.resolve(destText))) throw new Error("回填文本落点逃出了仓库");
+    fs.mkdirSync(path.dirname(destText), { recursive: true });
+    const buf = Buffer.from(text, "utf8");
+    if (fs.existsSync(destText)) {
+      if (sha256(fs.readFileSync(destText)) !== sha256(buf))
+        throw new Error(`${destText} 已有同名但内容不同的回填文本（历史凭证不可覆盖，换 --id 或先查清哪份才是当时贴进去的）`);
+    } else fs.writeFileSync(destText, buf);
+    hash = sha256(buf);
+  } else {
+    warnings.push("送检文本没留下：这条只有 L2（数字出处），没有 L1");
+  }
+
+  const rec: Evidence = {
+    id,
+    ts: new Date().toISOString(),
+    url: "https://matrix.tencent.com/ai-detect/ai_gen",
+    submitFile: destText ? rel(store.base, destText) : "",
+    submitSha256: hash,
+    submitChars: chars,
+    officialPct: pct,
+    verdict: "",
+    label: labelFromPct(pct),
+    screenshot: "",
+    screenshotSha256: "",
+    by: input.by || process.env.USER || "unknown",
+    proof: destText ? "text+transcript" : "transcript-only",
+    proofSource: src,
   };
   fs.mkdirSync(path.dirname(store.ledgerFile), { recursive: true });
   fs.appendFileSync(store.ledgerFile, JSON.stringify(rec) + "\n");
@@ -206,7 +305,8 @@ export type ProblemKind =
   | "polarity-conflict"
   | "verdict-conflict"
   | "dataset-conflict"
-  | "short-text";
+  | "short-text"
+  | "proof-mismatch";
 
 export interface AuditProblem {
   kind: ProblemKind;
@@ -226,6 +326,7 @@ export const HARD_KINDS: ProblemKind[] = [
   "verdict-conflict",
   "dataset-conflict",
   "short-text",
+  "proof-mismatch",
 ];
 export const isHard = (p: AuditProblem, strict: boolean) => strict || HARD_KINDS.includes(p.kind);
 
@@ -268,10 +369,18 @@ export function audit(store: Store = DEFAULT_STORE, strict = false): AuditProble
     if (!CALIB_IDS.includes(id))
       problems.push({ kind: "unknown-id", id, msg: `账本里的 ${id} 不是任何标定点——id 打错了？` });
     for (const e of recs) {
-      for (const [role, p, hash] of [
-        ["送检文本", e.submitFile, e.submitSha256],
-        ["截图", e.screenshot, e.screenshotSha256],
-      ] as const) {
+      const proof: ProofKind = e.proof ?? "screenshot";
+      const files: Array<[string, string, string]> = [];
+      if (e.submitFile) files.push(["送检文本", e.submitFile, e.submitSha256]);
+      if (e.screenshot) files.push(["截图", e.screenshot, e.screenshotSha256]);
+      // 分级字段自己也要自洽：说自己是 screenshot，就得真有截图这一栏
+      if (proof === "screenshot" && !e.screenshot)
+        problems.push({ kind: "proof-mismatch", id, msg: `proof=screenshot 但 screenshot 为空` });
+      if (proof !== "screenshot" && e.screenshot)
+        problems.push({ kind: "proof-mismatch", id, msg: `有截图却把 proof 标成 ${proof}（分级被写低了？）` });
+      if (proof !== "screenshot" && !(e.proofSource ?? "").trim())
+        problems.push({ kind: "proof-mismatch", id, msg: `${proof} 级凭证必须写 proofSource（文件:行号），否则数字无出处` });
+      for (const [role, p, hash] of files) {
         const abs = path.resolve(store.base, p);
         if (!inside(store.base, abs)) {
           problems.push({ kind: "outside-store", id, msg: `${role}路径逃出了仓库：${p}` });
@@ -288,26 +397,32 @@ export function audit(store: Store = DEFAULT_STORE, strict = false): AuditProble
           problems.push({ kind: "outside-store", id, msg: `${role}不在证据目录内，不会随仓库分发：${p}` });
       }
 
-      // 页面原文是独立于手抄值的那一路：重新解析一次，与记录里的 pct/label 对照
-      const page = parseOfficialResult(e.verdict || "");
-      if (!page.ok)
-        problems.push({ kind: "verdict-conflict", id, msg: `verdict 解析不出百分比/档位，不算凭证：${JSON.stringify((e.verdict || "").slice(0, 40))}` });
-      else {
-        if (page.probability !== null && Math.abs(page.probability - e.officialPct) > 0.01)
-          problems.push({
-            kind: "verdict-conflict",
-            id,
-            msg: `页面原文写 ${page.probability}%，账本记 ${e.officialPct}%`,
-          });
-        if (page.label && page.label !== e.label)
-          problems.push({
-            kind: "polarity-conflict",
-            id,
-            msg: `页面原文档位是「${page.labelText}」(${page.label})，账本记 ${e.label}`,
-          });
+      // 页面原文是独立于手抄值的那一路：重新解析一次，与记录里的 pct/label 对照。
+      // 只有 screenshot 级才有"页面原文"可解析；回填级跳过这一步（它本来就没这一路）。
+      if (proof === "screenshot") {
+        const page = parseOfficialResult(e.verdict || "");
+        if (!page.ok)
+          problems.push({ kind: "verdict-conflict", id, msg: `verdict 解析不出百分比/档位，不算凭证：${JSON.stringify((e.verdict || "").slice(0, 40))}` });
+        else {
+          if (page.probability !== null && Math.abs(page.probability - e.officialPct) > 0.01)
+            problems.push({
+              kind: "verdict-conflict",
+              id,
+              msg: `页面原文写 ${page.probability}%，账本记 ${e.officialPct}%`,
+            });
+          if (page.label && page.label !== e.label)
+            problems.push({
+              kind: "polarity-conflict",
+              id,
+              msg: `页面原文档位是「${page.labelText}」(${page.label})，账本记 ${e.label}`,
+            });
+        }
       }
-      // 原文解析不出档位词时，至少保证 pct 与 label 自洽
-      if (!page.label && e.label !== labelFromPct(e.officialPct))
+      // pct 与 label 自洽校验。screenshot 级要**让位于页面原文**：官方档位词与百分比
+      // 不落在同一条 ≥60/≥30 线上时（如页面写「AI生成 25%」），以原文为准，
+      // 硬套 labelFromPct 会把如实记录的人判成读反。回填级没有原文可依据，只能按官方口径查。
+      const pageLabel = proof === "screenshot" ? parseOfficialResult(e.verdict || "").label : null;
+      if (!pageLabel && e.label !== labelFromPct(e.officialPct))
         problems.push({
           kind: "polarity-conflict",
           id,
@@ -319,9 +434,12 @@ export function audit(store: Store = DEFAULT_STORE, strict = false): AuditProble
         problems.push({ kind: "dataset-conflict", id, msg: `凭证官分 ${e.officialPct}% 与标定数据源 y=${y}% 不符` });
 
       // 字数以**文件实际内容**为准：账本字段本身是可被手改的
-      const absText = path.resolve(store.base, e.submitFile);
-      const chars = fs.existsSync(absText) ? countChars(fs.readFileSync(absText, "utf8")) : e.submitChars;
-      if (chars < ZHUQUE_MIN_CHARS)
+      // transcript-only 级没有 submitFile：空串 resolve 出来是仓库根目录，
+      // 直接 readFileSync 会 EISDIR 崩掉整个审计（实测踩过）。没文本就承认不知道。
+      const hasText = !!e.submitFile;
+      const absText = hasText ? path.resolve(store.base, e.submitFile) : "";
+      const chars = hasText && fs.existsSync(absText) ? countChars(fs.readFileSync(absText, "utf8")) : e.submitChars;
+      if (hasText && chars < ZHUQUE_MIN_CHARS)
         problems.push({ kind: "short-text", id, msg: `送检 ${chars} 字 < 朱雀下限 ${ZHUQUE_MIN_CHARS}，该结果不成立` });
     }
     if (recs.length > 1) {
@@ -331,14 +449,38 @@ export function audit(store: Store = DEFAULT_STORE, strict = false): AuditProble
     }
   }
 
+  let certified = 0;
+  let textOnly = 0;
+  let numberOnly = 0;
   for (const id of CALIB_IDS) {
-    if (byId.has(id)) continue;
-    problems.push({
-      kind: "no-evidence",
-      id,
-      msg: strict ? "标定点无凭证（--strict）" : "无凭证（历史点，仅列账）",
-    });
+    const recs = byId.get(id) ?? [];
+    const best = recs.some(isCertified)
+      ? "screenshot"
+      : recs.some((r) => (r.proof ?? "screenshot") === "text+transcript")
+        ? "text+transcript"
+        : recs.length
+          ? "transcript-only"
+          : "none";
+    if (best === "screenshot") {
+      certified++;
+      continue;
+    }
+    // 关键：回填级**不算补齐**。缺截图这一条照旧报出来，--strict 照旧升级为硬伤。
+    // 否则"跑一次 retro 就把 18 个点全变成有凭证"就成了自我加冕。
+    const msg =
+      best === "none"
+        ? "无凭证（历史点，仅列账）"
+        : best === "text+transcript"
+          ? `只有 L1+L2：送检文本已归档、官分有档案出处，${recs.find((r) => r.proofSource)?.proofSource ?? ""} —— **缺页面截图，未认证**`
+          : `只有 L2：官分转录自 ${recs.find((r) => r.proofSource)?.proofSource ?? "?"}，送检文本已失 —— **缺截图与原文，未认证**`;
+    if (best === "text+transcript") textOnly++;
+    else if (best === "transcript-only") numberOnly++;
+    problems.push({ kind: "no-evidence", id, msg: strict ? `标定点无截图凭证（--strict）｜${msg}` : msg });
   }
+  if (!strict)
+    console.log(
+      `📜 凭证分级：截图认证 ${certified}｜文本+转录 ${textOnly}｜仅转录数字 ${numberOnly}｜什么都没有 ${CALIB_IDS.length - certified - textOnly - numberOnly}（共 ${CALIB_IDS.length} 点）`,
+    );
   return problems;
 }
 
@@ -378,15 +520,30 @@ export function main(argv: string[] = process.argv.slice(2)): number {
     const problems = audit(store, strict);
     const hard = problems.filter((p) => isHard(p, strict));
     const soft = problems.filter((p) => !isHard(p, strict));
-    const sealed = new Set(loadLedger(store).recs.map((e) => e.id));
-    const covered = CALIB_IDS.filter((id) => sealed.has(id)).length;
+    const recsAll = loadLedger(store).recs;
+    const bestOf = new Map<string, ProofKind>();
+    for (const e of recsAll) {
+      const cur = bestOf.get(e.id);
+      const rank: Record<ProofKind, number> = { "transcript-only": 1, "text+transcript": 2, screenshot: 3 };
+      const me = e.proof ?? "screenshot";
+      if (!cur || rank[me] > rank[cur]) bestOf.set(e.id, me);
+    }
+    const nCert = CALIB_IDS.filter((id) => bestOf.get(id) === "screenshot").length;
+    const nText = CALIB_IDS.filter((id) => bestOf.get(id) === "text+transcript").length;
+    const nNum = CALIB_IDS.filter((id) => bestOf.get(id) === "transcript-only").length;
+    const covered = nCert + nText + nNum;
     for (const p of hard) console.log(`❌ [${p.kind}] ${p.id}：${p.msg}`);
     for (const p of soft) console.log(`  ○ ${p.id}：${p.msg}`);
-    console.log(`凭证覆盖率：${covered}/${CALIB_IDS.length} 个标定点有凭证`);
+    // 覆盖率必须分级说：把"回填过"报成"有凭证"就是自我加冕
+    console.log(
+      `凭证分级：截图认证 ${nCert}/${CALIB_IDS.length}｜文本+转录 ${nText}｜仅转录数字 ${nNum}｜无任何记录 ${CALIB_IDS.length - covered}（共 ${CALIB_IDS.length} 点）`,
+    );
+    if (nCert === 0)
+      console.log(`⚠️ 认证数为 0：下面这些点没有任何一张页面截图，官方数字目前只能"溯源"、不能"复核"。`);
     console.log(
       hard.length
-        ? `❌ 凭证审计未通过：${hard.length} 项硬伤${strict ? "" : `（另有 ${soft.length} 个历史点无凭证，只列账不拦）`}`
-        : `✅ 凭证审计通过；${soft.length} 个历史点待补凭证`,
+        ? `❌ 凭证审计未通过：${hard.length} 项硬伤${strict ? "" : `（另有 ${soft.length} 点未认证，只列账不拦）`}`
+        : `✅ 无硬伤；但 ${soft.length} 点仍非截图认证${nCert === 0 ? "（认证数 0）" : ""}`,
     );
     return hard.length ? 1 : 0;
   };

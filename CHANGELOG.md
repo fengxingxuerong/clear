@@ -424,6 +424,39 @@ scan-bugs 的外部 3 样本 × 2 强度 × 30 种子里 **79/180 次（44%）**
 而它是所有切分 pass 共用的那道闸）。`scan-bugs.brokenSigs` 同步加「枚举标记光杆成句」硬拦。
 `check:release` 退出 0，节奏计数没有因此再涨（仍 ≤41），测试 750 → **753**。
 
+**13) 18 个历史标定点的凭证回收：能补两级，第三级补不出来就明说**
+
+账本 `evidence/zhuque/ledger.jsonl` 一直是 **0 条**——18 个标定点的官方百分比只活在
+`calibration-data.json` 的数字和档案正文里，克隆到别的机器上什么都验不了。
+先做取证（不猜，逐点查档案）：
+
+- **L2 官分出处：18/18 都在**，分散在三份档案里（v2 回传行 / v3 TSV 官分列 / v0.7 档案正文对照行），
+  且与正本 y **逐点一致**，没有一处对不上；
+- **L1 送检原文：10/18 还在**——9 篇内联在 `zhuque-manual-inputs-v2-genres.txt` 的 id 分块里
+  （档案同时记了字数，抽出来重数**逐点相符** 452/476/523/652/691/765/364/386/446），
+  O1 另有 `EXPO_O1_RAW.txt`；剩下 8 个（v3 六篇引用的 `.txt` 已不在仓库、v0.7 两篇是旧引擎产物）文本已失；
+- **L3 页面截图：0/18。** 当年没人截图，这一级**伪造不出来，也不该伪造**。
+
+于是账本加了显式分级字段 `proof`（`screenshot` / `text+transcript` / `transcript-only`）+
+`proofSource`（必须写到"文件:行号"），`scripts/zhuque-retro-backfill.ts` 把现存的东西收回来：
+10 点到 `text+transcript`、8 点到 `transcript-only`，原文归档进 `evidence/zhuque/retro/`，
+`audit` 每次重算 sha256 并与账本比对——事后改一个字就是 `hash-mismatch` 硬伤。
+
+**关键是别让它变成自我加冕**，三处专门焊死：
+① `audit` 把非 `screenshot` 级的点**继续**报 `no-evidence`，`--strict`（`check:publish`）照旧红
+（实测：非严格退出 0 但打印「截图认证 0/18」，严格退出 1、18 项硬伤）；
+② 原来那句「凭证覆盖率：18/18 个标定点有凭证」是**错的表述**——回填完它就报满覆盖，
+换成按级打印；③ 新增 `proof-mismatch` 硬伤：`proof=screenshot` 却没截图、有截图却把级别写低、
+回填级不写出处，三种都拦。测试 753 → **761**（+9：回填带文本 / 无文本 / 出处不写到行号即拒 /
+官分与正本不符即拒 / 手改成 screenshot 级冒充→硬伤 / 重复回填幂等而内容不同拒绝覆盖 /
+strict 下回填不算绿 等），`check:release` 退出 0。
+
+过程中自己踩到并修掉的两个：`transcript-only` 的 `submitFile` 是空串，
+`path.resolve(base, "")` 指向**仓库根目录**，`readFileSync` 直接 EISDIR 把整个审计炸掉；
+以及 `sealRetro` 的官分正则我少写一个捕获组、把 `m[3]` 当值读成 NaN，dry-run 里 3 个点"官分 NaN"才暴露。
+另外这台机器上 `zhuque-evidence.ts` 是 **CRLF** 行尾，多行 Edit 会静默不匹配却报成功——
+第二次撞到同一类坑，改单行替换 + 事后 grep 复核才落对。
+
 ## v0.9.13 更新（标尺错别字项误伤清算 + 官方送检凭证账本）
 
 **背景**：给"外部真值"补流水线（送检凭证账本）时，先撞上一件更糟的事——漂移表里 8 个点的内部分

@@ -22,7 +22,9 @@ import {
   main,
   parseOpts,
   readLedger,
+  isCertified,
   seal,
+  sealRetro,
   storeFromOpts,
   type Evidence,
   type SealInput,
@@ -392,7 +394,7 @@ describe("main 走真 CLI", () => {
   it("seal 成功即接着审计：无硬伤返回 0", () => {
     const c = capture();
     expect(main(sealArgv())).toBe(0);
-    expect(c.lines.join("\n")).toMatch(/凭证覆盖率：1\/18/);
+    expect(c.lines.join("\n")).toMatch(/凭证分级：截图认证 1｜/);
     c.stop();
     expect(readLedger(store)).toHaveLength(1);
   });
@@ -408,7 +410,7 @@ describe("main 走真 CLI", () => {
   it("覆盖率只算真标定点，孤儿凭证不算覆盖", () => {
     const c = capture();
     main(sealArgv(["--id", "Z9"]));
-    expect(c.lines.join("\n")).toMatch(/凭证覆盖率：0\/18/);
+    expect(c.lines.join("\n")).toMatch(/凭证分级：截图认证 0｜/);
     expect(main(["audit", "--base", tmp])).toBe(1); // 孤儿凭证 = 硬伤
     c.stop();
   });
@@ -450,5 +452,62 @@ describe("main 走真 CLI", () => {
     expect(main(["list", "--base", tmp, "--id", PID])).toBe(0);
     expect(c.stop()).toMatch(/账本 1 条/);
     expect(readLedger(store)).toHaveLength(1);
+  });
+});
+
+/* ----------------------------- sealRetro：历史点低强度回填 ----------------------------- */
+
+describe("sealRetro（回填不是认证）", () => {
+  const SRC = "scripts/archive/zhuque-calibration-v2.txt:2";
+
+  it("带文本回填 → proof=text+transcript，文本进证据目录且哈希可复核", () => {
+    const { rec } = sealRetro({ id: PID, text: LONG, pct: Y, proofSource: SRC }, store);
+    expect(rec.proof).toBe("text+transcript");
+    expect(rec.screenshot).toBe("");
+    expect(rec.submitChars).toBe(LONG.replace(/\s/g, "").length);
+    expect(fs.existsSync(path.join(store.base, rec.submitFile))).toBe(true);
+    expect(audit(store).filter((x) => ["hash-mismatch","file-missing","proof-mismatch"].includes(x.kind))).toHaveLength(0);
+  });
+
+  it(`送检文本不足 ${ZHUQUE_MIN_CHARS} 字 → 当场提醒，不静默入账`, () => {
+    const { warnings } = sealRetro({ id: PID, text: SHORT, pct: Y, proofSource: SRC }, store);
+    expect(warnings.join("、")).toMatch(/朱雀下限 350/);
+  });
+
+  it("没有文本 → proof=transcript-only，且**绝不**因为「回填过」就算认证", () => {
+    sealRetro({ id: PID, pct: Y, proofSource: SRC }, store);
+    const soft = audit(store).filter((x) => x.kind === "no-evidence");
+    expect(soft.length).toBeGreaterThan(0);
+    expect(soft.map((x) => x.id)).toContain(PID);
+    expect(isCertified(readLedger(store)[0])).toBe(false);
+  });
+
+  it("回填不能把发布门禁洗绿：--strict 下未认证一律算硬伤", () => {
+    sealRetro({ id: PID, text: LONG, pct: Y, proofSource: SRC }, store);
+    const strictProblems = audit(store, true);
+    const ids = strictProblems.filter((x) => isHard(x, true)).map((x) => x.id);
+    expect(ids).toContain(PID);
+  });
+
+  it("出处不写到行号 → 拒绝（否则数字仍然无出处可查）", () => {
+    expect(() => sealRetro({ id: PID, text: LONG, pct: Y, proofSource: "某档案" }, store)).toThrow(/文件:行号/);
+    expect(() => sealRetro({ id: PID, text: LONG, pct: Y, proofSource: "" }, store)).toThrow(/文件:行号/);
+  });
+
+  it("官分与 calibration-data 的 y 不符 → 拒收（两处必须一致）", () => {
+    expect(() => sealRetro({ id: PID, text: LONG, pct: 50, proofSource: SRC }, store)).toThrow(/对不上/);
+  });
+
+  it("手改成 screenshot 级冒充认证 → proof-mismatch 硬伤", () => {
+    sealRetro({ id: PID, text: LONG, pct: Y, proofSource: SRC }, store);
+    tamper({ proof: "screenshot" });
+    const bad = audit(store).filter((x) => x.kind === "proof-mismatch");
+    expect(bad.length).toBeGreaterThan(0);
+    expect(isHard(bad[0], false)).toBe(true);
+  });
+  it("同一条文本重复回填 → 幂等；内容不同 → 拒绝覆盖历史", () => {
+    sealRetro({ id: PID, text: LONG, pct: Y, proofSource: SRC }, store);
+    expect(() => sealRetro({ id: PID, text: LONG, pct: Y, proofSource: SRC }, store)).not.toThrow();
+    expect(() => sealRetro({ id: PID, text: LONG + "多了一段", pct: Y, proofSource: SRC }, store)).toThrow(/不可覆盖/);
   });
 });
