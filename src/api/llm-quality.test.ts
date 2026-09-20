@@ -8,6 +8,7 @@ import {
   fabricationReview,
   deletionStubIssues,
   inflationIssues,
+  structureIssues,
   addedContentSignals,
 } from "./llm-quality";
 import { fingerprintCheck, humanize } from "../engine/humanize";
@@ -499,5 +500,59 @@ describe("inflationIssues 的规模下限（被既有测试抓出来后钉住）
     const orig = "行业正在发生变化，企业需要适应新的节奏。".repeat(10); // 200 字
     const out = orig.repeat(3) + "另外我还认识几个做这行的朋友，去年聊过。".repeat(4);
     expect(inflationIssues(orig, out).length).toBe(1);
+  });
+});
+/**
+ * v0.9.14 #30：LLM 通道的结构元素保真。
+ * 触发是一次真跑批：D0-对话原文交付稿把 `【场景：…】` 整行删了、说话人职务标注 4→0，
+ * 而闭环评委判它 6 分「达标」。本地引擎早就有 P8 场景块保真，LLM 通道没有对应的那一半。
+ */
+describe("structureIssues（结构元素点数）", () => {
+  const SCENE_SRC = [
+    "【场景：一家创业公司的会议室，周一上午的项目周会】",
+    "张总（项目经理）：大家早上好，今天开周会。",
+    "李工（前端负责人）：前端进展顺利，核心页面都完成了。",
+  ].join("\n");
+
+  it("场景块整行消失 → 红（D0 实测形态）", () => {
+    const out = "张总：大家早上好。\n李工：前端挺顺利的。";
+    expect(structureIssues(SCENE_SRC, out).join(" / ")).toMatch(/场景块/);
+  });
+
+  it("说话人职务标注从有到全无 → 红；还留着一个 → 绿（宁放不误杀）", () => {
+    // 夹具不带场景块行，单独测"职务标注"这一维（否则场景块那条会一起红）
+    const ROLE_SRC = "张总（项目经理）：大家早上好。\n李工（前端负责人）：前端进展顺利。";
+    const allGone = "张总：大家早上好。\n李工：前端进展顺利。";
+    expect(structureIssues(ROLE_SRC, allGone).join(" ")).toMatch(/职务标注/);
+    const keepOne = "张总（项目经理）：大家早上好。\n李工：前端进展顺利。";
+    expect(structureIssues(ROLE_SRC, keepOne)).toEqual([]);
+  });
+
+  it("Markdown 标题被吃掉 → 红", () => {
+    const src = "## 一、现状\n内容若干。\n## 二、对策\n内容若干。";
+    expect(structureIssues(src, "现状是这样。对策是那样。").join(" ")).toMatch(/标题/);
+  });
+
+  /**
+   * 这条是**范围声明**：列举标记（首先 / 一是 / 1.）是引擎主动拆的
+   * （breakEnumerationStructure、总结类过渡词直删都是核心去味手段），
+   * 结构守卫一旦去数它们，就会和去味本身打架，把合格稿全部判死。
+   * 所以这里必须绿。
+   */
+  it("列举标记被拆掉必须**不**红——守卫不许和去味设计打架", () => {
+    const src = "具体来说：首先，加大投入；其次，治理数据；最后，培养人才。";
+    const out = "加大投入这件事得先做，数据治理也得跟上，人才更是绕不开。";
+    expect(structureIssues(src, out)).toEqual([]);
+  });
+
+  it("空稿/空原文不崩", () => {
+    expect(structureIssues("", "abc")).toEqual([]);
+    expect(structureIssues("abc", "")).toEqual([]);
+    expect(structureIssues("abc", "   ")).toEqual([]);
+  });
+
+  it("必须真接在 localHardGate 上（防只定义不接线）", () => {
+    const out = "张总：早。\n李工：顺利。";
+    expect(localHardGate(SCENE_SRC, out).join(" / ")).toMatch(/结构丢失/);
   });
 });

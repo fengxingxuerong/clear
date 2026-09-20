@@ -214,6 +214,51 @@ export function truncationIssues(original: string, rewritten: string): string[] 
   return issues;
 }
 
+/**
+ * v0.9.14（#30）结构元素保真：LLM 通道此前**一条结构守卫都没有**。
+ *
+ * 触发实测（2026-09-20 深度模式跑批，artifacts/llm-cap-0920/）：
+ * D0-对话原文（652 字，剧本体）交付稿 336 字、闭环评委判 6 分「达标」，
+ * 但 `【场景：一家创业公司的会议室…】` 整行消失、说话人职务标注（项目经理/前端负责人）全删。
+ * 同一批里 N1 的质检能抓到"丢一个景物词『潺潺溪水』"却放行这里"丢一整行元数据"——
+ * 说明质检查的是随机抽样的细节，不是可点数的结构清单。
+ *
+ * 为什么这条守卫不算新发明：本地引擎早就把场景块当头等信息保护
+ * （humanize.ts:961 P8「块头是元数据不是行文」整行原样返回、humanize-shuffle.ts:1903 同口径），
+ * LLM 通道只是从来没有对应的那一半。
+ *
+ * 刻意只数"消失"，不数"变短"：列举标记（首先/一是/1.）是引擎**主动拆掉**的
+ * （breakEnumerationStructure / 总结类过渡词直删是核心去味手段），
+ * 拿它当守卫会和设计打架，所以这里一条都不碰。长度也不归本函数管（truncationIssues 管）。
+ */
+const SCENE_HEAD_RE = /^[ \t]*【[^】\n]{2,}】/gm;
+const MD_HEADING_RE = /^[ \t]{0,3}#{1,6}[ \t]+\S/gm;
+/** 剧本说话人带职务标注：`张总（项目经理）：` */
+const SPEAKER_ROLE_RE = /[\u4e00-\u9fa5A-Za-z]{1,6}[（(][^）()\n]{1,14}[）)][ \t]*[:：]/g;
+
+const countOf = (re: RegExp, s: string) => (s.match(re) || []).length;
+
+export function structureIssues(original: string, rewritten: string): string[] {
+  const issues: string[] = [];
+  if (!original || !rewritten || !rewritten.trim()) return issues;
+  // 场景块：原文有几个，交付稿就得至少有几个。少一个就是整段元数据没了。
+  const so = countOf(SCENE_HEAD_RE, original);
+  const sr = countOf(SCENE_HEAD_RE, rewritten);
+  if (so > 0 && sr < so)
+    issues.push(`结构丢失：场景块/块头 ${so} → ${sr} 行（剧本元数据被删）`);
+  // Markdown 标题同理：没有任何一个 pass 以"删标题"为目的。
+  const ho = countOf(MD_HEADING_RE, original);
+  const hr = countOf(MD_HEADING_RE, rewritten);
+  if (ho > 0 && hr < ho) issues.push(`结构丢失：标题 ${ho} → ${hr} 个`);
+  // 说话人职务标注：只在"从有到全无"时开火。部分简化可能是合理改写，
+  // 但全部抹掉一定是信息损失（D0 实测 3 → 0）。
+  const ro = countOf(SPEAKER_ROLE_RE, original);
+  const rr = countOf(SPEAKER_ROLE_RE, rewritten);
+  if (ro >= 2 && rr === 0)
+    issues.push(`结构丢失：说话人职务标注 ${ro} → 0（如「张总（项目经理）：」被简化成「张总：」）`);
+  return issues;
+}
+
 /** v0.9.4 P1.5 编造专项复核（fabrication-checker）：
  *
  * 补偿轮只能修"已报出的未修复项"，抓不住"最后一轮 LLM 质检漏判"的编造——
@@ -396,6 +441,7 @@ export function localHardGate(original: string, rewritten: string): string[] {
   // 且要求残段在原文逐字出现）；而 aiScore 对这种塌句给 0 分 = 奖励删除，
   // 不加这道否决，择优会稳定挑出删得最狠的一稿。
   issues.push(...collapseIssues(original, rewritten));
+  issues.push(...structureIssues(original, rewritten)); // v0.9.14 #30：结构元素点数
   return issues;
 }
 
