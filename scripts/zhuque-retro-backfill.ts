@@ -23,10 +23,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rd = (p: string) => fs.readFileSync(p, "utf8");
 
 const cal = JSON.parse(rd(path.join(__dirname, "calibration-data.json")));
-const points: Array<{ id: string; x: number; y: number; source: string }> = cal.points;
+const points: Array<{ id: string; x: number; y: number; source: string; genre: string }> =
+  cal.points;
 
 /* ---------- v2 批次：档案裸 id → 正本带版本 id ---------- */
-const V2_MAP: Record<string, string> = {
+/** 导出只为让测试能故意改错一条，验证体裁断言真的会拦（见 zhuque-retro-backfill.test.ts） */
+export const V2_MAP: Record<string, string> = {
   N1: "N1",
   N2: "N2v2",
   N3: "N3v2",
@@ -37,14 +39,54 @@ const V2_MAP: Record<string, string> = {
   H1: "H1",
   H2: "H2v2",
 };
+
+/**
+ * 档案里声明的中文体裁 → 标定数据源里的 genre。
+ *
+ * 为什么要有这一层：V2_MAP / V3_MAP 是我从档案推断出来的（档案用裸 id，正本用带版本 id，
+ * 而且档案里的 D1 其实是正本的 D0）。**映射写错时哈希和官分都可能照样通过**——
+ * 文本会照样归档、pct 会照样和正本比对（只有两边官分恰好相等时才漏）。
+ * 档案块头自己写了"对话体 / 原文"，正本的每个点也带 genre+level，
+ * 这是唯一一个独立于我那次推断的信号，所以拿它当断言。
+ */
+export const GENRE_BY_ZH: Record<string, string> = {
+  论说文: "expository",
+  叙事文: "narrative",
+  对话体: "dialogue",
+  纯人写稿: "humanHand",
+  "纯人写稿(去味对照)": "humanHand",
+};
+
+/** 正本里合法的 genre 枚举 */
+export const GENRES = ["expository", "narrative", "dialogue", "humanHand"];
+
+/**
+ * 校验档案声明的体裁与正本 genre 是否同一条；返回 null 表示一致。
+ * 档案有两种写法：v2 的块头是中文（「对话体 / 原文」），v3 的 TSV 列直接是英文枚举
+ * —— 第一版我只处理了中文，结果六个 v3 点全被误判"不在映射表里"。
+ */
+export function genreMismatch(declared: string | undefined, pointGenre: string): string | null {
+  const d = (declared ?? "").trim();
+  if (!d) return "档案没声明体裁，无法交叉核对映射";
+  const mapped = GENRE_BY_ZH[d] ?? (GENRES.includes(d) ? d : undefined);
+  if (!mapped) return `档案声明的体裁「${d}」既不在中文映射表也不是合法枚举`;
+  return mapped === pointGenre ? null : `档案说「${d}」(${mapped}) 而正本 genre=${pointGenre}`;
+}
+
 const HDR = /【\s*\d+\s*·\s*id=([A-Za-z0-9._-]+)\s*】\s*(.+?)\s+aiScore=(\d+)\s+字数=(\d+)/;
 const V2_FILE = "scripts/archive/zhuque-manual-inputs-v2-genres.txt";
 const V2_RET_FILE = "scripts/archive/zhuque-calibration-v2.txt";
 
-function parseV2(): Map<string, { text: string; pct: number; src: string; charsOk: boolean }> {
+function parseV2(): Map<
+  string,
+  { text: string; pct: number; src: string; charsOk: boolean; declaredGenre: string }
+> {
   const fileAbs = path.join(__dirname, "..", V2_FILE);
   const lines = fs.readFileSync(fileAbs, "utf8").split(/\r?\n/);
-  const out = new Map<string, { text: string; pct: number; src: string; charsOk: boolean }>();
+  const out = new Map<
+    string,
+    { text: string; pct: number; src: string; charsOk: boolean; declaredGenre: string }
+  >();
   for (let i = 0; i < lines.length; i++) {
     const m = lines[i].match(HDR);
     if (!m) continue;
@@ -61,6 +103,8 @@ function parseV2(): Map<string, { text: string; pct: number; src: string; charsO
       pct: NaN,
       src: `${V2_FILE}:${i + 1}`,
       charsOk: countChars(text) === Number(m[4]),
+      // 块头形如「叙事文  /  原文」，斜杠前是体裁
+      declaredGenre: (m[2] ?? "").split("/")[0].trim(),
     });
   }
   // 官分：回传值那一行
@@ -81,7 +125,7 @@ function parseV2(): Map<string, { text: string; pct: number; src: string; charsO
 }
 
 /* ---------- v3 批次：TSV 有官分与文件名，但文本文件已不在仓库 ---------- */
-const V3_MAP: Record<string, string> = {
+export const V3_MAP: Record<string, string> = {
   O2: "O2v3",
   O3: "O3v3",
   N2: "N2v3",
@@ -90,20 +134,21 @@ const V3_MAP: Record<string, string> = {
   H2: "H2v3",
 };
 const V3_FILE = "scripts/archive/calibration-input-v3.tsv";
-function parseV3(): Map<string, { pct: number; src: string; missingFile: string }> {
+function parseV3(): Map<string, { pct: number; src: string; declaredGenre: string }> {
   const abs = path.join(__dirname, "..", V3_FILE);
   const lines = fs.readFileSync(abs, "utf8").trim().split(/\r?\n/);
   const h = lines[0].split("\t");
-  const fi = h.indexOf("file");
+  const gi = h.indexOf("genre");
   const pi = h.indexOf("zhuqueOfficialPct");
-  const out = new Map<string, { pct: number; src: string; missingFile: string }>();
+  const out = new Map<string, { pct: number; src: string; declaredGenre: string }>();
   for (let i = 1; i < lines.length; i++) {
     const c = lines[i].split("\t");
     const id = V3_MAP[c[0]] ?? c[0];
     out.set(id, {
       pct: Number(c[pi]),
       src: `${V3_FILE}:${i + 1}`,
-      missingFile: c[fi],
+      // v3 TSV 的 genre 列本来就是英文枚举，直接和正本比
+      declaredGenre: c[gi] ?? "",
     });
   }
   return out;
@@ -145,6 +190,7 @@ export function build(store: Store = DEFAULT_STORE, dry = false): number {
     let text: string | undefined;
     let pct: number;
     let src: string;
+    let declaredGenre: string | undefined;
     if (b) {
       if (!b.charsOk) {
         rows.push(
@@ -156,6 +202,7 @@ export function build(store: Store = DEFAULT_STORE, dry = false): number {
       text = b.text;
       pct = b.pct;
       src = b.src;
+      declaredGenre = b.declaredGenre;
     } else if (o) {
       text = o.text;
       pct = o.pct;
@@ -164,10 +211,21 @@ export function build(store: Store = DEFAULT_STORE, dry = false): number {
       text = undefined;
       pct = t3.pct;
       src = t3.src;
+      declaredGenre = t3.declaredGenre;
     } else {
       rows.push(`❌ ${p.id}: 三处档案里都没有这个点的官分出处`);
       bad++;
       continue;
+    }
+    // 映射自证：档案自己声明的体裁必须和正本该点的 genre 同一条。
+    // 这是唯一独立于 V2_MAP/V3_MAP 那次推断的信号，少了它，映射写错也能归档成功。
+    if (declaredGenre !== undefined) {
+      const mismatch = genreMismatch(declaredGenre, p.genre);
+      if (mismatch) {
+        rows.push(`❌ ${p.id}: 体裁对不上，不收 —— ${mismatch}（${src}）`);
+        bad++;
+        continue;
+      }
     }
     if (pct !== p.y) {
       rows.push(`❌ ${p.id}: 档案官分 ${pct} 与正本 y=${p.y} 不符——不收，两处必须一致`);
