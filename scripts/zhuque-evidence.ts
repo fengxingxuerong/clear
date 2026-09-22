@@ -35,6 +35,7 @@ import crypto from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseOfficialResult } from "../src/api/zhuque";
 import { ZHUQUE_MIN_CHARS, type ZhuqueLabel } from "../src/engine/zhuque";
+import { extractScore } from "../src/api/detector";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
@@ -79,15 +80,20 @@ const inside = (base: string, abs: string) => path.resolve(abs).startsWith(path.
 
 /**
  * 凭证强度分级。**这三级不可互相冒充**，audit 与 --strict 都按级区别对待：
- *   screenshot       页面截图 + 逐字原文：唯一能证明"官方真给过这个数"的形态
+ *   screenshot       页面截图 + 逐字原文：网页版送检，证明"官方真给过这个数"
+ *   api-response     官方 API 原始 JSON（字节归档 + 哈希复核 + token 用量）：
+ *                     与 screenshot 同级算"认证"——API 是 2026-09 起开放的官方通道，
+ *                     其响应就是官方那句话的可复核载体（审计会从归档 JSON 复算分数比对）
  *   text+transcript  送检文本原文已归档可复核，官分只有档案里的转录值
  *   transcript-only  连送检文本都没留下，只有档案里那行数字（最弱，仅记账）
  */
-export type ProofKind = "screenshot" | "text+transcript" | "transcript-only";
-export const PROOF_KINDS: ProofKind[] = ["screenshot", "text+transcript", "transcript-only"];
-/** 只有这一级算"真凭证"；其余在 --strict 下依旧不通过 */
-export const isCertified = (e: Pick<Evidence, "proof">): boolean =>
-  (e.proof ?? "screenshot") === "screenshot";
+export type ProofKind = "screenshot" | "api-response" | "text+transcript" | "transcript-only";
+export const PROOF_KINDS: ProofKind[] = ["screenshot", "api-response", "text+transcript", "transcript-only"];
+/** 算"认证"的两级：有官方可复核载体（截图 或 API 原始响应）；其余在 --strict 下依旧不通过 */
+export const isCertified = (e: Pick<Evidence, "proof">): boolean => {
+  const p = e.proof ?? "screenshot";
+  return p === "screenshot" || p === "api-response";
+};
 
 export interface Evidence {
   id: string;
@@ -101,6 +107,9 @@ export interface Evidence {
   label: string;
   screenshot: string;
   screenshotSha256: string;
+  /** api-response 级专用：归档的官方 API 原始 JSON 相对路径（screenshot/text 级为空） */
+  apiResponse?: string;
+  apiResponseSha256?: string;
   by: string;
   /** 缺字段按 screenshot 解释（v0.9.14 之前的账本行没有这一项） */
   proof?: ProofKind;
@@ -208,6 +217,91 @@ export function seal(input: SealInput, store: Store = DEFAULT_STORE): { rec: Evi
     screenshotSha256: shot.hash,
     by: input.by || process.env.USER || "unknown",
     proof: "screenshot",
+    proofSource: input.proofSource ?? "",
+  };
+  fs.mkdirSync(path.dirname(store.ledgerFile), { recursive: true });
+  fs.appendFileSync(store.ledgerFile, JSON.stringify(rec) + "\n");
+  return { rec, warnings };
+}
+
+export interface SealApiInput {
+  id: string;
+  submitFile: string;
+  /** 官方 API 给的 AI 概率（0~100，整数；softmax_confidence×100 四舍五入） */
+  pct: number;
+  label: ZhuqueLabel;
+  /** 官方 API 原始响应 JSON 的相对路径（会被复制进 evidence/ 归档） */
+  apiResponse: string;
+  by?: string;
+  proofSource?: string;
+}
+
+/**
+ * 把一次官方 API 送检收成 api-response 级凭证。
+ *
+ * 与 seal（网页版截图级）的区别：
+ *  - 证据载体是 API 原始 JSON（字节归档 + 哈希），不是页面截图；
+ *  - 官分的"互证"不再是"页面原文 vs 手抄值"，而是"从归档 JSON 复算的分数 vs 手填 pct"
+ *    ——改路径只改 detector.ts 的 extractScore 一处，审计复算与之同源；
+ *  - **不强制与 calibration-data.json 的 y 一致**：API 是独立官方通道，模型版本更新后
+ *    重测可能和历史 y（网页版旧测）不同。这属于"y 已过时、该重拟合"，不是"凭证抄错"，
+ *    所以 seal 当场只警告不拦，audit 对 api-response 也不报 dataset-conflict。
+ *    （screenshot/text 级仍报 dataset-conflict，因为那两级的 y 来自同一次手抄，必须自洽。）
+ */
+export function sealApi(input: SealApiInput, store: Store = DEFAULT_STORE): { rec: Evidence; warnings: string[] } {
+  const { id, pct, label } = input;
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id))
+    throw new Error(`--id 只能用作文件名（字母数字 . _ -），实得 ${JSON.stringify(id)}`);
+  if (!Number.isFinite(pct) || pct < 0 || pct > 100) throw new Error(`--pct 需在 0~100，实得 ${JSON.stringify(pct)}`);
+  if (!LABELS.includes(label))
+    throw new Error(`--label 只能是 ${LABELS.join("/")}（官方档位词），实得 ${JSON.stringify(label)}`);
+  const srcText = insideBase(store, input.submitFile, "送检文本");
+  const srcApi = insideBase(store, input.apiResponse, "API 响应");
+
+  // —— 从归档前的原始 JSON 复算分数，与手填 pct 互证（API 版的"页面原文 vs 手抄值"）——
+  const raw = JSON.parse(fs.readFileSync(srcApi, "utf8"));
+  if (raw === null || typeof raw !== "object")
+    throw new Error(`${input.apiResponse} 不是 JSON 对象`);
+  const recomputed = extractScore(raw as Record<string, unknown>);
+  if (recomputed !== Math.round(pct))
+    throw new Error(
+      `从 API 响应复算的分数是 ${recomputed}%，你记的 --pct 是 ${pct}%——以响应为准（别手改数字）`,
+    );
+
+  const warnings: string[] = [];
+  if (!CALIB_IDS.includes(id)) warnings.push(`${id} 不在标定数据源里，audit 会算它一条"孤儿凭证"`);
+  const chars = countChars(fs.readFileSync(srcText, "utf8"));
+  if (chars < ZHUQUE_MIN_CHARS) warnings.push(`送检文本不足 ${ZHUQUE_MIN_CHARS} 字（朱雀下限），这个官分本身就不成立`);
+  // API 重测与历史 y 不符：只警告，不拦（见函数头注释）
+  if (CALIB_IDS.includes(id)) {
+    const y = Y_BY_ID.get(id);
+    if (y !== undefined && Math.abs(y - pct) > 0.01)
+      warnings.push(
+        `API 官分 ${pct}% 与标定数据源 y=${y}% 不符——模型可能已更新，该 id 的 y 已过时，建议重拟合后同步`,
+      );
+  }
+
+  const destText = path.join(store.evidenceDir, `${id}.txt`);
+  const destApi = path.join(store.evidenceDir, `${id}.api.json`);
+  const text = archive(srcText, destText, store.base);
+  const api = archive(srcApi, destApi, store.base);
+
+  const rec: Evidence = {
+    id,
+    ts: new Date().toISOString(),
+    url: "https://ai-gateway.edgeone.link/v1/providers/zhuque-text/classify",
+    submitFile: rel(store.base, destText),
+    submitSha256: text.hash,
+    submitChars: chars,
+    officialPct: pct,
+    verdict: "",
+    label,
+    screenshot: "",
+    screenshotSha256: "",
+    apiResponse: rel(store.base, destApi),
+    apiResponseSha256: api.hash,
+    by: input.by || process.env.USER || "unknown",
+    proof: "api-response",
     proofSource: input.proofSource ?? "",
   };
   fs.mkdirSync(path.dirname(store.ledgerFile), { recursive: true });
@@ -373,12 +467,18 @@ export function audit(store: Store = DEFAULT_STORE, strict = false): AuditProble
       const files: Array<[string, string, string]> = [];
       if (e.submitFile) files.push(["送检文本", e.submitFile, e.submitSha256]);
       if (e.screenshot) files.push(["截图", e.screenshot, e.screenshotSha256]);
-      // 分级字段自己也要自洽：说自己是 screenshot，就得真有截图这一栏
+      if (e.apiResponse) files.push(["API 响应", e.apiResponse, e.apiResponseSha256 ?? ""]);
+      // 分级字段自洽：声明哪一级，就得有那一级的载体；且不能冒充更高级
       if (proof === "screenshot" && !e.screenshot)
         problems.push({ kind: "proof-mismatch", id, msg: `proof=screenshot 但 screenshot 为空` });
-      if (proof !== "screenshot" && e.screenshot)
+      if (proof === "api-response" && !e.apiResponse)
+        problems.push({ kind: "proof-mismatch", id, msg: `proof=api-response 但 apiResponse 为空` });
+      if (proof === "api-response" && e.screenshot)
+        problems.push({ kind: "proof-mismatch", id, msg: `有截图却把 proof 标成 api-response（分级被写低了？）` });
+      if (proof !== "screenshot" && proof !== "api-response" && e.screenshot)
         problems.push({ kind: "proof-mismatch", id, msg: `有截图却把 proof 标成 ${proof}（分级被写低了？）` });
-      if (proof !== "screenshot" && !(e.proofSource ?? "").trim())
+      // proofSource 是回填级的出处要求；screenshot/api-response 的载体本身就是出处，不强制
+      if (proof !== "screenshot" && proof !== "api-response" && !(e.proofSource ?? "").trim())
         problems.push({ kind: "proof-mismatch", id, msg: `${proof} 级凭证必须写 proofSource（文件:行号），否则数字无出处` });
       for (const [role, p, hash] of files) {
         const abs = path.resolve(store.base, p);
@@ -397,8 +497,8 @@ export function audit(store: Store = DEFAULT_STORE, strict = false): AuditProble
           problems.push({ kind: "outside-store", id, msg: `${role}不在证据目录内，不会随仓库分发：${p}` });
       }
 
-      // 页面原文是独立于手抄值的那一路：重新解析一次，与记录里的 pct/label 对照。
-      // 只有 screenshot 级才有"页面原文"可解析；回填级跳过这一步（它本来就没这一路）。
+      // 官分互证：screenshot 看"页面原文"，api-response 看"从归档 JSON 复算的分数"。
+      // 两者都是独立于手抄值的那一路——审计时重算一次，与账本里的 pct 比对。
       if (proof === "screenshot") {
         const page = parseOfficialResult(e.verdict || "");
         if (!page.ok)
@@ -417,10 +517,28 @@ export function audit(store: Store = DEFAULT_STORE, strict = false): AuditProble
               msg: `页面原文档位是「${page.labelText}」(${page.label})，账本记 ${e.label}`,
             });
         }
+      } else if (proof === "api-response" && e.apiResponse) {
+        // 从归档的原始 JSON 复算分数，与账本 officialPct 比对——改 detector 路径只改一处，
+        // 这里复算与之同源，账本手改 pct 或 JSON 被换都会在这里现形
+        const absApi = path.resolve(store.base, e.apiResponse);
+        if (fs.existsSync(absApi)) {
+          try {
+            const raw = JSON.parse(fs.readFileSync(absApi, "utf8")) as Record<string, unknown>;
+            const recomputed = extractScore(raw);
+            if (recomputed !== Math.round(e.officialPct))
+              problems.push({
+                kind: "verdict-conflict",
+                id,
+                msg: `从 API 响应复算 ${recomputed}%，账本记 ${e.officialPct}%`,
+              });
+          } catch (err) {
+            problems.push({ kind: "verdict-conflict", id, msg: `API 响应解析/复算失败：${(err as Error).message}` });
+          }
+        }
       }
       // pct 与 label 自洽校验。screenshot 级要**让位于页面原文**：官方档位词与百分比
       // 不落在同一条 ≥60/≥30 线上时（如页面写「AI生成 25%」），以原文为准，
-      // 硬套 labelFromPct 会把如实记录的人判成读反。回填级没有原文可依据，只能按官方口径查。
+      // 硬套 labelFromPct 会把如实记录的人判成读反。回填/api 级没有原文可依据，只能按官方口径查。
       const pageLabel = proof === "screenshot" ? parseOfficialResult(e.verdict || "").label : null;
       if (!pageLabel && e.label !== labelFromPct(e.officialPct))
         problems.push({
@@ -429,9 +547,14 @@ export function audit(store: Store = DEFAULT_STORE, strict = false): AuditProble
           msg: `官分 ${e.officialPct}% 按官方口径属「${labelFromPct(e.officialPct)}」档，记录却写 ${e.label}`,
         });
 
-      const y = Y_BY_ID.get(id);
-      if (y !== undefined && Math.abs(y - e.officialPct) > 0.01)
-        problems.push({ kind: "dataset-conflict", id, msg: `凭证官分 ${e.officialPct}% 与标定数据源 y=${y}% 不符` });
+      // 与标定数据源 y 互证：screenshot/text/transcript 级的 y 与官分同源于一次手抄，必须一致；
+      // api-response 级跳过——API 是独立官方通道，模型更新后重测可能与历史 y 不同，
+      // 那属于"y 已过时、该重拟合"，不是"凭证抄错"，不在审计里当硬伤（seal 时已警告）。
+      if (proof !== "api-response") {
+        const y = Y_BY_ID.get(id);
+        if (y !== undefined && Math.abs(y - e.officialPct) > 0.01)
+          problems.push({ kind: "dataset-conflict", id, msg: `凭证官分 ${e.officialPct}% 与标定数据源 y=${y}% 不符` });
+      }
 
       // 字数以**文件实际内容**为准：账本字段本身是可被手改的
       // transcript-only 级没有 submitFile：空串 resolve 出来是仓库根目录，
@@ -455,31 +578,31 @@ export function audit(store: Store = DEFAULT_STORE, strict = false): AuditProble
   for (const id of CALIB_IDS) {
     const recs = byId.get(id) ?? [];
     const best = recs.some(isCertified)
-      ? "screenshot"
+      ? "certified"
       : recs.some((r) => (r.proof ?? "screenshot") === "text+transcript")
         ? "text+transcript"
         : recs.length
           ? "transcript-only"
           : "none";
-    if (best === "screenshot") {
+    if (best === "certified") {
       certified++;
       continue;
     }
-    // 关键：回填级**不算补齐**。缺截图这一条照旧报出来，--strict 照旧升级为硬伤。
+    // 关键：回填级**不算补齐**。缺认证载体（截图/API 响应）这一条照旧报出来，--strict 照旧升级为硬伤。
     // 否则"跑一次 retro 就把 18 个点全变成有凭证"就成了自我加冕。
     const msg =
       best === "none"
         ? "无凭证（历史点，仅列账）"
         : best === "text+transcript"
-          ? `只有 L1+L2：送检文本已归档、官分有档案出处，${recs.find((r) => r.proofSource)?.proofSource ?? ""} —— **缺页面截图，未认证**`
+          ? `只有 L1+L2：送检文本已归档、官分有档案出处，${recs.find((r) => r.proofSource)?.proofSource ?? ""} —— **缺截图/API 响应，未认证**`
           : `只有 L2：官分转录自 ${recs.find((r) => r.proofSource)?.proofSource ?? "?"}，送检文本已失 —— **缺截图与原文，未认证**`;
     if (best === "text+transcript") textOnly++;
     else if (best === "transcript-only") numberOnly++;
-    problems.push({ kind: "no-evidence", id, msg: strict ? `标定点无截图凭证（--strict）｜${msg}` : msg });
+    problems.push({ kind: "no-evidence", id, msg: strict ? `标定点无认证凭证（--strict）｜${msg}` : msg });
   }
   if (!strict)
     console.log(
-      `📜 凭证分级：截图认证 ${certified}｜文本+转录 ${textOnly}｜仅转录数字 ${numberOnly}｜什么都没有 ${CALIB_IDS.length - certified - textOnly - numberOnly}（共 ${CALIB_IDS.length} 点）`,
+      `📜 凭证分级：认证（截图/API）${certified}｜文本+转录 ${textOnly}｜仅转录数字 ${numberOnly}｜什么都没有 ${CALIB_IDS.length - certified - textOnly - numberOnly}（共 ${CALIB_IDS.length} 点）`,
     );
   return problems;
 }
@@ -524,11 +647,14 @@ export function main(argv: string[] = process.argv.slice(2)): number {
     const bestOf = new Map<string, ProofKind>();
     for (const e of recsAll) {
       const cur = bestOf.get(e.id);
-      const rank: Record<ProofKind, number> = { "transcript-only": 1, "text+transcript": 2, screenshot: 3 };
+      const rank: Record<ProofKind, number> = { "transcript-only": 1, "text+transcript": 2, "api-response": 3, screenshot: 3 };
       const me = e.proof ?? "screenshot";
       if (!cur || rank[me] > rank[cur]) bestOf.set(e.id, me);
     }
-    const nCert = CALIB_IDS.filter((id) => bestOf.get(id) === "screenshot").length;
+    const nCert = CALIB_IDS.filter((id) => {
+      const b = bestOf.get(id);
+      return b === "screenshot" || b === "api-response";
+    }).length;
     const nText = CALIB_IDS.filter((id) => bestOf.get(id) === "text+transcript").length;
     const nNum = CALIB_IDS.filter((id) => bestOf.get(id) === "transcript-only").length;
     const covered = nCert + nText + nNum;
@@ -536,14 +662,14 @@ export function main(argv: string[] = process.argv.slice(2)): number {
     for (const p of soft) console.log(`  ○ ${p.id}：${p.msg}`);
     // 覆盖率必须分级说：把"回填过"报成"有凭证"就是自我加冕
     console.log(
-      `凭证分级：截图认证 ${nCert}/${CALIB_IDS.length}｜文本+转录 ${nText}｜仅转录数字 ${nNum}｜无任何记录 ${CALIB_IDS.length - covered}（共 ${CALIB_IDS.length} 点）`,
+      `凭证分级：认证（截图/API）${nCert}/${CALIB_IDS.length}｜文本+转录 ${nText}｜仅转录数字 ${nNum}｜无任何记录 ${CALIB_IDS.length - covered}（共 ${CALIB_IDS.length} 点）`,
     );
     if (nCert === 0)
-      console.log(`⚠️ 认证数为 0：下面这些点没有任何一张页面截图，官方数字目前只能"溯源"、不能"复核"。`);
+      console.log(`⚠️ 认证数为 0：这些点没有任何官方可复核载体（截图/API 响应），官分目前只能"溯源"、不能"复核"。`);
     console.log(
       hard.length
         ? `❌ 凭证审计未通过：${hard.length} 项硬伤${strict ? "" : `（另有 ${soft.length} 点未认证，只列账不拦）`}`
-        : `✅ 无硬伤；但 ${soft.length} 点仍非截图认证${nCert === 0 ? "（认证数 0）" : ""}`,
+        : `✅ 无硬伤；但 ${soft.length} 点仍非认证${nCert === 0 ? "（认证数 0）" : ""}`,
     );
     return hard.length ? 1 : 0;
   };
@@ -578,6 +704,37 @@ export function main(argv: string[] = process.argv.slice(2)): number {
     console.log(`  shot   ${rec.screenshotSha256.slice(0, 12)}… ${rec.screenshot}`);
     for (const w of warnings) console.log(`⚠️  ${w}`);
     console.log("凭证与账本都要入库，否则克隆后无法复算：git add evidence/");
+  } else if (cmd === "sealApi") {
+    const API_KEYS = ["id", "submit-file", "pct", "label", "api-response"] as const;
+    const missing = API_KEYS.filter((k) => !opts[k] || opts[k] === "1");
+    if (missing.length) {
+      console.error(`缺少参数：${missing.map((k) => "--" + k).join(" ")}`);
+      return 2;
+    }
+    let out: { rec: Evidence; warnings: string[] };
+    try {
+      out = sealApi(
+        {
+          id: opts.id,
+          submitFile: opts["submit-file"],
+          pct: Number(opts.pct),
+          label: opts.label as ZhuqueLabel,
+          apiResponse: opts["api-response"],
+          by: opts.by,
+          proofSource: opts["proof-source"],
+        },
+        store,
+      );
+    } catch (err) {
+      console.error(`❌ 入账失败：${(err as Error).message}`);
+      return 2;
+    }
+    const { rec, warnings } = out;
+    console.log(`已入账 ${rec.id}：官分 ${rec.officialPct}% (${rec.label}) 送检 ${rec.submitChars} 字 [api-response]`);
+    console.log(`  submit ${rec.submitSha256.slice(0, 12)}… ${rec.submitFile}`);
+    console.log(`  api    ${(rec.apiResponseSha256 ?? "").slice(0, 12)}… ${rec.apiResponse}`);
+    for (const w of warnings) console.log(`⚠️  ${w}`);
+    console.log("凭证与账本都要入库，否则克隆后无法复算：git add evidence/");
   } else if (cmd === "list") {
     const { recs, bad } = loadLedger(store);
     for (const e of recs) if (!opts.id || e.id === opts.id) console.log(JSON.stringify(e));
@@ -585,7 +742,7 @@ export function main(argv: string[] = process.argv.slice(2)): number {
     console.log(`（账本 ${recs.length} 条${bad.length ? ` + ${bad.length} 行坏数据` : ""} → ${rel(ROOT, store.ledgerFile)}）`);
     return bad.length ? 1 : 0;
   } else if (cmd !== "audit") {
-    console.error(`未知子命令 ${cmd}（可用：seal | audit | list）`);
+    console.error(`未知子命令 ${cmd}（可用：seal | sealApi | audit | list）`);
     return 2;
   }
   return report();

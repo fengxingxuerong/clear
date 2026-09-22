@@ -24,10 +24,12 @@ import {
   readLedger,
   isCertified,
   seal,
+  sealApi,
   sealRetro,
   storeFromOpts,
   type Evidence,
   type SealInput,
+  type SealApiInput,
   type Store,
 } from "./zhuque-evidence";
 import { ZHUQUE_MIN_CHARS } from "../src/engine/zhuque";
@@ -394,7 +396,7 @@ describe("main 走真 CLI", () => {
   it("seal 成功即接着审计：无硬伤返回 0", () => {
     const c = capture();
     expect(main(sealArgv())).toBe(0);
-    expect(c.lines.join("\n")).toMatch(/凭证分级：截图认证 1｜/);
+    expect(c.lines.join("\n")).toMatch(/凭证分级：认证（截图\/API）1\/18｜/);
     c.stop();
     expect(readLedger(store)).toHaveLength(1);
   });
@@ -410,7 +412,7 @@ describe("main 走真 CLI", () => {
   it("覆盖率只算真标定点，孤儿凭证不算覆盖", () => {
     const c = capture();
     main(sealArgv(["--id", "Z9"]));
-    expect(c.lines.join("\n")).toMatch(/凭证分级：截图认证 0｜/);
+    expect(c.lines.join("\n")).toMatch(/凭证分级：认证（截图\/API）0\/18｜/);
     expect(main(["audit", "--base", tmp])).toBe(1); // 孤儿凭证 = 硬伤
     c.stop();
   });
@@ -509,5 +511,150 @@ describe("sealRetro（回填不是认证）", () => {
     sealRetro({ id: PID, text: LONG, pct: Y, proofSource: SRC }, store);
     expect(() => sealRetro({ id: PID, text: LONG, pct: Y, proofSource: SRC }, store)).not.toThrow();
     expect(() => sealRetro({ id: PID, text: LONG + "多了一段", pct: Y, proofSource: SRC }, store)).toThrow(/不可覆盖/);
+  });
+});
+
+/* ----------------------------- sealApi：官方 API 响应级凭证 ----------------------------- */
+
+describe("sealApi（官方 API 原始 JSON 入账，与 screenshot 同算认证）", () => {
+  /** 造一份与 pct 对齐的假 API 响应：softmax_confidence = pct/100 */
+  const writeApi = (pct: number, name = `${PID}.api.json`): string => {
+    const raw = {
+      softmax_confidence: pct / 100,
+      labels_ratio: { "0": 1 - pct / 100, "1": pct / 100, "2": 0 },
+      makers_models_usage: { total_tokens: 1234 },
+    };
+    fs.writeFileSync(path.join(tmp, "in", name), JSON.stringify(raw), "utf8");
+    return `in/${name}`;
+  };
+
+  const apiInput = (over: Partial<SealApiInput> = {}): SealApiInput => ({
+    id: PID,
+    submitFile: `in/${PID}.txt`,
+    pct: Y,
+    label: "ai",
+    apiResponse: writeApi(Y),
+    ...over,
+  });
+
+  it("归档文本与 API JSON，proof=api-response 且算认证，零硬伤", () => {
+    const { rec, warnings } = sealApi(apiInput(), store);
+    expect(warnings).toEqual([]);
+    expect(rec.proof).toBe("api-response");
+    expect(isCertified(rec)).toBe(true);
+    expect(fs.existsSync(archived(`${PID}.txt`))).toBe(true);
+    expect(fs.existsSync(archived(`${PID}.api.json`))).toBe(true);
+    expect(rec.apiResponse).toBe(`evidence/zhuque/${PID}.api.json`);
+    expect(rec.screenshot).toBe("");
+    expect(rec.apiResponseSha256).toBe(
+      sha(fs.readFileSync(path.join(tmp, "in", `${PID}.api.json`), "utf8")),
+    );
+    expect(hard()).toEqual([]);
+  });
+
+  it("从 API JSON 复算的分数与手填 pct 不符 → 拒收（以 JSON 为准，不留半条记录）", () => {
+    // JSON 里 softmax=0.85（=85），手填 pct=50
+    expect(() => sealApi(apiInput({ pct: 50, label: "human" }), store)).toThrow(/复算的分数是 85/);
+    expect(fs.existsSync(store.ledgerFile)).toBe(false);
+  });
+
+  it("API 重测与历史 y 不符 → 只警告不拦，audit 不报 dataset-conflict", () => {
+    const api80 = writeApi(80, "api80.json");
+    const { warnings } = sealApi(apiInput({ pct: 80, label: "ai", apiResponse: api80 }), store);
+    expect(warnings.join("\n")).toMatch(/API 官分 80% 与标定数据源 y=85% 不符/);
+    // api-response 级跳过 dataset-conflict：审计里不该出现这条
+    expect(kinds("dataset-conflict")).toEqual([]);
+    expect(hard()).toEqual([]);
+  });
+
+  it("归档的 API JSON 被换掉 → hash-mismatch", () => {
+    sealApi(apiInput(), store);
+    fs.writeFileSync(archived(`${PID}.api.json`), JSON.stringify({ softmax_confidence: 0.5 }));
+    const hit = kinds("hash-mismatch");
+    expect(hit).toHaveLength(1);
+    expect(hit[0]?.msg).toMatch(/API 响应内容与凭证不符/);
+  });
+
+  it("手改 officialPct 而 JSON 不变 → 复算不符 verdict-conflict", () => {
+    sealApi(apiInput(), store);
+    tamper({ officialPct: 12 });
+    const hit = kinds("verdict-conflict");
+    expect(hit).toHaveLength(1);
+    expect(hit[0]?.msg).toMatch(/从 API 响应复算 85%，账本记 12%/);
+  });
+
+  it("手把低强度行改成 api-response 冒充认证（但没有 API JSON）→ proof-mismatch 硬伤", () => {
+    sealRetro({ id: PID, text: LONG, pct: Y, proofSource: "scripts/archive/zhuque-calibration-v2.txt:2" }, store);
+    tamper({ proof: "api-response" });
+    const hit = kinds("proof-mismatch");
+    expect(hit.length).toBeGreaterThan(0);
+    expect(hit[0]?.msg).toMatch(/proof=api-response 但 apiResponse 为空/);
+    expect(isHard(hit[0]!, false)).toBe(true);
+  });
+
+  it("路径逃出 base 拒收", () => {
+    expect(() => sealApi(apiInput({ apiResponse: "../outside.json" }), store)).toThrow(/必须在 --base 之内/);
+  });
+
+  it("幂等：同内容重复 sealApi 不报错（多一条记录）", () => {
+    sealApi(apiInput(), store);
+    expect(() => sealApi(apiInput(), store)).not.toThrow();
+    expect(readLedger(store).filter((e) => e.proof === "api-response")).toHaveLength(2);
+    expect(hard()).toEqual([]);
+  });
+
+  it("有 api-response 凭证的点退出无凭证名单", () => {
+    sealApi(apiInput(), store);
+    const soft = audit(store).filter((p) => !isHard(p, false));
+    expect(soft.map((p) => p.id)).toEqual(CALIB_IDS.filter((i) => i !== PID));
+  });
+
+  it("--strict 下有 api-response 凭证即放行（认证级不再算硬伤）", () => {
+    sealApi(apiInput(), store);
+    const strictHard = audit(store, true).filter((p) => isHard(p, true) && p.id === PID);
+    expect(strictHard).toEqual([]);
+  });
+});
+
+describe("main sealApi 走真 CLI", () => {
+  const capture = () => {
+    const lines: string[] = [];
+    const log = vi.spyOn(console, "log").mockImplementation((...a) => lines.push(a.join(" ")));
+    const err = vi.spyOn(console, "error").mockImplementation((...a) => lines.push(a.join(" ")));
+    return { lines, stop: () => (log.mockRestore(), err.mockRestore(), lines.join("\n")) };
+  };
+  const writeApi = (pct: number) => {
+    fs.writeFileSync(
+      path.join(tmp, "in", `${PID}.api.json`),
+      JSON.stringify({ softmax_confidence: pct / 100, makers_models_usage: { total_tokens: 1 } }),
+      "utf8",
+    );
+    return `in/${PID}.api.json`;
+  };
+  const sealApiArgv = (over: string[] = []) =>
+    ["sealApi", "--base", tmp, "--id", PID, "--submit-file", `in/${PID}.txt`, "--pct", String(Y),
+      "--label", "ai", "--api-response", writeApi(Y), ...over];
+
+  it("sealApi 成功即接着审计：无硬伤返回 0，认证数 +1", () => {
+    const c = capture();
+    expect(main(sealApiArgv())).toBe(0);
+    expect(c.lines.join("\n")).toMatch(/凭证分级：认证（截图\/API）1\/18｜/);
+    c.stop();
+    expect(readLedger(store)[0]?.proof).toBe("api-response");
+  });
+
+  it("sealApi 复算不符返回 2，账本保持干净", () => {
+    const c = capture();
+    expect(main(sealApiArgv(["--pct", "12"]))).toBe(2);
+    expect(c.lines.join("\n")).toMatch(/入账失败/);
+    c.stop();
+    expect(fs.existsSync(store.ledgerFile)).toBe(false);
+  });
+
+  it("缺必填参数返回 2", () => {
+    const c = capture();
+    expect(main(["sealApi", "--base", tmp, "--id", PID])).toBe(2);
+    expect(c.lines.join("\n")).toMatch(/缺少参数：--submit-file --pct --label --api-response/);
+    c.stop();
   });
 });

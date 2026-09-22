@@ -282,6 +282,30 @@ npm run check:release  # 上面六条 + 单测，全绿才允许打 tag
 npm run bench          # 性能基准（实测 2026-09-19：1x/571字 3ms、10x/5710字 14ms、50x/2.85万字 57ms）
 ```
 
+## 官方 API 自动送检（v0.9.14+）
+
+朱雀在腾讯云 EdgeOne Makers 开了官方 API（`@makers/zhuque-text`，50 万 token/月免费），
+送检不再需要人工过滑块。`npm run score:official` 一条命令把整条链路自动化：
+
+```bash
+# 1. 去腾讯云 EdgeOne 控制台 → Makers → Models → API Key 建一个 Key（不需要自建网关）
+# 2. 设进环境变量（别贴进对话、别写进仓库文件）：
+ZHUQUE_API_KEY=xxx npm run score:official            # 重新送检已有 18 个标定点 → 升到 api-response 认证
+ZHUQUE_API_KEY=xxx npm run score:official -- --v4    # 额外送检 v4 的 8 个中段点并追加进标定数据
+ZHUQUE_API_KEY=xxx npm run score:official -- --dry-run   # 只列计划，不送检不入账
+```
+
+- **api-response 级凭证**与页面截图同级算"认证"：可复核载体是官方 API 的原始 JSON
+  （字节归档 + 哈希 + token 用量），审计时从归档 JSON 复算分数比对，改路径只改 `detector.ts` 一处。
+- **幂等**：账本里已有 api-response 记录的 id 直接跳过；重复跑不会重复入账。
+- **不手改数字**：手填的 `--pct` 必须与从 API 响应复算的分数一致，否则 `sealApi` 拒收。
+- **与历史 y 不符只警告不拦**：API 是独立官方通道，模型更新后重测可能与历史网页版 y 不同
+  （那属于"y 已过时、该重拟合"，不是凭证抄错），`audit` 对 api-response 不报 dataset-conflict。
+- `--v4` 会把新中段点追加进 `calibration-data.json`；若这让 `npm run test:calib` 的锚点误差转红，
+  是"旧线拟合不了新数据"的诚实信号——跑 `npx tsx scripts/zhuque-v4-fit.ts` 看重拟合报告，
+  确认可接受后再人工同步 `src/engine/zhuque-calib.ts`（不自动改运行参数，那是需要人判断的一步）。
+- 底层单条入账：`npx tsx scripts/zhuque-evidence.ts sealApi --id O1 --submit-file ... --pct 85 --label ai --api-response ...`
+
 去味前后的分数对照不要靠这里背数字，`npm run test:regress12` 每次都会用当前引擎、固定
 `seed=20260826` 现算一遍，四体裁原文 → 朱雀档 0.9 实测 **33 / 46 / 7 / 43 → 全部 0**，
 0.6~0.7 档为 **8 / 0 / 0 / 1**。

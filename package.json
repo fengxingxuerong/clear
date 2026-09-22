@@ -14,6 +14,8 @@
     "test:quality": "tsx scripts/verify-quality.ts",
     "test:calib": "tsx scripts/calib-sanity.ts",
     "test:evidence": "tsx scripts/zhuque-evidence.ts audit",
+    "seal:api": "tsx scripts/zhuque-evidence.ts sealApi",
+    "score:official": "tsx scripts/zhuque-official-run.ts",
     "check:ledger": "tsx scripts/check-ledger-appendonly.ts",
     "check:release": "npm run test && npm run test:regress && npm run test:regress12 && npm run test:quality && npm run test:calib && npm run test:evidence && npm run check:ledger",
     "check:publish": "tsx scripts/zhuque-evidence.ts audit --strict",
