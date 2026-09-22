@@ -20,11 +20,12 @@ function cfg(partial: Partial<DetectorConfig> = {}): DetectorConfig {
 }
 
 /** 装一个返回给定 body 的假 fetch，并记录调用参数 */
-function stubFetch(opts: { ok?: boolean; status?: number; body?: unknown } = {}) {
+function stubFetch(opts: { ok?: boolean; status?: number; body?: unknown; text?: string } = {}) {
   const spy = vi.fn(async (_url?: unknown, _init?: unknown) => ({
     ok: opts.ok ?? true,
     status: opts.status ?? 200,
     json: async () => opts.body,
+    text: async () => opts.text ?? JSON.stringify(opts.body ?? ""),
   }));
   globalThis.fetch = spy as unknown as typeof fetch;
   return spy;
@@ -162,6 +163,43 @@ describe("scoreViaDetector（请求构造）", () => {
     expect(init.method).toBe("POST");
     expect(JSON.parse(init.body as string)).toEqual({ text: "待检测文本" });
     expect(init.signal).toBeTruthy();
+  });
+});
+
+describe("非 2xx 的现场材料（2026-09-22 补）", () => {
+  // 起因：拿别家平台的凭证打朱雀官方网关，旧代码只抛「检测器返回 401」，
+  // 网关写在响应体里的原因被整个丢掉，排查全靠猜。这几条钉的是"报错要带现场"。
+  it("非 2xx 时把响应体里的原因带进消息，而不是只报状态码", async () => {
+    stubFetch({
+      ok: false,
+      status: 400,
+      text: '{"error":{"message":"text length 128 below the 350 character minimum"}}',
+    });
+    await expect(scoreViaDetector("短", cfg())).rejects.toThrow(/350 character minimum/);
+  });
+
+  it("401/403 追加「凭证与网关不配套」提示（400 不加，避免误导）", async () => {
+    stubFetch({ ok: false, status: 401, text: '{"error":{"message":"API key not found."}}' });
+    await expect(scoreViaDetector("文本", cfg({ apiKey: "not-a-real-cred" }))).rejects.toThrow(
+      /凭证与网关不配套/,
+    );
+    stubFetch({ ok: false, status: 400, text: "bad request" });
+    await expect(scoreViaDetector("文本", cfg())).rejects.not.toThrow(/凭证与网关不配套/);
+  });
+
+  it("网关回显凭证时，消息里必须是隐去后的占位符（错误会被贴进日志）", async () => {
+    const fake = "本条仅为单元测试用凭证";
+    stubFetch({ ok: false, status: 403, text: `rejected bearer ${fake} for this zone` });
+    const msg = await scoreViaDetector("文本", cfg({ apiKey: fake })).catch((e: Error) => e.message);
+    expect(msg).not.toContain(fake);
+    expect(msg).toContain("⟨凭证已隐去⟩");
+    expect(msg).toContain("403");
+  });
+
+  it("响应体读不出来时仍然抛带状态码的错（不能因为取现场失败就把异常吞了）", async () => {
+    const spy = vi.fn(async () => ({ ok: false, status: 502, json: async () => null }));
+    globalThis.fetch = spy as unknown as typeof fetch;
+    await expect(scoreViaDetector("文本", cfg())).rejects.toThrow(/502/);
   });
 });
 

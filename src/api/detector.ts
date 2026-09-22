@@ -69,7 +69,7 @@ function failureSignal(data: Record<string, unknown>): string | null {
   return why.length ? why.join("；") : null;
 }
 
-function getPath(obj: unknown, path: string): unknown {
+export function getPath(obj: unknown, path: string): unknown {
   return path.split(".").reduce((o: unknown, k: string) => {
     // 中途断裂必须显式返回 undefined：若原样返回 null，外层 Number(null) === 0，
     // 检测器故障会被静默读成「0 分 = 完全人类」——失败方向最危险的一种。
@@ -79,6 +79,18 @@ function getPath(obj: unknown, path: string): unknown {
     }
     return undefined;
   }, obj);
+}
+
+/**
+ * 从已归档的原始响应 JSON 里复算 0~100 分。与 classifyViaDetector 共用同一条取数路径，
+ * 这样审计（scripts/zhuque-evidence.ts）从入库的 .api.json 重算时和当场送检完全一致——
+ * 改路径只改一处，否则审计会和历史入账用两套刻度。
+ */
+export function extractScore(raw: Record<string, unknown>, cfg: DetectorConfig = ZHUQUE_OFFICIAL_DETECTOR): number {
+  let n = Number(getPath(raw, cfg.scorePath));
+  if (!isFinite(n)) throw new Error(`无法从响应解析分数（路径 ${cfg.scorePath}）`);
+  if (cfg.scale === "0-1") n = n * 100;
+  return Math.max(0, Math.min(100, Math.round(n)));
 }
 
 export interface DetectorVerdict {
@@ -106,15 +118,31 @@ export async function classifyViaDetector(
     headers,
     body: JSON.stringify({ text }),
   });
-  if (!resp.ok) throw new Error(`检测器返回 ${resp.status}`);
+  if (!resp.ok) {
+    // 非 2xx 以前只抛 "检测器返回 401"，把网关明确写在响应体里的原因整个丢掉了。
+    // 2026-09-22 实测踩到：拿别家平台的凭证打这个网关，401 现场没有任何提示，
+    // 只能靠人猜到「这把不是这家的」。各家凭证都是 sk- 开头，光看形状分不出来，
+    // 所以这个分支必须自己把话说清楚。
+    let body = "";
+    try {
+      body = (await resp.text?.()) ?? "";
+    } catch {
+      /* 读不到响应体就算了：状态码本身必须报出来，不能因为取现场材料失败而整个抛不出去 */
+    }
+    const masked = cfg.apiKey ? body.split(cfg.apiKey).join("⟨凭证已隐去⟩") : body;
+    const why = masked.trim() ? `｜响应体：${masked.trim().slice(0, 200)}` : "";
+    const hint =
+      resp.status === 401 || resp.status === 403
+        ? "｜401/403 最常见的原因是凭证与网关不配套（EdgeOne Makers 的 Key 只在 EdgeOne 控制台建）"
+        : "";
+    throw new Error(`检测器返回 ${resp.status}${why}${hint}`);
+  }
   const data = await resp.json();
   if (data === null || typeof data !== "object") throw new Error("检测器返回的不是 JSON 对象");
   const fail = failureSignal(data as Record<string, unknown>);
   if (fail) throw new Error(`检测器未给出分数（${fail}）`);
-  let n = Number(getPath(data, cfg.scorePath));
-  if (!isFinite(n)) throw new Error("无法从响应解析分数");
-  if (cfg.scale === "0-1") n = n * 100;
-  return { score: Math.max(0, Math.min(100, Math.round(n))), raw: data as Record<string, unknown> };
+  const score = extractScore(data as Record<string, unknown>, cfg);
+  return { score, raw: data as Record<string, unknown> };
 }
 
 export async function scoreViaDetector(text: string, cfg: DetectorConfig): Promise<number> {
