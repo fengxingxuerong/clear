@@ -19,6 +19,7 @@ import {
   type GenreResult,
 } from "../engine/classify-genre.ts";
 import { CALIB, TRACK_ORDER, type CalibTrack, type CalibEntry } from "../engine/zhuque-calib";
+import { pickConflict, scoreConflict, type ScoreConflict } from "../engine/score-conflict";
 
 /** v3 徽章 & 建议（docs §3.7 规则 + 体裁联动 x40 提示 · v3 18 点 OLS 版） */
 function predictAdvice(
@@ -264,6 +265,32 @@ export function BenchmarkPanel({
 
   const score = after?.score;
   const cur = CALIB[track];
+
+  /**
+   * 本地代理分 vs 外部通道分的分歧（2026-09-22 外评证据，见 score-conflict.ts）。
+   * 判据只认"外部比本地更像 AI"这一个方向：本地分低报会把用户骗到安全错觉里，
+   * 反过来（本地偏严）只会让人多改一轮，没有安全后果。
+   * 朱雀手动回填框是字符串，空的或填了非数字都不参与比较（scoreConflict 自己会拒 NaN）。
+   */
+  const conflict: ScoreConflict | null = pickConflict([
+    scoreConflict(score, judgeScore, "judge"),
+    scoreConflict(score, detectorScore, "detector"),
+    scoreConflict(score, zhuqueManualScore.trim() ? Number(zhuqueManualScore) : null, "official"),
+  ]);
+
+  /** severe（本地分低报）用红，warn（只是分歧大）用黄——两级不能共用一种颜色，
+   *  否则"本地分不成立"这个最重的结论会被当成普通提示划过去 */
+  const conflictTint = conflict
+    ? {
+        flexWrap: "wrap" as const,
+        borderRadius: 10,
+        padding: "8px 10px",
+        background: conflict.level === "severe" ? "rgba(255,93,108,0.12)" : "rgba(250,204,21,0.1)",
+        border: `1px solid ${
+          conflict.level === "severe" ? "rgba(255,93,108,0.4)" : "rgba(250,204,21,0.4)"
+        }`,
+      }
+    : undefined;
   let predPct: number | null = null;
   let adv: ReturnType<typeof predictAdvice> | null = null;
   if (typeof score === "number" && !Number.isNaN(score)) {
@@ -300,6 +327,19 @@ export function BenchmarkPanel({
         <div className="bench-row" style={{ flexWrap: "wrap" }}>
           <span style={{ color: "var(--muted)", fontSize: 12 }}>
             残留痕迹：{judgeCritique.join("；")}
+          </span>
+        </div>
+      )}
+      {conflict && (
+        <div className="bench-row" style={conflictTint}>
+          <span
+            style={{
+              fontSize: 12,
+              lineHeight: 1.6,
+              color: conflict.level === "severe" ? "#ff5d6c" : "#facc15",
+            }}
+          >
+            {conflict.message}
           </span>
         </div>
       )}

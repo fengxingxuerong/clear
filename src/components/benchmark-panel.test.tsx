@@ -158,4 +158,33 @@ describe("BenchmarkPanel（对标评分面板）", () => {
     const { container } = render(<BenchmarkPanel {...base()} />);
     expect(container.textContent).toContain("对标检测两条路径");
   });
+
+  /* ---- 本地代理分 vs 外部通道分的分歧横幅（2026-09-22 外评证据） ---- */
+
+  it("本地分低报：渲染 severe 横幅，点名通道并写明别看降幅", () => {
+    // 本地 20（人写带内）/ 评判 85 → gap 65，实测形态与「政务报告 本地 2 / 外部 90」同类
+    const { container } = render(<BenchmarkPanel {...base({ judgeScore: 85 })} />);
+    expect(container.textContent).toContain("本地代理分 20");
+    expect(container.textContent).toContain("LLM 评判 85");
+    expect(container.textContent).toContain("降幅");
+  });
+
+  it("分歧不到门槛就不渲染横幅（本地 20 / 评判 25，差 5）", () => {
+    const { container } = render(<BenchmarkPanel {...base({ judgeScore: 25 })} />);
+    expect(container.textContent).not.toContain("两把尺分歧");
+    expect(container.textContent).not.toContain("低报");
+  });
+
+  it("朱雀手动回填的高分同样触发，且文案点名朱雀官方分", () => {
+    const { container } = render(<BenchmarkPanel {...base({ zhuqueManualScore: "90" })} />);
+    expect(container.textContent).toContain("朱雀官方分 90");
+  });
+
+  it("多通道同时分歧：取 severe 里 gap 最大的那条", () => {
+    const { container } = render(
+      <BenchmarkPanel {...base({ judgeScore: 85, detectorScore: 75 })} />,
+    );
+    expect(container.textContent).toContain("LLM 评判 85");
+    expect(container.textContent).not.toContain("外部检测器 75");
+  });
 });
