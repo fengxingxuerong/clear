@@ -60,7 +60,15 @@ try {
   try {
     const { execSync } = await import("node:child_process");
     head = execSync("git rev-parse --short HEAD", { cwd: root, encoding: "utf8" }).trim();
-    dirty = execSync("git status --porcelain", { cwd: root, encoding: "utf8" }).trim().length > 0;
+    // 只问"进产物的东西脏不脏"。.workbuddy/ 是 WorkBuddy 的工具数据目录：既不进产物、
+    // 也不该进提交，但它一出现就让每次打包都盖上 dirty → 「别拿去发布」变成常驻噪音，
+    // 而常驻噪音最后一定被人忽略——正是本项目一直在治的那个病。
+    // 其余未跟踪/已改动一律照旧算脏：那意味着产物里可能有不属于任何提交的代码。
+    const porcelain = execSync("git status --porcelain", { cwd: root, encoding: "utf8" })
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l && !l.includes(".workbuddy/"));
+    dirty = porcelain.length > 0;
   } catch {
     /* git 不可用时只靠指纹，不影响盖章 */
   }
