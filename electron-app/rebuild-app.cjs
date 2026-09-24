@@ -117,14 +117,18 @@ if (fs.existsSync(APP)) {
 }
 fs.mkdirSync(path.join(APP, "node_modules"), { recursive: true });
 
+// 逐包打点：本机实测 fs.cpSync 会在某个大依赖上静默卡住（27 分钟零进展，无报错），
+// 没有逐行日志就只能看到"[2] 重建 resources/app"然后干等。有了日志，卡点一眼可见。
 let copied = 0, missing = 0;
 for (const rel of pkgs) {
   const src = path.join(SRC_NM, rel);
   const dst = path.join(APP, "node_modules", rel);
   if (!fs.existsSync(src)) { missing++; continue; }
+  const t0 = Date.now();
   fs.mkdirSync(path.dirname(dst), { recursive: true });
   fs.cpSync(src, dst, { recursive: true, filter: (s) => !SKIP_PATH_RE.test(s) });
-  copied++;
+  const secs = ((Date.now() - t0) / 1000).toFixed(1);
+  console.log(`    [${++copied}/${pkgs.length}] ${rel}  ${secs}s  ${mb(sizeOf(dst))}`);
 }
 console.log(`    依赖拷贝完成：${copied} 项${missing ? `（${missing} 项源缺失，已跳过）` : ""}`);
 
