@@ -42,5 +42,16 @@ export default defineConfig({
   test: {
     include: ["src/**/*.test.ts", "src/**/*.test.tsx", "scripts/**/*.test.ts"],
     exclude: ["node_modules"],
+    // 覆盖率 75% 硬门禁（v0.9.16 硬化）：跑 --coverage 时自动断言，低于阈值测试即失败。
+    // 七轮测试补盲后的基线：Stmt 89.3 / Branch 82.3 / Func 86.0+ / Lines 90.4——
+    // 均远高于阈值；写进配置防止"某次提交悄悄拉低覆盖率"（门禁不再依赖记得手动传参）。
+    coverage: {
+      thresholds: {
+        statements: 75,
+        branches: 75,
+        functions: 75,
+        lines: 75,
+      },
+    },
   },
 });

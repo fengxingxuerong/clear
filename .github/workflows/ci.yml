@@ -32,8 +32,10 @@ jobs:
       - name: Lint (eslint)
         run: npm run lint
 
-      - name: Unit tests (vitest)
-        run: npx vitest run
+      - name: Unit tests (vitest, with 75% coverage gate)
+        # coverage 阈值硬化（v0.9.16）：vite.config.ts test.coverage.thresholds 生效，
+        # 低于 75% 即红——防止某次提交悄悄拉低覆盖率而无人察觉
+        run: npx vitest run --coverage
 
       - name: Engine regression (scan-bugs, fast)
         run: npx tsx scripts/scan-bugs.ts
