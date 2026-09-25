@@ -194,8 +194,10 @@ XML 实体还原）；导出：生成最小合法 OOXML（Word/WPS/Google Docs �
 ① `check:publish`（`audit --strict`）**仍红**——18 条凭证 screenshot 0/18、verdict 0/18，
 全是旧归档转录。与本次改动无关，属既有发布阻断项，修法需要真送检：
 `ZHUQUE_API_KEY=… npm run score:official`。
-② README 下载链接**故意没改成 v0.9.16**：线上 Release 现在还是 v0.9.15，
-改了就是点进去 404。等 v0.9.16 Release 发出来再同步那一行。
+② README 下载链接**当时故意没改成 v0.9.16**：发版前改了就是点进去 404。
+**v0.9.16 已发布**（<https://github.com/fengxingxuerong/clear/releases/tag/v0.9.16>，
+附 `QuAiWei-win32-x64-v0.9.16.zip` 196.7 MB），那一行已同步为 v0.9.16。
+发布凭证走的是本机 Git Credential Manager 里已有的 GitHub 凭据，未新增 PAT、未落盘。
 
 ## v0.9.14 更新（深度模式：编造否决 + 首轮好区收手 + 定锚与日志归属修正）
 
