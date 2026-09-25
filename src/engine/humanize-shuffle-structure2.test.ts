@@ -5,13 +5,9 @@
  *  - enforceParagraphLeadSentVariance（P3-3 段首句长强制方差）
  *  - boostBurstinessIfLow（P4-B 低 CV 节奏补药）
  *
- * ⚠️ 已知实现偏差（测试记录，不钉死为规范，修复需过标定棘轮评估）：
- *  hardNumberedEnumerationShuffle 头注释宣称支持「1. / (2) / 第三： / ① xxx」，
- *  但 NUM 正则实际只干净匹配「二、」式中文编号——
- *    · "1. xxx"  → NUM 只吃 "1"，replace 残留 ". xxx"
- *    · "(2) xxx" → 只吃 "(2"，残留 ") xxx"
- *    · "第三：xxx" / "① xxx" → 完全不匹配（"第"不在前缀白名单、圈号后要求标点）
- *  修复会改变引擎输出字节 → 触发 aiScore x 轴漂移（README 棘轮警告），须统一评估。
+ * v0.9.16 编号格式偏差已修复（原「1.」replace 残留标点、「第三：」「①」不匹配），
+ * 相关用例已改为断言修复后行为；**修复动了引擎输出字节**，test:calib 的 x 轴漂移
+ * 自检如变红属预期信号，需按 README 流程拿新官方点位重拟合四条体裁线。
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -107,10 +103,20 @@ describe("hardNumberedEnumerationShuffle（P3-2 硬编号拆毁）", () => {
     expect(out[0]).toContain("开头一句话。");
   });
 
-  it("已知偏差记录：NUM 不匹配「第三：」与「① 」（与头注释宣称的格式集不符）", () => {
-    const sents = ["第三：成本很低。", "① 良率不错。"];
-    // 若未来修复此偏差，本用例会红——请同步评估输出字节变化对标定棘轮的影响
-    expect(hardNumberedEnumerationShuffle(sents, rngMid, 0.9)).toEqual(sents);
+  it("修复后：阿拉伯编号「1.」replace 吃干净前缀（不留 . 残留）", () => {
+    const sents = ["开头一句话。", "1. 良率不错。", "2. 成本很低。"];
+    const out = hardNumberedEnumerationShuffle(sents, rngMid, 0.9);
+    expect(out.join("")).not.toMatch(/\.\s*良率|\.\s*成本/); // 编号前缀不再残留
+    expect(out.join("")).toContain("良率不错");
+  });
+
+  it("修复后：「第三：」与「① 」均被识别为编号列举", () => {
+    const sents = ["第三：成本很低。", "① 良率不错。", "① 交付很快。"];
+    const out = hardNumberedEnumerationShuffle(sents, rngMid, 0.9);
+    // 三条编号全部命中（≥2 即触发），不再原样返回
+    expect(out).not.toEqual(sents);
+    expect(out.join("")).toContain("成本很低");
+    expect(out.join("")).toContain("良率不错");
   });
 });
 
@@ -183,18 +189,15 @@ describe("boostBurstinessIfLow（P4-B 节奏补药）", () => {
     expect(out).toContain("后面的内容继续说完这段话就行");
   });
 
-  it("场景块段落跳过：多段文本中【场景…】段不注入语气锚（单块无场景保护）", () => {
-    // 注意：场景保护只在多段分支（text 含 \n\n）生效；单块场景文本走 InBlock 无此判定
+  it("场景块保护修复后：单块场景文本同样跳过语气锚注入", () => {
+    // v0.9.16 修复：场景判定不再只在多段分支生效，单块【场景…】文本也跳过
     const scene =
       "【场景：面馆黄昏】\n张三说了一句很长很长的台词来撑起这一段的长度和内容。李四也回了一句很长很长的台词来保持均匀的节奏感。";
-    const body =
-      "正文第一段写了很多内容在这里面。正文还有第二句也是差不多的长度和节奏感。第三句继续保持差不多的长度节奏。第四句依然保持差不多的长度节奏。";
-    const out = boostBurstinessIfLow(`${scene}\n\n${body}`, rngMid, 0.99, 12);
-    const scenePart = out.split("\n\n")[0];
-    const hasAnchorInScene = scenePart
+    const out = boostBurstinessIfLow(scene, rngMid, 0.99, 12);
+    const hasAnchor = out
       .split(/(?<=[。！？])/)
       .some((s) => isStandaloneAnchor(s.trim()));
-    expect(hasAnchorInScene).toBe(false);
+    expect(hasAnchor).toBe(false);
     expect(out).toContain("【场景：面馆黄昏】");
   });
 });

@@ -1019,7 +1019,11 @@ export function hardNumberedEnumerationShuffle(
   intensity: number,
 ): string[] {
   if (intensity < 0.7 || sentences.length < 2) return sentences;
-  const NUM = /^[\s(（]*\s*(?:\d+|[①②③④⑤⑥⑦⑧⑨⑩一二三四五六七八九十]+[.、:：)）]\s*)/;
+  // v0.9.16 修复（编号格式偏差）：旧正则 `\d+` 分支不带标点后缀，「1.」replace 残留
+  // 「. xxx」、「第三：」的「第」不在前缀白名单、「① 」圈号后要求标点——三处都不吃干净。
+  // 现统一为四分支：阿拉伯数字+标点 / 圈号（允许空格）/ 「第」+中文数字+标点 / 中文数字+标点。
+  const NUM =
+    /^[\s(（]*\s*(?:\d+[.、:：)）]\s*|[①②③④⑤⑥⑦⑧⑨⑩]\s*|第?[一二三四五六七八九十]+[.、:：)）]\s*)/;
   const hits: number[] = [];
   for (let i = 0; i < sentences.length; i++) {
     if (NUM.test(sentences[i].trim())) hits.push(i);
@@ -1314,8 +1318,12 @@ export function boostBurstinessIfLow(
   // v0.9-D：含剧本【场景/人物/背景…】块头行的段落跳过极短锚注入（块头不得被塞"啧。呣。"）
   const isScenePara = (p: string) => p.split("\n").some((ln) => isSceneBlockLine(ln));
   // P7-F 段落感知：同 clampAvgSentenceLenUnder25，避免 splitSentences→join 合并段落
+  // v0.9.16 修复（单块场景保护）：旧实现场景判定只在多段分支生效——单块场景文本
+  // （无空行分隔的【场景…】行）会直接进 InBlock 被塞「啧。呣。」。现在单块同样先判场景。
   const result = !text.includes("\n\n")
-    ? boostBurstinessInBlock(text, rng, targetCv, maxCuts)
+    ? isScenePara(text)
+      ? text
+      : boostBurstinessInBlock(text, rng, targetCv, maxCuts)
     : text
         .split(/\n\n+/)
         .map((p) => (isScenePara(p) ? p : boostBurstinessInBlock(p, rng, targetCv, maxCuts)))
