@@ -1,4 +1,22 @@
-# Key 轮换状态备忘（2026-09-05｜泄露面复测更新 2026-09-19）
+# Key 轮换状态备忘（2026-09-05｜泄露面复测更新 2026-09-19｜历史清洗处置 2026-09-25）
+
+## 2026-09-25 处置记录：历史明文已清洗 + 仓库已推送公开 GitHub
+
+- **处置动作**：`git filter-repo --replace-text/--replace-message`（git-filter-repo 2.47.0）把历史中
+  那 3 条 Key 字面量全部替换为 `***REMOVED***`（blob 与提交消息双通道）；重写前打了全历史
+  bundle 备份到 `D:\projects-backup\quaiwei-pre-filter-bundle-20260925.bundle`（36M，
+  **内含旧 Key 明文，仅限本机留存，严禁外发/上传**）。
+- **清洗后验证**：全历史 blob 重扫 `sk-[A-Za-z0-9]{16,}` = **0 条**；提交消息 0 条；当前跟踪内容
+  `git grep` 0 命中；tags（v0.7.0 / v0.9.13）保留；vitest 836 全绿。历史 commit hash 已全部改变
+  （HEAD f03bcbd 起），与旧 bundle、旧 tar 备份的 hash 失配属预期。
+- **已推送**：`https://github.com/fengxingxuerong/clear`（公开仓库，master + 2 tags）。
+  推上去的历史已不含任何明文 Key。
+- **⚠️ 本处置 ≠ 轮换**：那 3 条 Key **仍然有效**，且仍明文活在另外两个项目（`prompt-master/.env`
+  及其 `.bak` 副本、`sqli-scanner/server/.env.ai`）与 `D:\deep\agent-audit-reports\` 的渲染报告里。
+  下面的 runbook 与轮换建议**依然成立**，只是"push 仓库"这条触发条件已因历史清洗而解除；
+  "外发 bundle/旧 tar 备份/审计报告"仍是硬触发条件。
+- gitignore 同步补强：`.env` / `.env.*`（保留 `.env.example` 白名单）与 `.workbuddy/` 入 ignore；
+  Key 的唯一存放形态 = `SENSENOVA_KEYS` 环境变量 + `scripts/.sensenova-keys`（本地非托管）。
 
 ## 结论
 
