@@ -20,11 +20,12 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
-      - name: Install dependencies (without optional PPL deps)
-        run: npm ci --no-fund --no-audit --omit=optional
-
-      - name: Install optional deps for build only
-        run: npm install @huggingface/transformers --no-save --no-fund --no-audit
+      - name: Install dependencies
+        # v0.9.16：不再 --omit=optional——省流装法会把 rollup 的 win32 平台二进制
+        # （optional 依赖）一起省掉，vitest 直接起不来（npm/cli#4828 的经典坑）；
+        # 此前靠"补装 transformers"的副作用顺带修复，纯属侥幸。改为全量安装，
+        # optional 类型缺失的兜底见 src/types/optional-deps.d.ts（用户侧保险）。
+        run: npm ci --no-fund --no-audit
 
       - name: Type check (tsc)
         run: npx tsc -b
