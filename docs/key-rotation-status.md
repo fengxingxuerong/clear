@@ -18,6 +18,39 @@
 - gitignore 同步补强：`.env` / `.env.*`（保留 `.env.example` 白名单）与 `.workbuddy/` 入 ignore；
   Key 的唯一存放形态 = `SENSENOVA_KEYS` 环境变量 + `scripts/.sensenova-keys`（本地非托管）。
 
+## 2026-09-25 泄露面全盘盘点（脚本扫描，掩码输出）与轮换操作手册
+
+**精确落点**（3 条 Key 全部仍有效，逐一扫描确认）：
+
+| 落点 | 位置 | Key |
+|---|---|---|
+| prompt-master/.env | L8（单 Key 变量）、L55（Key 池并列 3 条）、L65 | 全部 3 条 |
+| sqli-scanner/server/.env.ai | L2/L3/L4 | 全部 3 条 |
+| D:\deep\agent-audit-reports\data\2026-08-15.json | L1 | WMkN 尾号 1 条 |
+| D:\deep\agent-audit-reports\index.html | L1765 | WMkN 尾号 1 条 |
+
+（`.env.bak` 已不存在；ox 下两旧副本归档后随目录一并处置，见下。）
+
+**轮换操作手册（顺序固定）**：
+
+1. SenseNova 控制台新建 3 条新 Key（旧 Key 先不删）。
+2. 更新 `D:\projects\quaiwei\scripts\.sensenova-keys`（3 行全换新），
+   同步更新 `D:\projects\prompt-master\.env` L8/L55/L65、
+   `D:\projects\sqli-scanner\server\.env.ai` L2-L4。
+3. 两个项目各跑一次最小真实调用确认新 Key 生效。
+4. 控制台删除 3 条旧 Key（此时才失效）。
+5. 清洗审计报告：`data/2026-08-15.json` 与 `index.html` 里的 WMkN 替换为 `***REMOVED***`
+   （或整目录归档到备份盘后删除原位）。
+6. 重跑全盘扫描确认 0 命中（扫描脚本模式见本文件 git 历史 `_key-sweep-once.cjs`）。
+
+**ox 旧副本处置（2026-09-25 归档完成，待目录删除）**：
+
+- `D:\ox\quaiwei`（v0.8 补丁快照）→ 已归档 `D:\projects-backup\ox-quaiwei-snapshot-v0.8-20260925.tar.gz`（151K）
+- `D:\ox\quaiwei-verify`（v0.7 完整副本，含 .git 历史 290 对象与未提交现场；node_modules 为坏符号链）
+  → 已归档 `D:\projects-backup\ox-quaiwei-verify-v0.7-src-git-20260925.tar.gz`（597K）
+- 两目录的 electron-app/electron-dist/node_modules 等可重建产物**未归档**（928M，重建即可）。
+- 目录本体删除需手动（归档已备，可放心删）。
+
 ## 结论
 
 - ~~仓库**无远程 remote**（`git remote` 为空）→ 3 个旧 Key 的泄露面 = **仅本机 git 历史**，外泄风险低~~
