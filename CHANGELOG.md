@@ -168,6 +168,35 @@ XML 实体还原）；导出：生成最小合法 OOXML（Word/WPS/Google Docs �
 11 条新测试含 round-trip 自证与 zip 结构/CRC 校验；顺手修掉 zip reader 的 EOCD
 条目数偏移读错（+6 应为 +8，自产自销测试抓的）。
 
+### v0.9.16 追加（版本落定：三处版本号对齐 + 产物重打）
+
+`.docx` 那次改动（`6df3519`）合进来时**没有 bump 版本号**：根 `package.json` 与
+`electron-app/package.json` 都还停在 0.9.15，而这里的 CHANGELOG 已经写了 v0.9.16。
+`verify-pruned` 的「版本一致」一节比对的是产物内 `resources/app/package.json` 与仓库根版本——
+**两边一起停在旧值时它照样绿**，所以这道检查拦不住"功能进了、版本号没跟上"。
+现已同步到 **0.9.16**（提交 `bc914ca`，含 README 标题口径修正：此前仍写 v0.9.14）。
+
+**顺序上的一次返工（值得记）**：先重打产物、后提交，[4] 新鲜度那节就盖成
+「⚠️ 盖章时工作区有未提交改动：这份产物不对应任何一次提交，别拿去发布」——
+等于白跑一轮 rebuild。正确顺序是**先提交、再 build + repack**，
+现在章是 `HEAD=bc914ca` 且没有 dirty 警告。
+
+**门禁（本次全量复跑，均 exit 0）**：eslint 0；`vitest` **966 passed（55 文件）**——
+比 v0.9.15 末尾记的 955 多 11 条，就是上面 docx-io 那 11 条（此前只写了"新增 11 条"、
+总数没回写，这里按实测补上）；`scan-bugs` 0；`regression-12samples` 0
+（D 10/10、E 8/8、刻度守卫 ✅，D1 分离度实测 33−7=26 ≥ 20）；
+`verify-quality` / `calib-sanity` / `evidence audit` / `check-ledger` 均 0。
+
+**产物**：`resources/app` **183.5 MB** / 整包 **485.3 MB**；`verify-pruned` 五节全绿、退出 0，
+「版本一致：resources/app/package.json = **0.9.16**」。
+
+**待办（本版未做，原因如实写）**：
+① `check:publish`（`audit --strict`）**仍红**——18 条凭证 screenshot 0/18、verdict 0/18，
+全是旧归档转录。与本次改动无关，属既有发布阻断项，修法需要真送检：
+`ZHUQUE_API_KEY=… npm run score:official`。
+② README 下载链接**故意没改成 v0.9.16**：线上 Release 现在还是 v0.9.15，
+改了就是点进去 404。等 v0.9.16 Release 发出来再同步那一行。
+
 ## v0.9.14 更新（深度模式：编造否决 + 首轮好区收手 + 定锚与日志归属修正）
 
 **背景**：v0.9.13 之后拿真网关跑了四篇（s1 议论文 / s2 种草文 / s3 技术科普 / s4 财报短讯，
