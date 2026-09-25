@@ -79,6 +79,52 @@ Key 优先级：`--api-key` > `QUAIWEI_API_KEY` > `OPENAI_API_KEY` > `loadPreset
 （ReferenceError: async is not defined）。已改为正则匹配 `(async\s+)?function main`，
 并把起点前移到 `const USAGE`（parseArgs 现在引用这个模块级常量）。
 
+### v0.9.15 追加二（测试补盲四连：836 → 919；仓库首次公开上线）
+
+本批没有引擎行为改动，全是测试与工程安全。起因是一次全栈体检 + 仓库首次推送公开 GitHub
+（`fengxingxuerong/clear`，master + tags）。
+
+**推送前的历史清洗（安全前置）**：全历史 blob 扫出 3 条仍在用的 SenseNova 明文 Key
+（34792ea 起的历史泄露，详见 `docs/key-rotation-status.md`），用 `git filter-repo`
+把 blob 与提交消息里的字面量统一替换为 `***REMOVED***`；重写前打了全历史 bundle 备份。
+清洗后复扫：blob / 提交消息 / 跟踪内容三路 `sk-` 形态 **0 命中**，tags 保留，hash 全变属预期。
+**注意：这 3 条 Key 仍然有效**（还活在另外两个项目的 `.env` 与审计报告里），轮换 runbook 依旧成立。
+gitignore 同步补 `.env` / `.env.*`（保留 `.env.example` 白名单）与 `.workbuddy/`。
+
+**四轮测试补盲（836 → 879 → 892 → 912 → 919）**：
+
+- **第一轮（ppl 双宿主 + 结构级行为锁，+38）**：`scorer-core.ts` 补 `maskGroups` 与
+  `maskedMeanNll`（手算 log-softmax 对拍 / 多目标均值 / 大 logits 数值稳定）——语句覆盖
+  73.7%→**100%**；`ppl-client.ts` 新建测试（mock Electron 桥与 Worker：透传/抛错回落/
+  桥不完整回落、握手/error 事件/progress 转发/构造失败可重试、窗结果过滤聚合）——
+  77.5%→**97.5%**；`humanize-shuffle.ts` 锁 breakSummaryTail / injectSelfQA /
+  dismantleExpositionTrilogy / classifyExpositionScore / preDetectHumanFingerprint
+  五个此前 0 测试的结构级函数——74.3%→77.0%。
+- **第二轮（公共 API 行为锁，+13）**：`crossChunkCleanup`（垫词去重 / 标点封顶 /
+  句后连接词硬剥离 / CJK 空格 aggressive vs 打字空格尊重）与 `mechanicalShuffle`
+  （空文本 / 同 seed 确定性 / 内容守恒 ≥80% / humanHand 钳制 / dialogue 场景块头保真 /
+  intensity 0 轻管线）——77.0%→79.5%。
+- **第三轮（结构层编排，+20）**：`structuralShuffleParagraph`（朱雀 P3 触发词清除 + 内容守恒 +
+  总分总拆段）、`hardNumberedEnumerationShuffle`（三条编号改造路径 + 概率分支）、
+  `enforceParagraphLeadSentVariance`（prependShort / chopLead）、
+  `boostBurstinessIfLow`（锚封顶 CAP=2 / 已有锚不新增 / 相邻复读折叠 / 场景块保护）——
+  79.5%→**88.7%**。
+- **第四轮（P3-4 编造红线，+7）**：`injectFirstPersonAnchorPoints` 专项——数量契约
+  `max(1, floor(chars/300))`、DATA_MARK 优先槽位、**锚点句必须全为第一人称主观看法池成员
+  且不得声称具体经历/资历/内部资料**（把「严禁编造铁律」在此函数上钉成测试）。
+
+**覆盖率总账**：全局语句 84.7→**87.9%**、分支 78.1→**80.9%**、行 86.0→**88.9%**；
+`check:release` 六段式门禁每轮复跑均 **exit 0**。
+
+**顺手记录的两个已知偏差（未修，原因见下）**：
+① `hardNumberedEnumerationShuffle` 头注释宣称支持「1. / (2) / 第三： / ①」四种编号，
+NUM 正则实际只干净匹配「二、」式——「1.」replace 残留标点、「第三：」「①」完全不匹配；
+② `boostBurstinessIfLow` 的场景块保护只在多段分支生效，单块场景文本（无空行分隔）
+会被注入语气锚（真实剧本走多段格式不受影响）。
+**两者都动了就会改引擎输出字节 → 触发 aiScore x 轴漂移**（漂移棘轮已压满 6/18、Δmax 35/35），
+修复必须与「新官方点位重拟合四条体裁线」一并评估，不许单点糊过去。偏差现状已在测试里
+用注释 + 用例钉住，未来修复时测试会红提醒同步评估。
+
 ## v0.9.14 更新（深度模式：编造否决 + 首轮好区收手 + 定锚与日志归属修正）
 
 **背景**：v0.9.13 之后拿真网关跑了四篇（s1 议论文 / s2 种草文 / s3 技术科普 / s4 财报短讯，
