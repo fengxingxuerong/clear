@@ -3,6 +3,14 @@ node_modules/
 node_modules.zip
 electron-app/node_modules/.pnpm-store/
 
+# 环境变量文件（密钥一律走 env / 本地非托管文件，不进仓库）
+.env
+.env.*
+!.env.example
+
+# AI 工具沙箱数据目录
+.workbuddy/
+
 # 构建产物
 dist/
 electron-dist/
