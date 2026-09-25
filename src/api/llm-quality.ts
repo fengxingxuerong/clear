@@ -517,11 +517,17 @@ export async function processCandidate(
         }
       }
     }
-  } catch {
+  } catch (e) {
     // 质检通道故障不能让整个流程停摆：放行并记为通过（靠提示词铁律兜底）。
     // v0.8.6 可见化：放行原因写入 issues——qcPassed 数组下游只看 pass 布尔，
     // 若不落痕迹，API 不稳时质检形同虚设且用户毫无感知
-    qc = { pass: true, issues: ["质检通道异常，本轮放行（未实际质检）"] };
+    // v0.9.16：放行原因补记错误摘要（截断 120 字）——此前 catch {} 把根因吞掉，
+    // "质检通道异常"无法区分是配额预算耗尽还是网关故障，排障只能盲猜
+    const reason = e instanceof Error ? e.message : String(e);
+    qc = {
+      pass: true,
+      issues: [`质检通道异常，本轮放行（未实际质检）：${reason.slice(0, 120)}`],
+    };
   }
   if (!qc.pass) return { shuffled: draft, qc, score: null, critique: qc.issues };
   // v0.9.3 合议庭评判：配置了 ≥2 席时走多网关痕迹交叉（≥2 票定罪 + 加权中位分）。
