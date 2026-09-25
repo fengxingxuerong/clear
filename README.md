@@ -45,7 +45,7 @@
     详见 `docs/external-judge-findings.md`。判据与阈值来源见 `src/engine/score-conflict.ts`。
 - **文件导入 / 导出（v0.9.15）**：界面上「导入」直接读 `.txt`/`.md`（≤2MB），「导出」把结果下载为 `.txt`。
   Word/公式等富文本格式保留仍未做（需引入 docx 解析），见下方竞品表。
-- **跨端**：Web 版任意设备浏览器打开即用（含手机，已做响应式布局）；桌面版走 Electron（已打包 Windows 安装包），macOS 包可在对应环境构建。
+- **跨端**：Web 版任意设备浏览器打开即用（含手机，已做响应式布局）；桌面版走 Electron（Windows 免安装包，解压双击 `QuAiWei.exe` 即用），macOS 包可在对应环境构建。
 
 ---
 
