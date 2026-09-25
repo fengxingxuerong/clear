@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   aggregateText,
   aggregateWindow,
+  maskGroups,
+  maskedMeanNll,
   nllToPerplexity,
   planWindows,
   selectTargets,
@@ -207,5 +209,89 @@ describe("toNumberList（张量归一）", () => {
 
   it("既无 tolist 也无 data 且非数组时返回 null", () => {
     expect(toNumberList({ foo: 1 })).toBeNull();
+  });
+});
+
+describe("maskGroups（打分目标分组轮转）", () => {
+  it("6 项分 3 组：按序轮转，相邻项落不同组", () => {
+    const items = ["a", "b", "c", "d", "e", "f"];
+    const groups = maskGroups(items, 3);
+    expect(groups).toHaveLength(3);
+    expect(groups[0]).toEqual(["a", "d"]);
+    expect(groups[1]).toEqual(["b", "e"]);
+    expect(groups[2]).toEqual(["c", "f"]);
+  });
+
+  it("10 项 5 组：组数与 MASK_GROUPS 默认一致时相邻 token 永不同组", () => {
+    const groups = maskGroups([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], 5);
+    expect(groups).toHaveLength(5);
+    for (let i = 0; i + 1 < 10; i++) {
+      const gi = groups.findIndex((g) => g.includes(i));
+      const gj = groups.findIndex((g) => g.includes(i + 1));
+      expect(gi).not.toBe(gj);
+    }
+  });
+
+  it("groups=1 时全部归一组", () => {
+    expect(maskGroups([1, 2, 3], 1)).toEqual([[1, 2, 3]]);
+  });
+
+  it("groups 非正数向下取整后兜底为 1 组", () => {
+    expect(maskGroups([1, 2], 0)).toEqual([[1, 2]]);
+    expect(maskGroups([1, 2], -3)).toEqual([[1, 2]]);
+  });
+
+  it("groups=2.7 向下取整为 2 组", () => {
+    expect(maskGroups([1, 2, 3], 2.7)).toEqual([[1, 3], [2]]);
+  });
+
+  it("空输入返回 n 个空组", () => {
+    expect(maskGroups([], 3)).toEqual([[], [], []]);
+  });
+});
+
+describe("maskedMeanNll（log-softmax 均值负对数似然）", () => {
+  it("单目标：与手算 log-softmax NLL 一致", () => {
+    // vocabSize=3，pos=0 行 logits=[2,1,0]，原词 id=1
+    // max=2；logSumExp=ln(exp(0)+exp(-1)+exp(-2))≈0.4076
+    // NLL = -(1 - (2 + 0.4076)) ≈ 1.4076
+    const nll = maskedMeanNll([2, 1, 0], 1, 3, [{ pos: 0, origId: 1 }]);
+    expect(nll).toBeCloseTo(1.4076, 3);
+  });
+
+  it("多目标取均值", () => {
+    // 目标 1：pos=0 行 [2,1,0]，原词 id=1 → ≈1.4076
+    // 目标 2：pos=1 行 [0,1,2]，原词 id=2 → max=2，同 logSumExp≈0.4076 → -(2-2.4076)=0.4076
+    // 均值 ≈ 0.9076
+    const nll = maskedMeanNll(
+      [2, 1, 0, 0, 1, 2],
+      2,
+      3,
+      [
+        { pos: 0, origId: 1 },
+        { pos: 1, origId: 2 },
+      ],
+    );
+    expect(nll).toBeCloseTo(0.9076, 3);
+  });
+
+  it("空 targets 返回 NaN（调用方应丢弃该窗）", () => {
+    expect(maskedMeanNll([1, 2, 3], 1, 3, [])).toBeNaN();
+  });
+
+  it("数值稳定：logits 全 1000 时结果为 ln(vocabSize)，不产生 Infinity/NaN", () => {
+    const nll = maskedMeanNll(
+      [1000, 1000, 1000, 1000, 1000],
+      1,
+      5,
+      [{ pos: 0, origId: 0 }],
+    );
+    expect(nll).toBeCloseTo(Math.log(5), 6);
+  });
+
+  it("原词概率远高于其它时 NLL 接近 0", () => {
+    // pos=0 行 [10, 0, 0, 0]，原词 id=0 → softmax 几乎全在原词 → NLL≈0
+    const nll = maskedMeanNll([10, 0, 0, 0], 1, 4, [{ pos: 0, origId: 0 }]);
+    expect(nll).toBeLessThan(0.001);
   });
 });
