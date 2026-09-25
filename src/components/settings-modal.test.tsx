@@ -22,6 +22,7 @@ function base(overrides: Partial<Parameters<typeof SettingsModal>[0]> = {}) {
     zhuqueMode: false,
     pplEnabled: true,
     local: { ...DEFAULT_LOCAL },
+    protectedTerms: "",
     onClose: vi.fn(),
     onSave: vi.fn(),
     ...overrides,
@@ -140,6 +141,21 @@ describe("SettingsModal（设置弹窗）", () => {
     expect(det.url).toBe("https://ai-gateway.edgeone.link/v1/providers/zhuque-text/classify");
     expect(det.scorePath).toBe("softmax_confidence");
     expect(det.scale).toBe("0-1");
+  });
+
+  // v0.9.15：setProtectedTerms 此前只有测试在调，UI 零入口。这条钉住「编辑 → 保存上抛」，
+  // 防止哪天 prop 被摘掉又变回死能力。
+  it("自定义保护术语：编辑后随保存上抛第 6 个参数", () => {
+    const onSave = vi.fn();
+    // 按 class 取：placeholder 是多行文本，getByPlaceholderText 的默认 normalizer
+    // 会把换行压成空格，匹配不上
+    const { container, getByText } = render(<SettingsModal {...base({ onSave })} />);
+    const ta = container.querySelector("textarea.terms-input") as HTMLTextAreaElement;
+    expect(ta).toBeTruthy();
+    fireEvent.change(ta, { target: { value: "量子跃迁式改革\n张三丰算法" } });
+    fireEvent.click(getByText("保存"));
+    const terms = onSave.mock.calls[0][5] as string;
+    expect(terms).toBe("量子跃迁式改革\n张三丰算法");
   });
 
   it("点遮罩触发 onClose；点弹窗内部不触发", () => {

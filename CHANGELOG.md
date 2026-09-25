@@ -48,6 +48,37 @@ LLM 评判 / 外部检测器 / 朱雀手动回填框（去味后若配了检测�
   **静默卡住**（27 分钟零进展、无报错），此前只能看到「[2] 重建 resources/app」干等；
   有了日志卡点一眼可见。修好后同一次重跑 **1 分 1 秒**跑完
 
+### v0.9.15 追加（暴露链：三件「引擎有、用户拿不到」的能力接上线）
+
+上面那节是呈现层。同一版里另做了三项纯接线改动，起因是一次优化空间勘查——
+查出三个「README/CHANGELOG 里已经宣称、代码里却根本没有入口」的洞。
+
+**1) CLI 接上 LLM 通道（`scripts/humanize-cli.ts`）**
+此前 CLI 只 import `humanize` + `detectAI`，`src/api` 那 28 个模块（深度闭环 / 交叉评判 /
+定向修订 / 长文分块）它一个都够不到——批量这个卖点等于只兑现了本地引擎那一半。
+现在 `--api` 走 UI 同款的 `runHumanize`，回退逻辑一并继承；新增
+`--base-url/--model/--api-key/--judge-model/--alt-model/--no-deep/--contest/--max-calls/--max-wait/--strict/--persona/--report`，
+`--seed` 也不再硬编码（此前写死 20260905，批量结果无法与 UI 对齐复现）。
+Key 优先级：`--api-key` > `QUAIWEI_API_KEY` > `OPENAI_API_KEY` > `loadPresetKeys()`。
+两个 CLI 专属的坑已拦在入口：baseUrl 以 `/` 开头（同源代理，CLI 无代理必挂）、拿不到 Key。
+
+**2) UI 有文件导入/导出了（`App.tsx`）**
+此前只有「粘贴进 → 复制出」，改一篇三千字的东西要先从编辑器复制、改完再粘回去。
+新增「导入」（.txt/.md，≤2MB，FileReader 读文本）与「导出」（Blob 下载 .txt，带日期时间戳）。
+**.docx 仍未做**——需要引入解析库，README 竞品表里那一行继续标 ⏳。
+
+**3) 自定义保护术语有入口了（`term-protect.ts` + `SettingsModal`）**
+`setProtectedTerms()` 从 v0.8.6 起就只有 `term-protect.test.ts` 在调，而 `CHANGELOG` 明写
+「用户可通过 setProtectedTerms() 扩充自定义术语」——承诺没兑现。现在设置面板有
+「自定义保护术语」输入框（换行或逗号分隔，单条 ≥2 字），存 localStorage，挂载时与保存时
+各注入一次引擎（保护集是模块级全局，不注入刷新就只剩内置 58 项）。
+
+**测试**：`vitest` **830 → 836**（新增 6 条：store 术语持久化 3 + 设置面板上抛 1 + CLI 参数 2）。
+**踩到的坑**：把 CLI 的 `main` 改成 `async` 后，`scripts/scripts-logic.test.ts` 挂了——
+它用 `indexOf("function main")` 切源码片段塞进 vm 沙箱，切片尾部残留裸 `async`
+（ReferenceError: async is not defined）。已改为正则匹配 `(async\s+)?function main`，
+并把起点前移到 `const USAGE`（parseArgs 现在引用这个模块级常量）。
+
 ## v0.9.14 更新（深度模式：编造否决 + 首轮好区收手 + 定锚与日志归属修正）
 
 **背景**：v0.9.13 之后拿真网关跑了四篇（s1 议论文 / s2 种草文 / s3 技术科普 / s4 财报短讯，

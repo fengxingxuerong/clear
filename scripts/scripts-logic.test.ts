@@ -49,14 +49,38 @@ describe("词表卫生（check-vocab-hygiene 规则固化）", () => {
 import { readFileSync } from "fs";
 import { transformSync } from "esbuild";
 
+/** parseArgs 的返回形状（只列断言用到的字段，够用即可） */
+interface CliArgs {
+  input: string;
+  out: string;
+  intensity: number;
+  zhuque: boolean;
+  style: string;
+  suffix: string;
+  seed: number;
+  api: boolean;
+  model: string;
+  judgeModel: string;
+  deep: boolean;
+  contest: number;
+}
+
 function loadCliFns(): {
-  parseArgs: (argv: string[]) => { input: string; out: string; intensity: number; zhuque: boolean; style: string; suffix: string };
+  parseArgs: (argv: string[]) => CliArgs;
   collectTxtFiles: (input: string) => string[];
 } {
   const src = readFileSync(path.resolve(__dirname, "humanize-cli.ts"), "utf-8");
-  // 只保留纯函数段：parseArgs + collectTxtFiles（main 依赖终端 I/O，interface 是 TS 类型）
-  const start = src.indexOf("function parseArgs");
-  const end = src.indexOf("function main");
+  // 只保留纯函数段：USAGE + parseArgs + buildApiConfig + collectTxtFiles
+  // （main 依赖终端 I/O，interface 是 TS 类型）
+  //
+  // 起点必须包含 USAGE：v0.9.15 起 parseArgs 引用了这个模块级常量，只从
+  // "function parseArgs" 切会让它在沙箱里变成未定义标识符。
+  const start = src.indexOf("const USAGE");
+  // 终点按正则匹配「行首的 async function main / function main」：
+  // 直接 indexOf("function main") 会把 `async` 留在切片尾部，转译后成为裸标识符
+  // → ReferenceError: async is not defined（v0.9.15 把 main 改成 async 时踩到）。
+  const m = /(?:async\s+)?function main/.exec(src);
+  const end = m ? m.index : src.length;
   const body = src.slice(start, end).replace(/^import .*$/gm, "");
   const js = transformSync(body, { loader: "ts", format: "cjs" }).code;
   const sandbox: { fs: typeof fs; path: typeof path; module: { exports: Record<string, unknown> } } = {
@@ -100,6 +124,28 @@ describe("humanize-cli parseArgs", () => {
   it("强度越界夹取 0~1", () => {
     expect(parseArgs(base(["./in", "--intensity", "5"])).intensity).toBe(1);
     expect(parseArgs(base(["./in", "--intensity", "-1"])).intensity).toBe(0);
+  });
+
+  // v0.9.15：seed 此前硬编码 20260905 不可改，批量结果无法与 UI 对齐复现
+  it("--seed 可指定，默认仍是 20260905（向后兼容）", () => {
+    expect(parseArgs(base(["./in"])).seed).toBe(20260905);
+    expect(parseArgs(base(["./in", "--seed", "42"])).seed).toBe(42);
+  });
+
+  // v0.9.15：LLM 通道接线
+  it("--api 系列参数解析（默认关闭深度、单候选）", () => {
+    const a = parseArgs(base(["./in"]));
+    expect(a.api).toBe(false);
+    expect(a.deep).toBe(true);
+    expect(a.contest).toBe(1);
+    const b = parseArgs(
+      base(["./in", "--api", "--model", "m1", "--judge-model", "j1", "--no-deep", "--contest", "3"]),
+    );
+    expect(b.api).toBe(true);
+    expect(b.model).toBe("m1");
+    expect(b.judgeModel).toBe("j1");
+    expect(b.deep).toBe(false);
+    expect(b.contest).toBe(3);
   });
 });
 

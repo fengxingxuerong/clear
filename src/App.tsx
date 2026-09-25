@@ -45,8 +45,15 @@ import {
   saveFuseWeight,
   loadLocal,
   saveLocal,
+  loadProtectedTerms,
+  saveProtectedTerms,
+  parseProtectedTerms,
+  loadDraft,
+  saveDraft,
+  clearDraft,
   type LocalSettings,
 } from "./store";
+import { setProtectedTerms } from "./engine/term-protect";
 import {
   detectZhuque,
   ZHUQUE_URL,
@@ -112,8 +119,11 @@ export default function App({
   initialApi?: ApiConfig;
   initialDetector?: DetectorConfig;
 }) {
-  const [input, setInput] = useState("");
-  const [output, setOutput] = useState("");
+  // 草稿恢复：刷新/误关标签页后把上次编辑中的内容拿回来（v0.9.15）。
+  // 只取一次并存在 ref 里——若用 state，恢复提示会被后续 effect 反复触发。
+  const restoredDraft = useRef<ReturnType<typeof loadDraft>>(loadDraft());
+  const [input, setInput] = useState(() => restoredDraft.current?.input ?? "");
+  const [output, setOutput] = useState(() => restoredDraft.current?.output ?? "");
   const [intensity, setIntensity] = useState<number>(loadIntensity());
   const [zhuqueMode, setZhuqueMode] = useState<boolean>(loadZhuqueMode());
   const [genreOverride, setGenreOverride] = useState<
@@ -166,6 +176,9 @@ export default function App({
   const [labPaste, setLabPaste] = useState<Record<string, string>>({});
   const [labMsg, setLabMsg] = useState("");
   const [local, setLocal] = useState<LocalSettings>(() => loadLocal());
+  // 自定义保护术语（原文）。term-protect 的保护集是模块级全局，挂载时注入一次；
+  // 设置里改完由 handleSaveSettings 再注入。
+  const [protectedTermsRaw, setProtectedTermsRaw] = useState<string>(() => loadProtectedTerms());
 
   // 第 8 项（困惑度）：模型就绪才推理；未下载转引导态；失败静默降级为仅 7 项
   async function runPplFeature(target: string): Promise<void> {
@@ -526,6 +539,7 @@ export default function App({
     z: boolean,
     ppl: boolean,
     l: LocalSettings,
+    terms: string,
   ) {
     // 桌面版：主 API Key 与 Key 池都经 safeStorage 加密落盘（persistApiConfig 里判定，
     // 只有两个字段都确实写进加密存储才抹 localStorage 明文）；Web 版仍走 localStorage
@@ -540,14 +554,43 @@ export default function App({
     saveZhuqueMode(z);
     savePplEnabled(ppl);
     saveLocal(l);
+    saveProtectedTerms(terms);
+    // 术语保护是模块级全局（term-protect 的 userTerms），存盘之外必须当场注入才生效
+    setProtectedTerms(parseProtectedTerms(terms));
     setApi(a);
     setDetector(d);
     setZhuqueMode(z);
     setPplEnabled(ppl);
     setLocal(l);
+    setProtectedTermsRaw(terms);
     setShowSettings(false);
     setNote("设置已保存（仅存本地）");
   }
+
+  // 挂载时提示草稿已恢复（只跑一次）
+  useEffect(() => {
+    const d = restoredDraft.current;
+    if (!d || (!d.input.trim() && !d.output.trim())) return;
+    const mins = d.ts ? Math.max(0, Math.round((Date.now() - d.ts) / 60000)) : 0;
+    const when = mins < 1 ? "刚刚" : mins < 60 ? `${mins} 分钟前` : `${Math.round(mins / 60)} 小时前`;
+    setNote(`已恢复${when}未完成的稿（${d.input.length} 字）。点「清空」可丢弃。`);
+  }, []);
+
+  // 草稿防抖落盘：每次键入都写会让长文手感变卡（与强度滑块同一手法）
+  const draftSaveRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    window.clearTimeout(draftSaveRef.current);
+    draftSaveRef.current = window.setTimeout(() => {
+      if (!input.trim() && !output.trim()) clearDraft();
+      else saveDraft(input, output);
+    }, 500);
+    return () => window.clearTimeout(draftSaveRef.current);
+  }, [input, output]);
+
+  // 挂载时把持久化的自定义术语注入引擎（否则刷新后保护集只剩内置 58 项）
+  useEffect(() => {
+    setProtectedTerms(parseProtectedTerms(protectedTermsRaw));
+  }, [protectedTermsRaw]);
 
   // 强度滑块防抖落盘：拖动时高频 onChange 只更新内存状态，停手 300ms 后再写 localStorage，
   // 避免拖动过程连续同步 IO（长文场景下会卡手感）
@@ -604,12 +647,58 @@ export default function App({
     setZq(null);
     setZqSem(null);
     setZqMsg("");
+    clearDraft(); // 显式清空：草稿随之丢弃，下次打开是干净的
   }
 
   function handleSample() {
     setInput(SAMPLE_TEXT);
     setOutput("");
     setNote("已载入示例文本，点「去味」试一把。");
+  }
+
+  /* ---------------- 文件导入 / 导出（v0.9.15） ----------------
+   * 此前 UI 只有「粘贴进 → 复制出」，改一篇 3000 字论文要先从编辑器里复制、
+   * 改完再粘回去，中间格式全丢。纯文本 .txt/.md 零依赖就能做，先补上；
+   * .docx 需要引入解析库，README 竞品表里仍标「⏳ 未做」，不在此列。
+   */
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    e.target.value = ""; // 清空 value，否则连选两次同一文件不会触发 change
+    if (!f) return;
+    // 2MB 上限：引擎是纯字符串操作，超大文本会卡住 UI（长文本应走 CLI 批量）
+    if (f.size > 2 * 1024 * 1024) {
+      setNote("文件超过 2MB，请拆分后再导入（更大批量请用 CLI：scripts/humanize-cli.ts）。");
+      return;
+    }
+    const r = new FileReader();
+    r.onload = () => {
+      const t = String(r.result ?? "");
+      if (!t.trim()) {
+        setNote("文件内容为空，未导入。");
+        return;
+      }
+      setInput(t);
+      setOutput("");
+      setNote(`已导入 ${f.name}（${t.length} 字），点「去味」开始。`);
+    };
+    r.onerror = () => setNote("读取文件失败，请重试或改用粘贴。");
+    r.readAsText(f, "utf-8");
+  }
+
+  function handleExport() {
+    if (!output) return;
+    const d = new Date();
+    const p = (n: number) => String(n).padStart(2, "0");
+    const name = `去味-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}.txt`;
+    const url = URL.createObjectURL(new Blob([output], { type: "text/plain;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    a.click();
+    URL.revokeObjectURL(url);
+    setNote(`已导出 ${name}`);
   }
 
   return (
@@ -699,6 +788,28 @@ export default function App({
         </button>
         <button className="ghost" onClick={copy} disabled={!output}>
           复制
+        </button>
+        <button
+          className="ghost"
+          onClick={handleExport}
+          disabled={!output}
+          title="把去味结果下载为 .txt（Word 等格式保留未做）"
+        >
+          导出
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".txt,.md,.markdown,text/plain"
+          onChange={handleImportFile}
+          style={{ display: "none" }}
+        />
+        <button
+          className="ghost"
+          onClick={() => fileInputRef.current?.click()}
+          title="从 .txt / .md 导入原文（≤2MB）"
+        >
+          导入
         </button>
         <button
           className="ghost"
@@ -845,6 +956,7 @@ export default function App({
           zhuqueMode={zhuqueMode}
           pplEnabled={pplEnabled}
           local={local}
+          protectedTerms={protectedTermsRaw}
           onClose={() => setShowSettings(false)}
           onSave={handleSaveSettings}
         />

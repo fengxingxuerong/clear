@@ -43,6 +43,8 @@
     本地分落在人写带（≤27）而外部判成 AI 属**红档**，会明写「不要用降幅判断安全性」。
     起因是 2026-09-22 外部席位复评：5 份交付稿里 4 份本地 ≤13 而外部 ≥75（政务报告 本地 2 / 外部 90），
     详见 `docs/external-judge-findings.md`。判据与阈值来源见 `src/engine/score-conflict.ts`。
+- **文件导入 / 导出（v0.9.15）**：界面上「导入」直接读 `.txt`/`.md`（≤2MB），「导出」把结果下载为 `.txt`。
+  Word/公式等富文本格式保留仍未做（需引入 docx 解析），见下方竞品表。
 - **跨端**：Web 版任意设备浏览器打开即用（含手机，已做响应式布局）；桌面版走 Electron（已打包 Windows 安装包），macOS 包可在对应环境构建。
 
 ---
@@ -64,6 +66,28 @@ npm run dev          # 打开 http://localhost:5173
 手机上直接用浏览器访问同一地址（同一局域网）即可使用；或 `npm run build` 后把 `dist/` 托管到任意静态空间。
 
 ---
+
+## 批量处理（CLI，v0.8.6；v0.9.15 起可选 LLM 通道）
+
+目录下所有 `.txt` 批量去味，输出到指定目录：
+
+```bash
+# 本地引擎（零成本、离线）
+npx tsx scripts/humanize-cli.ts ./docs-txt --out ./out --intensity 0.9 --zhuque
+
+# LLM 深度模式（与界面同一条闭环；Key 走环境变量，别写进命令行历史）
+QUAIWEI_API_KEY=sk-xxx npx tsx scripts/humanize-cli.ts ./in --api \
+  --base-url https://token.sensenova.cn/v1 --model deepseek-v4-flash --judge-model glm-5.2
+
+# 常用可选项
+--seed 20260905      # 本地引擎种子（默认 20260905，可改以便复现）
+--no-deep            # 单轮改写，不开深度闭环
+--max-calls 20       # 整篇调用预算（0=不限）
+--report out.json    # 每篇的耗时/字数/引擎/轮次分/降级原因落 JSON
+```
+
+Key 优先级：`--api-key` > `QUAIWEI_API_KEY` > `OPENAI_API_KEY` > `SENSENOVA_KEYS` / `scripts/.sensenova-keys`。
+注意 baseUrl 必须填完整地址——以 `/` 开头的同源路径只在 dev（vite 代理）和 Electron 桌面版下有效。
 
 ## 深度去味模式（v0.3.2，LLM 通道）
 
@@ -220,7 +244,7 @@ npm run repack           # = rebuild-app → prune-dist → verify-pruned
 │  │  ├─ humanize-vocab.ts      #   书面腔 → 口语替换词表
 │  │  ├─ anti-fingerprint.ts    #   反「新指纹」层（模板复读封顶 / 语体门控 / 残句守卫）
 │  │  ├─ classify-genre.ts      #   体裁判定（论说 / 叙事 / 对话 / 人写原稿）
-│  │  ├─ term-protect.ts        #   术语保护（58 项内置 + 自定义注入）
+│  │  ├─ term-protect.ts        #   术语保护（58 项内置 + 用户自定义，设置面板可编辑）
 │  │  └─ detector.ts            #   本地启发式 AI 味评分（代理分，与朱雀无标定关系）
 │  ├─ api/                      # 可选 LLM 通道（28 个模块）
 │  │  ├─ llm.ts                 #   统一分发：本地引擎 ↔ LLM 深度模式
@@ -240,7 +264,7 @@ npm run repack           # = rebuild-app → prune-dist → verify-pruned
 │  ├─ zhuque-evidence.ts        #   官方送检凭证账本（seal / audit）
 │  ├─ check-ledger-appendonly.ts#   账本历史行不可改（pre-commit 与 CI 都跑）
 │  ├─ calib-sanity.ts           #   标定数据源 / 参数 / 漂移自检
-│  ├─ humanize-cli.ts           #   批量去味 CLI
+│  ├─ humanize-cli.ts           #   批量去味 CLI（默认本地引擎；--api 走 LLM 深度模式）
 │  └─ bench.ts                  #   性能基准
 ├─ electron-app/                # Electron 桌面壳（加载 Web 构建）
 │  ├─ rebuild-app.cjs           #   按生产依赖树重建 resources/app
@@ -493,8 +517,8 @@ npm run check:publish   # = audit --strict：连"历史点无凭证"一起拦 �
 
 | 竞品能力 | 竞品代表 | 本项目状态 |
 |---|---|---|
-| 中文术语零改动 | 言笔/笔灵/SpeedAI（核心卖点） | ✅ v0.8.6 `term-protect.ts` 内置 58 项术语 + 自定义注入 |
-| 批量文件处理 | 嘎嘎降AI/零感AI/千笔AI（标配） | ✅ v0.8.6 `scripts/humanize-cli.ts` 批量 CLI |
+| 中文术语零改动 | 言笔/笔灵/SpeedAI（核心卖点） | ✅ v0.8.6 `term-protect.ts` 内置 58 项；v0.9.15 起「设置 → 自定义保护术语」可由用户扩充（此前只有 API，无入口） |
+| 批量文件处理 | 嘎嘎降AI/零感AI/千笔AI（标配） | ✅ v0.8.6 `scripts/humanize-cli.ts`；v0.9.15 起 `--api` 可走 LLM 深度模式（此前只接了本地引擎） |
 | 目标 AI 率设定 | 文必过（"设定降至30%"） | ✅ 已有（深度模式 DEEP_TARGET_SCORE + 评判闭环） |
 | 格式保留（Word/公式） | 零感AI/降重侠（"文档模式"） | ⏳ 未做（Web 应用天然纯文本，需引入 docx 解析，暂缓） |
 | 多检测平台适配策略 | 零感AI（知网/维普/格子达分策略） | ⏳ 部分（仅朱雀口径；知网/维普规则未逆向，暂缓） |
@@ -518,5 +542,5 @@ MIT（见 LICENSE）。
 
 ## 更新日志
 
-完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。当前版本 **v0.9.12**（以 `package.json` 的 `version` 为准）。
+完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。当前版本 **v0.9.15**（以 `package.json` 的 `version` 为准）。
 

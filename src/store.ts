@@ -9,6 +9,13 @@ const K_ZQ = "aihumanizer.zhuque";
 const K_PPL = "aihumanizer.ppl";
 const K_FUSE = "quaiwei.zhuque.fuse";
 const K_LOCAL = "aihumanizer.local";
+/** v0.9.15：自定义保护术语（原文原样存，换行/逗号分隔）。
+ *  此前 term-protect.ts 的 setProtectedTerms 只被测试调用，UI 零入口——
+ *  而「中文术语零改动」在竞品对标表里是标 ✅ 的卖点，用户却加不了自己的词。 */
+const K_TERMS = "aihumanizer.protectedTerms";
+/** v0.9.15：编辑中的草稿（input/output）。此前刷新即丢——粘了三千字误触刷新全没，
+ *  这是最劝退的一条。只存本地 localStorage，与其他配置一样不上传。 */
+const K_DRAFT = "aihumanizer.draft";
 
 /** 本地引擎设置：多候选择优（自 C 盘副本 v0.6.0 吸收） */
 export interface LocalSettings {
@@ -294,4 +301,73 @@ export function loadFuseWeight(): number {
 
 export function saveFuseWeight(v: number): void {
   localStorage.setItem(K_FUSE, String(v));
+}
+
+/** 自定义保护术语原文（空串 = 未设置，只用内置 58 项） */
+export function loadProtectedTerms(): string {
+  return localStorage.getItem(K_TERMS) ?? "";
+}
+
+export function saveProtectedTerms(v: string): void {
+  localStorage.setItem(K_TERMS, v);
+}
+
+export interface Draft {
+  input: string;
+  output: string;
+  /** 保存时间戳（ms）。恢复时用它告诉用户"这是什么时候的稿" */
+  ts: number;
+}
+
+/**
+ * 草稿上限 1MB（localStorage 整站额度通常 5MB，还要留给配置与历史）。
+ * 超过就不写——宁可不恢复，也不能把配额撑爆导致配置与历史一起写不进去。
+ */
+const DRAFT_MAX_CHARS = 1_000_000;
+
+export function loadDraft(): Draft | null {
+  const o = parseObject(localStorage.getItem(K_DRAFT));
+  if (!o) return null;
+  const input = typeof o.input === "string" ? o.input : "";
+  const output = typeof o.output === "string" ? o.output : "";
+  if (!input && !output) return null;
+  return {
+    input,
+    output,
+    ts: typeof o.ts === "number" && isFinite(o.ts) ? o.ts : 0,
+  };
+}
+
+export function saveDraft(input: string, output: string): void {
+  try {
+    if (input.length + output.length > DRAFT_MAX_CHARS) {
+      // 超限：宁可丢草稿也不撑爆配额（配置/历史比草稿重要）
+      localStorage.removeItem(K_DRAFT);
+      return;
+    }
+    localStorage.setItem(
+      K_DRAFT,
+      JSON.stringify({ input, output, ts: Date.now() } satisfies Draft),
+    );
+  } catch {
+    // 配额不足 / 隐私模式禁用 localStorage：草稿丢失不影响主流程
+  }
+}
+
+export function clearDraft(): void {
+  try {
+    localStorage.removeItem(K_DRAFT);
+  } catch {
+    /* 同上 */
+  }
+}
+
+/** 把原文切成术语数组：换行 / 半角逗号分号 / 全角逗号分号均可 */
+export function parseProtectedTerms(raw: string): string[] {
+  const seen = new Set<string>();
+  for (const t of raw.split(/[\n,;，；、]+/)) {
+    const k = t.trim();
+    if (k.length >= 2) seen.add(k);
+  }
+  return [...seen];
 }

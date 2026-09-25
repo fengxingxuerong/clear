@@ -19,6 +19,9 @@ import {
   saveFuseWeight,
   loadLocal,
   saveLocal,
+  loadProtectedTerms,
+  saveProtectedTerms,
+  parseProtectedTerms,
   hasSecureStore,
   loadApiKeySecure,
   saveApiKeySecure,
@@ -36,6 +39,28 @@ import { DEFAULT_SEMANTIC_WEIGHT } from "./engine/zhuque";
 
 beforeEach(() => {
   localStorage.clear();
+});
+
+describe("自定义保护术语持久化（v0.9.15）", () => {
+  it("空库返回空串，不返回 undefined", () => {
+    expect(loadProtectedTerms()).toBe("");
+  });
+
+  it("存取往返一致", () => {
+    saveProtectedTerms("量子跃迁式改革\n张三丰算法");
+    expect(loadProtectedTerms()).toBe("量子跃迁式改革\n张三丰算法");
+  });
+
+  it("切词：换行/半角逗号分号/全角逗号分号，去空白去重，丢弃单字", () => {
+    expect(parseProtectedTerms("量子跃迁\n张三丰，算法；算法 、 我的产品")).toEqual([
+      "量子跃迁",
+      "张三丰",
+      "算法",
+      "我的产品",
+    ]);
+    // 单字不保护：单字命中率太高，会把正常改写全挡掉（空格不是分隔符，故用逗号隔开单字）
+    expect(parseProtectedTerms("a，算法，b")).toEqual(["算法"]);
+  });
 });
 
 describe("loadApi / saveApi（逐字段清洗）", () => {

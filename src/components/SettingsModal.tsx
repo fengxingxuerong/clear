@@ -17,6 +17,8 @@ interface SettingsModalProps {
   zhuqueMode: boolean;
   pplEnabled: boolean;
   local: LocalSettings;
+  /** v0.9.15：自定义保护术语原文（换行/逗号分隔），实时注入 term-protect */
+  protectedTerms: string;
   onClose: () => void;
   onSave: (
     api: ApiConfig,
@@ -24,6 +26,7 @@ interface SettingsModalProps {
     zhuqueMode: boolean,
     pplEnabled: boolean,
     local: LocalSettings,
+    protectedTerms: string,
   ) => void;
 }
 
@@ -46,6 +49,7 @@ export function SettingsModal({
   zhuqueMode,
   pplEnabled,
   local,
+  protectedTerms,
   onClose,
   onSave,
 }: SettingsModalProps) {
@@ -55,6 +59,7 @@ export function SettingsModal({
   const [draftZhuque, setDraftZhuque] = useState<boolean>(zhuqueMode);
   const [draftPpl, setDraftPpl] = useState<boolean>(pplEnabled);
   const [draftLocal, setDraftLocal] = useState<LocalSettings>(local);
+  const [draftTerms, setDraftTerms] = useState<string>(protectedTerms);
   // 温度输入中间态：允许清空/逐字编辑，失焦时才归一化进草稿（避免受控回弹跳值）
   const [tempText, setTempText] = useState(String(api.temperature));
 
@@ -438,6 +443,20 @@ export function SettingsModal({
           />
         </label>
 
+        <div className="modal-divider">自定义保护术语（本地引擎）</div>
+        <p className="modal-tip">
+          内置 58 项术语（法学/金融/医学/理工/社科）之外，把你这篇里<b>绝不能被改</b>的词
+          填进来——论文题目、人名、产品名、机构名、领域专名。命中后替换与拆句都会跳过该词。
+          换行或逗号分隔，单条至少 2 个字，保存即生效。
+        </p>
+        <textarea
+          className="terms-input"
+          value={draftTerms}
+          onChange={(e) => setDraftTerms(e.target.value)}
+          rows={3}
+          placeholder={"量子跃迁式改革\n张三丰算法\n我的产品名"}
+        />
+
         <div className="modal-divider">对标检测器（可选 · 如朱雀）</div>
         <p className="modal-tip">把 {`{text}`} POST 到你的检测器接口，从返回 JSON 按路径取分数。</p>
         <p className="modal-tip" style={{ marginTop: -6 }}>
@@ -508,7 +527,9 @@ export function SettingsModal({
         <div className="modal-actions">
           <button
             className="primary"
-            onClick={() => onSave(draftApi, draftDetector, draftZhuque, draftPpl, draftLocal)}
+            onClick={() =>
+              onSave(draftApi, draftDetector, draftZhuque, draftPpl, draftLocal, draftTerms)
+            }
           >
             保存
           </button>

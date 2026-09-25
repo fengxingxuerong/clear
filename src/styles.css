@@ -176,6 +176,12 @@ textarea:focus {
 textarea::placeholder {
   color: rgba(138, 152, 181, 0.55);
 }
+/* 设置面板「自定义保护术语」：正文 textarea 的 280px 最小高度会把模态撑爆 */
+.terms-input {
+  min-height: 68px;
+  font-size: 13px;
+  line-height: 1.6;
+}
 
 /* ---- 控制条 ---- */
 .controls {
