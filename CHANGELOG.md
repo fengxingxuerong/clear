@@ -125,6 +125,21 @@ NUM 正则实际只干净匹配「二、」式——「1.」replace 残留标点
 修复必须与「新官方点位重拟合四条体裁线」一并评估，不许单点糊过去。偏差现状已在测试里
 用注释 + 用例钉住，未来修复时测试会红提醒同步评估。
 
+**测试补盲续作（六、七轮：919 → 954，仓库同步 GitHub `fengxingxuerong/clear`）**：
+
+- **六轮**：`zhuque-semantic` 新建测试（71.8%→**97.4%**）——缓存命中/绕过重跑/模型签名隔离
+  （缓存绝不串味）/交叉模型文案/50 条 LRU 淘汰/score 钳制；`SettingsModal` 条件分支
+  （66.7%→70.0%）——baseUrl 相对路径部署警告横幅、文风切换草稿-上抛、Key 草稿态不落盘。
+- **七轮（长尾清扫）**：`humanizeBestOf` 边界（空候选跳过/三重门槛淘汰/**全部淘汰回退单次
+  生成**/seed 可复现）；`term-protect` 用户术语切片前后文拼接保护；`store-history`
+  坏 JSON/非数组/10 条截断/配额溢出逐条裁剪与放弃持久化；`BenchmarkPanel` 五档建议文案、
+  `ZhuquePanel` 语义权重滑块。
+- **环境坑落档**：happy-dom 下 `vi.spyOn(localStorage, "setItem")` 会触发 Worker native 崩溃
+  （node::OnFatalError，fork 直接消失）——本地存储 mock 一律改直接赋值覆盖 + finally 还原。
+- **总账**：体检基线 836 → **954**（+118）；全局语句 84.7→**89.3%**、行 86.0→**90.4%**、
+  分支 78.1→**82.3%**；最弱文件清零（scorer-core 100%、ppl-client 97.4%、zhuque-semantic
+  97.4%、shuffle 88.7%、App 48.7%）；七轮每轮 `check:release` 均 exit 0。
+
 ## v0.9.14 更新（深度模式：编造否决 + 首轮好区收手 + 定锚与日志归属修正）
 
 **背景**：v0.9.13 之后拿真网关跑了四篇（s1 议论文 / s2 种草文 / s3 技术科普 / s4 财报短讯，
