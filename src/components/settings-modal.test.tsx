@@ -167,3 +167,46 @@ describe("SettingsModal（设置弹窗）", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("SettingsModal 条件分支（v0.9.16 补盲追加）", () => {
+  it("baseUrl 以 / 开头显示部署警告横幅，改回 https 消失", () => {
+    const { getByText, queryByText, container } = render(
+      <SettingsModal {...base()} />,
+    );
+    // 找到 Base URL 输入（placeholder 为默认值）
+    const baseUrlInput = container.querySelector(
+      'input[placeholder="https://api.openai.com/v1"]',
+    ) as HTMLInputElement;
+    fireEvent.change(baseUrlInput, { target: { value: "/sensenova/v1" } });
+    expect(getByText(/以 \/ 开头的相对路径只在/)).toBeTruthy();
+    fireEvent.change(baseUrlInput, { target: { value: "https://api.openai.com/v1" } });
+    expect(queryByText(/以 \/ 开头的相对路径只在/)).toBeNull();
+  });
+
+  it("写作风格切换进入草稿，保存后经 onSave 上抛", () => {
+    const onSave = vi.fn();
+    const { getByText, getByLabelText } = render(
+      <SettingsModal {...base({ onSave })} />,
+    );
+    const styleSelect = getByLabelText("文风") as HTMLSelectElement;
+    expect(styleSelect.value).toBe("plain");
+    fireEvent.change(styleSelect, { target: { value: "academic" } });
+    fireEvent.click(getByText("保存"));
+    const savedApi = onSave.mock.calls[0][0] as ApiConfig;
+    expect(savedApi.style).toBe("academic");
+  });
+
+  it("保存时启用勾选与 Key 一并上抛（草稿态不落盘到 localStorage）", () => {
+    const onSave = vi.fn();
+    const { getByText, container } = render(
+      <SettingsModal {...base({ onSave })} />,
+    );
+    const keyInput = container.querySelector('input[placeholder="sk-..."]') as HTMLInputElement;
+    fireEvent.change(keyInput, { target: { value: "sk-draft-key" } });
+    // 未点保存：localStorage 不应有 Key
+    expect(JSON.stringify(localStorage)).not.toContain("sk-draft-key");
+    fireEvent.click(getByText("保存"));
+    const savedApi = onSave.mock.calls[0][0] as ApiConfig;
+    expect(savedApi.apiKey).toBe("sk-draft-key");
+  });
+});
