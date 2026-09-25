@@ -54,6 +54,7 @@ import {
   type LocalSettings,
 } from "./store";
 import { setProtectedTerms } from "./engine/term-protect";
+import { readDocxText, writeDocxText } from "./docx-io";
 import {
   detectZhuque,
   ZHUQUE_URL,
@@ -672,6 +673,23 @@ export default function App({
       setNote("文件超过 2MB，请拆分后再导入（更大批量请用 CLI：scripts/humanize-cli.ts）。");
       return;
     }
+    // v0.9.16：.docx 走零依赖 OOXML 提取（src/docx-io.ts）；.txt/.md 仍走 FileReader
+    if (/\.docx$/i.test(f.name)) {
+      readDocxText(f)
+        .then((t) => {
+          if (!t.trim()) {
+            setNote("docx 里没有可提取的文字（可能是纯图片/空文档），未导入。");
+            return;
+          }
+          setInput(t);
+          setOutput("");
+          setNote(`已导入 ${f.name}（${t.length} 字，格式不保留），点「去味」开始。`);
+        })
+        .catch((err: unknown) =>
+          setNote(`docx 解析失败：${err instanceof Error ? err.message : String(err)}`),
+        );
+      return;
+    }
     const r = new FileReader();
     r.onload = () => {
       const t = String(r.result ?? "");
@@ -685,6 +703,27 @@ export default function App({
     };
     r.onerror = () => setNote("读取文件失败，请重试或改用粘贴。");
     r.readAsText(f, "utf-8");
+  }
+
+  // v0.9.16：导出 .docx——纯文本按段落生成最小合法 OOXML（零依赖，src/docx-io.ts）。
+  // 富文本格式（加粗/公式/图片）不保留——引擎输出本就是纯文本。
+  async function handleExportDocx() {
+    if (!output) return;
+    try {
+      const d = new Date();
+      const p = (n: number) => String(n).padStart(2, "0");
+      const name = `去味-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}.docx`;
+      const blob = await writeDocxText(output);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      a.click();
+      URL.revokeObjectURL(url);
+      setNote("已导出 .docx（纯文本内容，Word/WPS 可打开）。");
+    } catch (err: unknown) {
+      setNote(`docx 导出失败：${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   function handleExport() {
@@ -793,14 +832,22 @@ export default function App({
           className="ghost"
           onClick={handleExport}
           disabled={!output}
-          title="把去味结果下载为 .txt（Word 等格式保留未做）"
+          title="把去味结果下载为 .txt"
         >
-          导出
+          导出 .txt
+        </button>
+        <button
+          className="ghost"
+          onClick={handleExportDocx}
+          disabled={!output}
+          title="把去味结果下载为 .docx（纯文本内容，Word/WPS 可打开）"
+        >
+          导出 .docx
         </button>
         <input
           ref={fileInputRef}
           type="file"
-          accept=".txt,.md,.markdown,text/plain"
+          accept=".txt,.md,.markdown,.docx,text/plain"
           onChange={handleImportFile}
           style={{ display: "none" }}
         />
