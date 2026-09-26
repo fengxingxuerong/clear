@@ -63,12 +63,13 @@ interface CliArgs {
   judgeModel: string;
   deep: boolean;
   contest: number;
+  outFormat: string;
 }
 
 function loadCliFns(): {
   parseArgs: (argv: string[]) => CliArgs;
-  collectTxtFiles: (input: string) => string[];
-} {
+    collectInputFiles: (input: string) => string[];
+  } {
   const src = readFileSync(path.resolve(__dirname, "humanize-cli.ts"), "utf-8");
   // 只保留纯函数段：USAGE + parseArgs + buildApiConfig + collectTxtFiles
   // （main 依赖终端 I/O，interface 是 TS 类型）
@@ -88,11 +89,11 @@ function loadCliFns(): {
     path,
     module: { exports: {} },
   };
-  vm.runInNewContext(`${js}\n;module.exports = { parseArgs, collectTxtFiles };`, sandbox);
-  return sandbox.module.exports as { parseArgs: never; collectTxtFiles: never };
+  vm.runInNewContext(`${js}\n;module.exports = { parseArgs, collectInputFiles };`, sandbox);
+  return sandbox.module.exports as { parseArgs: never; collectInputFiles: never };
 }
 
-const { parseArgs, collectTxtFiles } = loadCliFns();
+const { parseArgs, collectInputFiles } = loadCliFns();
 
 describe("humanize-cli parseArgs", () => {
   const base = (argv: string[]) => ["node", "humanize-cli.ts", ...argv];
@@ -147,9 +148,15 @@ describe("humanize-cli parseArgs", () => {
     expect(b.deep).toBe(false);
     expect(b.contest).toBe(3);
   });
+
+  it("--out-format：默认 follow；显式 txt / docx 原样收下", () => {
+    expect(parseArgs(base(["./in"])).outFormat).toBe("follow");
+    expect(parseArgs(base(["./in", "--out-format", "docx"])).outFormat).toBe("docx");
+    expect(parseArgs(base(["./in", "--out-format", "TXT"])).outFormat).toBe("txt");
+  });
 });
 
-describe("humanize-cli collectTxtFiles", () => {
+describe("humanize-cli collectInputFiles", () => {
   let tmpDir = "";
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "quaiwei-cli-test-"));
@@ -161,18 +168,28 @@ describe("humanize-cli collectTxtFiles", () => {
   it("单文件输入直接返回该文件", () => {
     const f = path.join(tmpDir, "a.txt");
     fs.writeFileSync(f, "内容");
-    expect(collectTxtFiles(f)).toEqual([f]);
+    expect(collectInputFiles(f)).toEqual([f]);
   });
 
-  it("目录输入：只收 .txt（大小写不敏感），按名称排序，忽略子目录", () => {
+  it("单文件但扩展名不支持 → 不收（交给上层报「未找到可处理的文件」）", () => {
+    const f = path.join(tmpDir, "a.pdf");
+    fs.writeFileSync(f, "%PDF-1.7");
+    expect(collectInputFiles(f)).toEqual([]);
+  });
+
+  it("目录输入：收 .txt/.md/.docx（大小写不敏感），按名称排序，忽略子目录与不支持的扩展名", () => {
     fs.writeFileSync(path.join(tmpDir, "b.txt"), "b");
     fs.writeFileSync(path.join(tmpDir, "a.TXT"), "a");
-    fs.writeFileSync(path.join(tmpDir, "c.md"), "非txt");
+    fs.writeFileSync(path.join(tmpDir, "c.md"), "c");
+    fs.writeFileSync(path.join(tmpDir, "d.DOCX"), "d");
+    fs.writeFileSync(path.join(tmpDir, "e.pdf"), "不支持");
     fs.mkdirSync(path.join(tmpDir, "sub"));
-    fs.writeFileSync(path.join(tmpDir, "sub", "d.txt"), "子目录不算");
-    expect(collectTxtFiles(tmpDir)).toEqual([
+    fs.writeFileSync(path.join(tmpDir, "sub", "f.txt"), "子目录不算");
+    expect(collectInputFiles(tmpDir)).toEqual([
       path.join(tmpDir, "a.TXT"),
       path.join(tmpDir, "b.txt"),
+      path.join(tmpDir, "c.md"),
+      path.join(tmpDir, "d.DOCX"),
     ]);
   });
 });

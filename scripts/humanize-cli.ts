@@ -8,17 +8,26 @@
  * （深度闭环 / 交叉评判 / 定向修订 / 长文分块）CLI 完全够不到 —— 等于「批量」这个卖点
  * 只兑现了一半。现在 `--api` 走 UI 同款的 `runHumanize`，本地回退逻辑一并继承。
  *
+ * v0.9.17：输入侧接上 .docx（v0.9.16 只做了 UI，CLI 仍是「.txt only」，CHANGELOG 里
+ * 明写着「CLI 的 .docx 输入暂未接」）。现在 `.docx` 与 `.txt`/`.md` 一并批量处理，
+ * 输出格式默认**跟随输入**（.docx 进 → .docx 出），`--out-format txt|docx` 可强制覆盖。
+ *
  * 用法：
  *   npx tsx scripts/humanize-cli.ts <input-dir-or-file> [--out <dir>] [--intensity 0.9]
  *       [--zhuque] [--style casual|plain|academic] [--suffix .humanized] [--seed 20260905]
  *       [--api [--base-url <url>] [--model <name>] [--api-key <key>] [--judge-model <name>]]
  *       [--alt-model <name>] [--no-deep] [--contest <n>] [--max-calls <n>] [--max-wait <sec>]
  *       [--strict] [--persona default|netgen|classic] [--report <file.json>]
+ *       [--out-format follow|txt|docx]
  *
  * 示例：
  *   npx tsx scripts/humanize-cli.ts ./docs-txt --out ./out --intensity 0.9 --zhuque
+ *   npx tsx scripts/humanize-cli.ts ./word-docs --out ./out          # .docx 进 .docx 出
+ *   npx tsx scripts/humanize-cli.ts ./word-docs --out-format txt     # 强制落成 .txt
  *   # LLM 深度模式（Key 走环境变量，别写进命令行历史）：
  *   QUAIWEI_API_KEY=sk-xxx npx tsx scripts/humanize-cli.ts ./in --api --model deepseek-v4-flash
+ *
+ * 支持输入：.txt / .md（按 UTF-8 文本读）与 .docx（零依赖 OOXML 解析，只取段落纯文本）。
  *
  * Key 来源优先级（CLI 专用，与 UI 设置面板无关）：
  *   1) --api-key
@@ -32,6 +41,37 @@ import { humanize } from "../src/engine/humanize";
 import { detectAI } from "../src/engine/detector";
 import { runHumanize } from "../src/api/llm";
 import { DEFAULT_API, loadPresetKeys, type ApiConfig } from "../src/api/llm-config";
+import { readDocxText, writeDocxText } from "../src/docx-io";
+
+/** Buffer → 独立 ArrayBuffer（Buffer 可能是共享内存池上的视图，直接给 .buffer 会串） */
+function toArrayBuffer(b: Buffer): ArrayBuffer {
+  return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
+}
+
+/** 输入文件 → 纯文本。.docx 解析失败时把真实部件名抛给上层（与 UI 一致，不吞根因） */
+async function readInputText(f: string): Promise<string> {
+  if (!f.toLowerCase().endsWith(".docx")) return fs.readFileSync(f, "utf-8");
+  return readDocxText(toArrayBuffer(fs.readFileSync(f)));
+}
+
+/**
+ * 输出扩展名：`--out-format` 显式给了就听它的，否则跟随输入
+ * （.docx 进 → .docx 出；用户拿 Word 稿来批量处理，落回 .txt 反而多一道手）。
+ */
+function outExtOf(inputFile: string, outFormat: string): string {
+  if (outFormat === "docx") return ".docx";
+  if (outFormat === "txt") return ".txt";
+  return inputFile.toLowerCase().endsWith(".docx") ? ".docx" : ".txt";
+}
+
+async function writeOutput(dest: string, text: string, asDocx: boolean): Promise<void> {
+  if (!asDocx) {
+    fs.writeFileSync(dest, text, "utf-8");
+    return;
+  }
+  const blob = await writeDocxText(text);
+  fs.writeFileSync(dest, Buffer.from(await blob.arrayBuffer()));
+}
 
 interface Args {
   input: string;
@@ -56,6 +96,8 @@ interface Args {
   strict: boolean;
   persona: string;
   report: string;
+  /** v0.9.17：输出格式。follow = 跟随输入扩展名（.docx 进 → .docx 出） */
+  outFormat: "follow" | "txt" | "docx";
 }
 
 const USAGE =
@@ -63,7 +105,8 @@ const USAGE =
   " [--zhuque] [--style casual|plain|academic] [--suffix .humanized] [--seed 20260905]" +
   " [--api [--base-url <url>] [--model <name>] [--api-key <key>] [--judge-model <name>]]" +
   " [--alt-model <name>] [--no-deep] [--contest <n>] [--max-calls <n>] [--max-wait <sec>]" +
-  " [--strict] [--persona default|netgen|classic] [--report <file.json>]";
+  " [--strict] [--persona default|netgen|classic] [--report <file.json>]" +
+  " [--out-format follow|txt|docx]";
 
 function parseArgs(argv: string[]): Args {
   const args: Args = {
@@ -87,6 +130,7 @@ function parseArgs(argv: string[]): Args {
     strict: false,
     persona: "default",
     report: "",
+    outFormat: "follow",
   };
   const a = argv.slice(2);
   if (!a[0] || a[0].startsWith("--")) {
@@ -119,12 +163,24 @@ function parseArgs(argv: string[]): Args {
       case "--strict": args.strict = true; break;
       case "--persona": args.persona = a[++i] || "default"; break;
       case "--report": args.report = a[++i] ?? ""; break;
+      case "--out-format": {
+        const v = (a[++i] ?? "").toLowerCase();
+        if (v === "follow" || v === "txt" || v === "docx") args.outFormat = v;
+        else {
+          console.error(`--out-format 只接受 follow | txt | docx，收到 "${v}"\n${USAGE}`);
+          process.exit(1);
+        }
+        break;
+      }
       default:
         console.error(`未知参数: ${a[i]}\n${USAGE}`);
         process.exit(1);
     }
   }
-  if (!args.out) args.out = args.input.endsWith(".txt") ? path.dirname(args.input) : args.input;
+  if (!args.out) {
+    // 单文件时默认输出到它所在目录；目录时输出到它自身（沿用既有行为，只把判定从 .txt 放宽）
+    args.out = isSupportedInput(args.input) ? path.dirname(args.input) : args.input;
+  }
   return args;
 }
 
@@ -157,13 +213,38 @@ function buildApiConfig(args: Args): ApiConfig {
   return cfg;
 }
 
-function collectTxtFiles(input: string): string[] {
+/**
+ * CLI 认的输入扩展名（.docx 自 v0.9.17；去味引擎只吃纯文本，富文本格式一律不保留）。
+ *
+ * 定义位置有讲究：`scripts/scripts-logic.test.ts` 会按字面量找起止点，把「USAGE 常量 →
+ * 主函数」之间的源码切进 vm 沙箱跑纯函数测试，所以这里要用到的常量不能写在文件顶部
+ * 那段（不进切片）。同理，本文件的注释里也别写出那两个定位用的字面量——否则切片
+ * 会从注释中间开始或结束，esbuild 转译直接失败（v0.9.17 接线时踩到，现象是
+ * `Expected 星斜杠 to terminate multi-line comment`）。
+ *
+ * 自指陷阱备忘：上一行报错原文里含「星号+斜杠」的块注释终止符，原样写进本注释
+ * 会把这段 JSDoc 提前掐断——这正是 v0.9.17 接线卡住的根因（esbuild 报
+ * Unterminated string literal），所以只能转述为「星斜杠」，后人别手痒改回原样。
+ */
+const INPUT_EXTS = [".txt", ".md", ".docx"] as const;
+const INPUT_EXTS_LABEL = ".txt / .md / .docx";
+
+function isSupportedInput(f: string): boolean {
+  const lower = f.toLowerCase();
+  return INPUT_EXTS.some((e) => lower.endsWith(e));
+}
+
+/**
+ * 收集待处理文件：.txt / .md / .docx。
+ * （v0.9.17 前只认 .txt，名字也叫 collectTxtFiles——改名是因为它现在不止收 txt。）
+ */
+function collectInputFiles(input: string): string[] {
   const st = fs.statSync(input);
-  if (st.isFile()) return [input];
+  if (st.isFile()) return isSupportedInput(input) ? [input] : [];
   const out: string[] = [];
   for (const f of fs.readdirSync(input)) {
     const p = path.join(input, f);
-    if (fs.statSync(p).isFile() && f.toLowerCase().endsWith(".txt")) out.push(p);
+    if (fs.statSync(p).isFile() && isSupportedInput(f)) out.push(p);
   }
   return out.sort();
 }
@@ -187,9 +268,9 @@ interface FileReport {
 
 async function main() {
   const args = parseArgs(process.argv);
-  const files = collectTxtFiles(args.input);
+  const files = collectInputFiles(args.input);
   if (!files.length) {
-    console.error("未找到 .txt 文件:", args.input);
+    console.error(`未找到可处理的文件（支持 ${INPUT_EXTS_LABEL}）:`, args.input);
     process.exit(1);
   }
   fs.mkdirSync(args.out, { recursive: true });
@@ -230,7 +311,7 @@ async function main() {
   for (const f of files) {
     const name = path.basename(f);
     try {
-      const raw = fs.readFileSync(f, "utf-8");
+      const raw = await readInputText(f);
       if (!raw.trim()) {
         console.log(`⏭  ${name}：空文件，跳过`);
         continue;
@@ -274,8 +355,9 @@ async function main() {
       rep.ms = Date.now() - t0;
       rep.charsOut = out.length;
       rep.detectAfter = detectAI(out).probability;
-      const dest = path.join(args.out, name.replace(/\.txt$/i, "") + args.suffix + ".txt");
-      fs.writeFileSync(dest, out, "utf-8");
+      const ext = outExtOf(f, args.outFormat);
+      const dest = path.join(args.out, name.replace(/\.(txt|md|docx)$/i, "") + args.suffix + ext);
+      await writeOutput(dest, out, ext === ".docx");
       console.log(
         `✅ ${name}：${rep.detectBefore}→${rep.detectAfter}（${rep.ms}ms，${raw.length}→${out.length} 字）→ ${path.basename(dest)}`,
       );
