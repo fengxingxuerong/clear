@@ -106,7 +106,9 @@ const USAGE =
   " [--api [--base-url <url>] [--model <name>] [--api-key <key>] [--judge-model <name>]]" +
   " [--alt-model <name>] [--no-deep] [--contest <n>] [--max-calls <n>] [--max-wait <sec>]" +
   " [--strict] [--persona default|netgen|classic] [--report <file.json>]" +
-  " [--out-format follow|txt|docx]";
+  " [--out-format follow|txt|docx]\n" +
+  "  --base-url 填网关绝对地址（如 https://token.sensenova.cn/v1）。UI 设置里的 /sensenova/v1" +
+  " 是同源代理专用写法（代理会剥掉 /sensenova 前缀再转发），CLI 直连勿带这段前缀。";
 
 function parseArgs(argv: string[]): Args {
   const args: Args = {
@@ -249,6 +251,22 @@ function collectInputFiles(input: string): string[] {
   return out.sort();
 }
 
+/**
+ * CLI 直连误带同源代理前缀检测：UI/桌面版设置里的「/sensenova/v1」由 vite/Electron 代理
+ * 剥掉 /sensenova 前缀后转发（rewrite: ^/sensenova → ""）。CLI 直连没有这层代理，
+ * 带前缀的地址原样发出去会撞网关 404（{"code":5,"message":"NOT_FOUND"}，报错完全看不出
+ * 是路径多了一段——v0.9.17 功能验收实测踩到）。
+ *
+ * 只判定绝对地址（http(s):// 开头）；相对路径由 main 里另一条「同源相对路径」拦截负责。
+ * host 里的 sensenova 域名不受影响：token.sensenova.cn 中该词的前缀是点不是斜杠。
+ * 用正则剥 host 而非 new URL——vm 沙箱（scripts-logic.test.ts 切片）没有注入 URL 全局。
+ */
+function baseUrlHasProxyPrefix(baseUrl: string): boolean {
+  const m = /^[a-z][a-z0-9+.-]*:\/\/[^/]+(\/.*)?$/i.exec(baseUrl.trim());
+  if (!m) return false;
+  return /^\/sensenova(\/|$)/.test(m[1] ?? "");
+}
+
 interface FileReport {
   file: string;
   ms: number;
@@ -284,6 +302,14 @@ async function main() {
       console.error(
         `✗ baseUrl "${cfg.baseUrl}" 是同源相对路径，CLI 无代理无法使用。\n` +
           `  请填完整地址，例如 --base-url https://token.sensenova.cn/v1`,
+      );
+      process.exit(1);
+    }
+    if (baseUrlHasProxyPrefix(cfg.baseUrl)) {
+      console.error(
+        `✗ baseUrl "${cfg.baseUrl}" 带着同源代理前缀 /sensenova——那是 UI/桌面版给代理用的写法，` +
+          `代理会剥掉这段前缀再转发；CLI 直连没有代理，原样发出去会撞网关 404。\n` +
+          `  请去掉前缀，例如 --base-url https://token.sensenova.cn/v1`,
       );
       process.exit(1);
     }

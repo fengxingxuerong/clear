@@ -69,6 +69,7 @@ interface CliArgs {
 function loadCliFns(): {
   parseArgs: (argv: string[]) => CliArgs;
     collectInputFiles: (input: string) => string[];
+    baseUrlHasProxyPrefix: (baseUrl: string) => boolean;
   } {
   const src = readFileSync(path.resolve(__dirname, "humanize-cli.ts"), "utf-8");
   // 只保留纯函数段：USAGE + parseArgs + buildApiConfig + collectTxtFiles
@@ -89,11 +90,18 @@ function loadCliFns(): {
     path,
     module: { exports: {} },
   };
-  vm.runInNewContext(`${js}\n;module.exports = { parseArgs, collectInputFiles };`, sandbox);
-  return sandbox.module.exports as { parseArgs: never; collectInputFiles: never };
+  vm.runInNewContext(
+    `${js}\n;module.exports = { parseArgs, collectInputFiles, baseUrlHasProxyPrefix };`,
+    sandbox,
+  );
+  return sandbox.module.exports as {
+    parseArgs: never;
+    collectInputFiles: never;
+    baseUrlHasProxyPrefix: never;
+  };
 }
 
-const { parseArgs, collectInputFiles } = loadCliFns();
+const { parseArgs, collectInputFiles, baseUrlHasProxyPrefix } = loadCliFns();
 
 describe("humanize-cli parseArgs", () => {
   const base = (argv: string[]) => ["node", "humanize-cli.ts", ...argv];
@@ -191,5 +199,25 @@ describe("humanize-cli collectInputFiles", () => {
       path.join(tmpDir, "c.md"),
       path.join(tmpDir, "d.DOCX"),
     ]);
+  });
+});
+
+describe("humanize-cli baseUrlHasProxyPrefix", () => {
+  it("UI 同源代理写法抄给 CLI（绝对地址含 /sensenova 路径段）判命中", () => {
+    expect(baseUrlHasProxyPrefix("https://token.sensenova.cn/sensenova/v1")).toBe(true);
+    expect(baseUrlHasProxyPrefix("http://localhost:3000/sensenova/v1")).toBe(true);
+    expect(baseUrlHasProxyPrefix("https://gw.example.com/sensenova/v1/")).toBe(true);
+  });
+
+  it("正确直连地址与 host 含 sensenova 的域名不误伤", () => {
+    // host 里的 sensenova 前缀是点不是斜杠，不在路径上
+    expect(baseUrlHasProxyPrefix("https://token.sensenova.cn/v1")).toBe(false);
+    expect(baseUrlHasProxyPrefix("https://api.openai.com/v1")).toBe(false);
+    expect(baseUrlHasProxyPrefix("")).toBe(false);
+  });
+
+  it("相对路径不越权判定（由 main 里另一条同源相对路径拦截负责）", () => {
+    expect(baseUrlHasProxyPrefix("/sensenova/v1")).toBe(false);
+    expect(baseUrlHasProxyPrefix("token.sensenova.cn/v1")).toBe(false);
   });
 });

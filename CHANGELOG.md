@@ -223,6 +223,15 @@ CI 对该提交绿）。
 附 `QuAiWei-win32-x64-v0.9.17.zip` 197.0 MB，上传后 GitHub 侧 sha256 与本地逐字节比对一致、
 HTTP Range 下载验证 206）。产物盖章 `HEAD=6597123`，tag 与 CI 绿对齐；README 下载行已同步。
 
+**v0.9.17 验收追加（CLI baseUrl 前缀坑：前置拦截 + USAGE 提示）**：功能验收真网关冒烟时实测，
+把 UI 设置里的同源代理写法 `https://token.sensenova.cn/sensenova/v1` 直接抄给 CLI 的
+`--base-url` 会撞网关 404（`{"code":5,"message":"NOT_FOUND"}`）——vite/Electron 代理会剥掉
+`/sensenova` 前缀再转发，CLI 直连没有这层代理，报错也看不出是路径多了一段。现 CLI 前置识别
+这种误配（`baseUrlHasProxyPrefix` 纯函数，exit 1 + 指路正确写法），USAGE 同步补提示；
+host 里的 sensenova 域名不受影响（前缀是点不是斜杠）。正确地址 `https://token.sensenova.cn/v1`
+实测 LLM 通道真实工作（deepseek-v4-flash 单轮 34s，61→23 分，engine 如实标「LLM」），
+preset 5 模型 `/v1/models` 全部在列。测试 974 → 977（新增前缀检测 3 条）。
+
 ## v0.9.14 更新（深度模式：编造否决 + 首轮好区收手 + 定锚与日志归属修正）
 
 **背景**：v0.9.13 之后拿真网关跑了四篇（s1 议论文 / s2 种草文 / s3 技术科普 / s4 财报短讯，
