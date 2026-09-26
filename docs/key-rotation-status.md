@@ -1,4 +1,32 @@
-# Key 轮换状态备忘（2026-09-05｜泄露面复测更新 2026-09-19｜历史清洗处置 2026-09-25）
+# Key 轮换状态备忘（2026-09-05｜泄露面复测更新 2026-09-19｜历史清洗处置 2026-09-25｜轮换前置就绪 2026-09-26）
+
+## 2026-09-26 轮换前置完成（复扫 + 脚本就绪，只等新 Key）
+
+- **旧 Key 有效性复测**：3 条逐条打 `/v1/models` 全部 HTTP 200——仍然有效，轮换必要性不变。
+- **复扫修正 09-25 的一条记录**：`.env.bak` 副本**并非已不存在**——`prompt-master` 下
+  `.env.bak-20260917`（2 处）、`.env.bak-20260918`（4 处）、`.env.bak-20260918-judges`（4 处）
+  仍在，含旧 Key 明文共 9 处；轮换时随 `.env` 一并替换（脚本已覆盖）。
+- **两条未知凭证定性**：`174c9e2f2a80`、`4535b7066bc3` 出现在 agent-audit-reports 的
+  `index.html` 与 `data/2026-07-08.json`、`data/2026-08-15.json` 的 **agent 会话正文**里
+  （非 SenseNova 3 条之列，可能是其它系统的凭证）；报告清洗时一并抹除最干净。
+- **`.env.example` L9 排除**：`sk-` + 16 个相同字母，占位符非真 Key。
+- **quaiwei 跟踪内容复扫**：`git grep` 0 命中 ✅。
+- **脚本就绪**（下划线前缀 = 临时工具，轮换收官后可归档或删）：
+  - `scripts/_sweep-now.cjs` —— 泄露面现状重扫（哈希掩码输出，绝无明文）
+  - `scripts/_rotate-sensenova-keys.cjs` —— runbook 第 2 步（批量替换）与第 5 步（报告清洗）
+    自动化：支持 dry-run / `--apply` / `--scrub-reports`；写前备份到
+    `electron-dist/_rotbk/`（gitignore 覆盖区）；保持原文件换行风格；替换后自动复扫旧哈希
+- **dry-run 演练通过**：替换计划 17 处（`.env` 5 + 三个 bak 共 10 + `.env.ai` 3，行号精确）、
+  报告清洗 8 处（index.html 4 + 两个 json 各 2），未写盘。
+- **等新 Key 后的执行序列**（对应下方 runbook 步骤号）：
+  1. 用户：控制台新建 3 条 Key → **直接写进** `scripts/.sensenova-keys`（3 行，不贴对话）
+  2. 助手：`node scripts/_rotate-sensenova-keys.cjs --new-file scripts/.sensenova-keys --apply`
+     → 自动复扫 17 处旧 Key 0 命中
+  3. 助手：两项目最小真实调用验证新 Key（quaiwei 跑 `loadPresetKeys().length` = 3 + CLI 单轮；
+     prompt-master / sqli-scanner 各一次最小调用）
+  4. 用户：控制台删除 3 条旧 Key
+  5. 助手：`node scripts/_rotate-sensenova-keys.cjs --scrub-reports --apply`（抹 e38f + 174c + 4535）
+  6. 助手：重跑 `_sweep-now.cjs` 全盘 0 命中收官 → `_rotbk` 备份确认无误后删除 → 手册落"已完成"
 
 ## 2026-09-25 处置记录：历史明文已清洗 + 仓库已推送公开 GitHub
 
