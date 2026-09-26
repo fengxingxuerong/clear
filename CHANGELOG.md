@@ -219,6 +219,10 @@ CI 对该提交绿）。
 6 条（真起进程端到端：docx 进出 round-trip、既有 .txt 行为保护、`--out-format` 强制覆盖、
 非法值退出 1、坏 docx 报真实原因）+ `scripts-logic` 参数与文件收集适配用例；全绿，eslint 0。
 
+**发布**：v0.9.17 已发布（<https://github.com/fengxingxuerong/clear/releases/tag/v0.9.17>，
+附 `QuAiWei-win32-x64-v0.9.17.zip` 197.0 MB，上传后 GitHub 侧 sha256 与本地逐字节比对一致、
+HTTP Range 下载验证 206）。产物盖章 `HEAD=6597123`，tag 与 CI 绿对齐；README 下载行已同步。
+
 ## v0.9.14 更新（深度模式：编造否决 + 首轮好区收手 + 定锚与日志归属修正）
 
 **背景**：v0.9.13 之后拿真网关跑了四篇（s1 议论文 / s2 种草文 / s3 技术科普 / s4 财报短讯，
