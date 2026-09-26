@@ -21,17 +21,28 @@ export default tseslint.config(
     },
   },
   {
-    files: ["scripts/**/*.{ts,js,mjs}"],
+    files: ["scripts/**/*.{ts,js,mjs,cjs}"],
     languageOptions: {
       globals: {
         console: "readonly",
         process: "readonly",
         setTimeout: "readonly",
         fetch: "readonly",
+        require: "readonly",
+        module: "readonly",
+        Buffer: "readonly",
+        __dirname: "readonly",
       },
     },
     rules: {
       "@typescript-eslint/no-explicit-any": "off",
+    },
+  },
+  {
+    // CommonJS 运维工具脚本（一次性扫描/轮换等）：require 风格导入是刻意选择
+    files: ["scripts/**/*.cjs"],
+    rules: {
+      "@typescript-eslint/no-require-imports": "off",
     },
   },
   {
