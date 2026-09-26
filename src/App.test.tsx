@@ -14,13 +14,24 @@ import { aiScore } from "./engine/humanize";
 import { loadHistory } from "./store-history";
 import { loadIntensity } from "./store";
 
-const { runHumanizeMock } = vi.hoisted(() => ({ runHumanizeMock: vi.fn() }));
+const { runHumanizeMock, readDocxTextMock, createObjectURLMock } = vi.hoisted(() => ({
+  runHumanizeMock: vi.fn(),
+  readDocxTextMock: vi.fn(),
+  createObjectURLMock: vi.fn(),
+}));
 
 // 混合 mock：保留真实导出（DEFAULT_API / DEFAULT_DETECTOR / SENSENOVA_PRESET 等
 // 被 store 与 SettingsModal 依赖），只替换会触网 / 依赖宿主推理的函数。
 vi.mock("./api/llm", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./api/llm")>()),
   runHumanize: runHumanizeMock,
+}));
+
+// docx-io：readDocxText 换成可控 mock（导入路径分支测试用），
+// writeDocxText 保留真实实现（导出测试捕获真实生成的 Blob）。
+vi.mock("./docx-io", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./docx-io")>()),
+  readDocxText: readDocxTextMock,
 }));
 
 vi.mock("./ppl/ppl-client", async (importOriginal) => ({
@@ -72,6 +83,12 @@ async function renderApp() {
 beforeEach(() => {
   localStorage.clear();
   runHumanizeMock.mockReset();
+  readDocxTextMock.mockReset();
+  // happy-dom 未实现 URL.createObjectURL/revokeObjectURL——直接赋值 stub（下载路径断言用）
+  (URL as unknown as Record<string, unknown>).createObjectURL = createObjectURLMock;
+  (URL as unknown as Record<string, unknown>).revokeObjectURL = vi.fn();
+  createObjectURLMock.mockReset();
+  createObjectURLMock.mockReturnValue("blob:mock-url");
 });
 
 afterEach(() => {
@@ -211,5 +228,133 @@ describe("App 设置弹窗", () => {
     const { getByText } = render(<App />);
     fireEvent.click(getByText("历史"));
     expect(getByText(/暂无历史|还没有|历史记录/)).toBeTruthy();
+  });
+});
+
+describe("App 文件导入 / 导出（v0.9.15/16/17 UI 能力补锁）", () => {
+  function getFileInput(container: HTMLElement): HTMLInputElement {
+    return container.querySelector('input[type="file"]') as HTMLInputElement;
+  }
+
+  it("导入 .docx：走 readDocxText 提取，文本进输入面板并给出提示", async () => {
+    readDocxTextMock.mockResolvedValue("从 Word 文档里提取出来的正文。");
+    const { getByText, getByPlaceholderText, container } = await renderApp();
+    const file = new File(["binary-docx-bytes"], "报告.docx");
+    fireEvent.change(getFileInput(container), { target: { files: [file] } });
+    await waitFor(() => {
+      expect(getByText(/已导入 报告\.docx（\d+ 字，格式不保留）/)).toBeTruthy();
+    });
+    expect((getByPlaceholderText(/把 AI 写的文章粘进来/) as HTMLTextAreaElement).value).toBe(
+      "从 Word 文档里提取出来的正文。",
+    );
+    expect(readDocxTextMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("导入空 docx：提示无文字且不写入输入面板", async () => {
+    readDocxTextMock.mockResolvedValue("   ");
+    const { getByText, getByPlaceholderText, container } = await renderApp();
+    fireEvent.change(getFileInput(container), {
+      target: { files: [new File(["x"], "空.docx")] },
+    });
+    await waitFor(() => {
+      expect(getByText(/docx 里没有可提取的文字/)).toBeTruthy();
+    });
+    expect((getByPlaceholderText(/把 AI 写的文章粘进来/) as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("导入坏 docx：解析失败给出真实原因且不崩", async () => {
+    readDocxTextMock.mockRejectedValue(new Error("不是有效的 zip 文件（找不到 EOCD）"));
+    const utils = await renderApp();
+    fireEvent.change(getFileInput(utils.container), {
+      target: { files: [new File(["garbage"], "坏.docx")] },
+    });
+    await waitFor(() => {
+      expect(utils.getByText(/docx 解析失败：不是有效的 zip 文件/)).toBeTruthy();
+    });
+  });
+
+  it("导入 .txt：走 FileReader 读文本并写入输入面板", async () => {
+    const { getByText, getByPlaceholderText, container } = await renderApp();
+    fireEvent.change(getFileInput(container), {
+      target: { files: [new File(["纯文本内容一二三"], "笔记.txt")] },
+    });
+    await waitFor(() => {
+      expect(getByText(/已导入 笔记\.txt（\d+ 字）/)).toBeTruthy();
+    });
+    expect((getByPlaceholderText(/把 AI 写的文章粘进来/) as HTMLTextAreaElement).value).toBe(
+      "纯文本内容一二三",
+    );
+  });
+
+  it("导入超 2MB 文件：拒绝并提示走 CLI 批量", async () => {
+    const big = new File([new ArrayBuffer(2 * 1024 * 1024 + 1)], "大文件.txt");
+    const { getByText, container } = await renderApp();
+    fireEvent.change(getFileInput(container), { target: { files: [big] } });
+    await waitFor(() => {
+      expect(getByText(/文件超过 2MB/)).toBeTruthy();
+    });
+    expect(readDocxTextMock).not.toHaveBeenCalled();
+  });
+
+  it("去味后导出 .docx：writeDocxText 真实生成 Blob 并触发下载", async () => {
+    runHumanizeMock.mockResolvedValue(makeRunResult(OUTPUT_TEXT, "local"));
+    const { getByText, getByPlaceholderText } = await renderApp();
+    fireEvent.change(getByPlaceholderText(/把 AI 写的文章粘进来/), {
+      target: { value: INPUT_TEXT },
+    });
+    fireEvent.click(getByText("去味"));
+    await waitFor(() => {
+      expect((getByPlaceholderText(/点击「去味」生成/) as HTMLTextAreaElement).value).toBe(
+        OUTPUT_TEXT,
+      );
+    });
+    let captured: Blob | null = null;
+    createObjectURLMock.mockImplementation((b: Blob) => {
+      captured = b;
+      return "blob:mock-url";
+    });
+    fireEvent.click(getByText("导出 .docx"));
+    await waitFor(() => {
+      expect(getByText(/已导出 \.docx/)).toBeTruthy();
+    });
+    expect(createObjectURLMock).toHaveBeenCalledTimes(1);
+    expect(captured).toBeInstanceOf(Blob);
+    expect(captured!.size).toBeGreaterThan(0);
+  });
+
+  it("无输出时导出按钮禁用：点击不触发任何下载", () => {
+    const { getByText, container } = render(<App />);
+    const txtBtn = getByText("导出 .txt") as HTMLButtonElement;
+    const docxBtn = getByText("导出 .docx") as HTMLButtonElement;
+    expect(txtBtn.disabled).toBe(true);
+    expect(docxBtn.disabled).toBe(true);
+    fireEvent.click(docxBtn);
+    expect(createObjectURLMock).not.toHaveBeenCalled();
+    expect(container).toBeTruthy();
+  });
+
+  it("导出 .txt：Blob 内容与去味输出逐字一致", async () => {
+    runHumanizeMock.mockResolvedValue(makeRunResult(OUTPUT_TEXT, "local"));
+    const { getByText, getByPlaceholderText } = await renderApp();
+    fireEvent.change(getByPlaceholderText(/把 AI 写的文章粘进来/), {
+      target: { value: INPUT_TEXT },
+    });
+    fireEvent.click(getByText("去味"));
+    await waitFor(() => {
+      expect((getByPlaceholderText(/点击「去味」生成/) as HTMLTextAreaElement).value).toBe(
+        OUTPUT_TEXT,
+      );
+    });
+    let captured: Blob | null = null;
+    createObjectURLMock.mockImplementation((b: Blob) => {
+      captured = b;
+      return "blob:mock-url";
+    });
+    fireEvent.click(getByText("导出 .txt"));
+    await waitFor(() => {
+      expect(getByText(/已导出 去味-\d{8}-\d{4}\.txt/)).toBeTruthy();
+    });
+    const text = await captured!.text();
+    expect(text).toBe(OUTPUT_TEXT);
   });
 });
