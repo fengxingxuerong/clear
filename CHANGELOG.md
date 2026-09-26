@@ -199,6 +199,26 @@ XML 实体还原）；导出：生成最小合法 OOXML（Word/WPS/Google Docs �
 附 `QuAiWei-win32-x64-v0.9.16.zip` 196.7 MB），那一行已同步为 v0.9.16。
 发布凭证走的是本机 Git Credential Manager 里已有的 GitHub 凭据，未新增 PAT、未落盘。
 
+**v0.9.17：CLI 接上 .docx 输入输出（docx 进 docx 出）**：
+
+v0.9.16 只做了 UI 侧的 .docx，CLI 仍是「.txt only」——批量处理 Word 稿得先手工转文本，
+这一版把最后一道手接上（v0.9.16 小节里预告的「下版」兑现）。`scripts/humanize-cli.ts`：
+输入侧新增 .docx（零依赖 OOXML 解析，与 UI 同款 `readDocxText`，解析失败把真实部件名
+抛给上层、不吞根因）；输出格式默认**跟随输入**（.docx 进 → .docx 出——用户拿 Word 稿
+来批量处理，落回 .txt 反而多一道手），`--out-format txt|docx` 可强制覆盖；
+`collectTxtFiles` 更名 `collectInputFiles`。一个实现细节：`Buffer → ArrayBuffer` 单独
+转一手——Buffer 可能是共享内存池上的视图，直接取 `.buffer` 会串。
+
+**开发中踩的坑（自指陷阱，值得记）**：vm 沙箱切片要求注释里别写定位字面量，接线时的
+防御注释里引了历史报错原文——原文含「星号+斜杠」的块注释终止符，把那段 JSDoc 提前
+掐断，esbuild 报 Unterminated string literal，5 条测试连带转译失败。修复时把报错原文
+转述为「星斜杠」并在原位留备忘，防止后人改回原样再炸（代码提交 `34c16f4`，已推送，
+CI 对该提交绿）。
+
+**测试**：`vitest` **966 → 974**（55 → 56 文件）——新增 `scripts/humanize-cli-docx.test.ts`
+6 条（真起进程端到端：docx 进出 round-trip、既有 .txt 行为保护、`--out-format` 强制覆盖、
+非法值退出 1、坏 docx 报真实原因）+ `scripts-logic` 参数与文件收集适配用例；全绿，eslint 0。
+
 ## v0.9.14 更新（深度模式：编造否决 + 首轮好区收手 + 定锚与日志归属修正）
 
 **背景**：v0.9.13 之后拿真网关跑了四篇（s1 议论文 / s2 种草文 / s3 技术科普 / s4 财报短讯，
