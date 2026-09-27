@@ -6,7 +6,9 @@
 想更强就接一个 OpenAI 兼容的 LLM（各家通吃，实测支持 OpenRouter / SenseNova / OpenAI）。
 定位：中文 AI 文本**去味预处理工具 + 送检前自检清单**——可接入朱雀（网页版半自动 / EdgeOne API 全自动）等真实检测器做闭环验证。
 
-**下载**：[Windows 免安装包（v0.9.18）](https://github.com/fengxingxuerong/clear/releases/latest)——解压双击 `QuAiWei.exe` 即用。
+**下载**：[Windows 免安装包（v0.9.17）](https://github.com/fengxingxuerong/clear/releases/latest)——解压双击 `QuAiWei.exe` 即用。
+<!-- v0.9.18 的包已打好并校验通过（electron-dist/QuAiWei-win32-x64-v0.9.18.zip），
+     但本机网络到 github.com 不可达，推送与 Release 未完成——发布成功后把上面版本号改成 v0.9.18。 -->
 
 > ⚠️ 诚实声明：本项目**不承诺"通过朱雀检测"**——aiScore → 朱雀官方分的换算**不可靠**：
 > 现有 18 个送检点为人工抄录，且账本启用（`scripts/zhuque-evidence.ts`）**之前**没有留下页面截图等

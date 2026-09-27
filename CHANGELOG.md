@@ -58,6 +58,33 @@ README 里写错它照样绿；要拦得再加一条检查（本版未做，留�
 - **标定漂移压在棘轮天花板上**：6/18 点、Δmax **35/35**（D0 Δ−35）。
   下一次引擎再动 x 轴这条自检就会红，届时该做的是拿新官方点位重拟合四条体裁线。
 
+**发布状态：产物已就绪，推送/Release 未完成（网络原因，不是流程跳过）**
+
+- `npm run build` 盖章 `HEAD=5ab7e09`（指纹 `a466aae1449eefc9…`，116 个文件）；
+- `cd electron-app && npm run repack` 五节全绿：`resources/app` **183.5 MB** / 整包 **485.3 MB**、
+  版本一致 `0.9.18`、指纹无 dirty、依赖链实测（transformers 937 个导出符号、Tensor 可实例化）；
+- 交付 zip 已打：`electron-dist/QuAiWei-win32-x64-v0.9.18.zip` **196.7 MB**。
+- ⚠️ **`git push` 与 GitHub Release 没能完成**。实测本机当前网络：直连 `github.com:443`
+  TCP 超时、走代理该域一律 502；只有 `api.github.com` 能通（200）。而 Release 的 tag 必须指向
+  已推送的 commit，master 推不上去就没法诚实地发这一版——所以**没有假发**。
+  README 下载行因此保持 v0.9.17（当前实际可下载版本），源码标题是 v0.9.18。
+  网络恢复后跑 `node scripts/_publish-v0.9.18.cjs`（前置自检 → push → 建 Release → 传 zip，
+  凭据只走内存），成功后把 README 下载行的 v0.9.17 改成 v0.9.18。
+
+### v0.9.18 修复记录：rebuild 卡死这次卡在「清空」阶段
+
+本版重打产物时 `repack` 卡了 **12 分钟零进展**（停在 `[2] 重建 resources/app` 之后，
+逐包打点一行都没出）。上一轮记录里卡的是 `fs.cpSync`，这次**是 `fs.rmSync` 清空旧 app 目录**：
+
+- 现场取证：`resources/app` 停在 32 个文件 / 23.6 MB，两次间隔 8 秒采样**文件数与体积完全不变**，
+  最新写入时间还是上一次 repack（9-26 14:10）——不是"拷贝慢"，是真卡住。
+- 排除文件占用：对残留的 `@huggingface/jinja` 做 `renameSync` + 文件 `open r+` **都成功**
+  → 目录没被任何进程锁着，**卡的是那个 node 进程本身**，不是杀软句柄。
+- 处置：`taskkill /F` 掉 `node rebuild-app.cjs` 与其父 `npm run repack`，手动 `rmSync`
+  **0.2 秒**删干净 → 立刻重跑，**约 1 分钟走完全流程**（47 个包逐行打点齐全）。
+- 结论（写在这里防止下次又摸黑）：**卡死不是只在 cpSync**，清空阶段同样会；
+  判据用"两次采样文件数不变"最快（比等日志快得多）；处置就是杀进程 + 手动删 + 重跑，不为它改脚本。
+
 ## v0.9.15 更新（呈现层：本地分与外部通道分分歧时界面必须说出来）
 
 **背景**：v0.9.14 §22 与 `docs/external-judge-findings.md`（2026-09-22）已经证明一件事——
