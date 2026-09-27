@@ -1,4 +1,4 @@
-# 趣AI味 · QuAiWei v0.9.17
+# 趣AI味 · QuAiWei v0.9.18
 
 [![CI](https://github.com/fengxingxuerong/clear/actions/workflows/ci.yml/badge.svg)](https://github.com/fengxingxuerong/clear/actions/workflows/ci.yml)
 
@@ -6,7 +6,7 @@
 想更强就接一个 OpenAI 兼容的 LLM（各家通吃，实测支持 OpenRouter / SenseNova / OpenAI）。
 定位：中文 AI 文本**去味预处理工具 + 送检前自检清单**——可接入朱雀（网页版半自动 / EdgeOne API 全自动）等真实检测器做闭环验证。
 
-**下载**：[Windows 免安装包（v0.9.17）](https://github.com/fengxingxuerong/clear/releases/latest)——解压双击 `QuAiWei.exe` 即用。
+**下载**：[Windows 免安装包（v0.9.18）](https://github.com/fengxingxuerong/clear/releases/latest)——解压双击 `QuAiWei.exe` 即用。
 
 > ⚠️ 诚实声明：本项目**不承诺"通过朱雀检测"**——aiScore → 朱雀官方分的换算**不可靠**：
 > 现有 18 个送检点为人工抄录，且账本启用（`scripts/zhuque-evidence.ts`）**之前**没有留下页面截图等
@@ -546,5 +546,5 @@ MIT（见 LICENSE）。
 
 ## 更新日志
 
-完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。当前版本 **v0.9.15**（以 `package.json` 的 `version` 为准）。
+完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。当前版本 **v0.9.18**（以 `package.json` 的 `version` 为准）。
 
