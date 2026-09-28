@@ -234,10 +234,10 @@ export async function runHumanize(
             : "";
         note =
           (deep.hitTarget
-            ? `深度去味达标：各轮评分 ${shown}`
+            ? `深度去味达标：AI 味评分（越低越好）${shown}`
             : deep.note
-              ? `${deep.note}：各轮评分 ${shown}`
-              : `深度去味完成（未压到 ${deep.targetUsed} 以下）：各轮评分 ${shown}`) +
+              ? `${deep.note}：AI 味评分（越低越好）${shown}`
+              : `深度去味完成（未压到 ${deep.targetUsed} 以下）：AI 味评分（越低越好）${shown}`) +
           qcSummary +
           shrinkNote;
         shrinkRatio = deep.shrinkRatio;
