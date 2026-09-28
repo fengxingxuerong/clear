@@ -58,18 +58,24 @@ README 里写错它照样绿；要拦得再加一条检查（本版未做，留�
 - **标定漂移压在棘轮天花板上**：6/18 点、Δmax **35/35**（D0 Δ−35）。
   下一次引擎再动 x 轴这条自检就会红，届时该做的是拿新官方点位重拟合四条体裁线。
 
-**发布状态：产物已就绪，推送/Release 未完成（网络原因，不是流程跳过）**
+**发布状态：已正式发布（2026-09-28 收官）**
 
-- `npm run build` 盖章 `HEAD=5ab7e09`（指纹 `a466aae1449eefc9…`，116 个文件）；
-- `cd electron-app && npm run repack` 五节全绿：`resources/app` **183.5 MB** / 整包 **485.3 MB**、
-  版本一致 `0.9.18`、指纹无 dirty、依赖链实测（transformers 937 个导出符号、Tensor 可实例化）；
-- 交付 zip 已打：`electron-dist/QuAiWei-win32-x64-v0.9.18.zip` **196.7 MB**。
-- ⚠️ **`git push` 与 GitHub Release 没能完成**。实测本机当前网络：直连 `github.com:443`
-  TCP 超时、走代理该域一律 502；只有 `api.github.com` 能通（200）。而 Release 的 tag 必须指向
-  已推送的 commit，master 推不上去就没法诚实地发这一版——所以**没有假发**。
-  README 下载行因此保持 v0.9.17（当前实际可下载版本），源码标题是 v0.9.18。
-  网络恢复后跑 `node scripts/_publish-v0.9.18.cjs`（前置自检 → push → 建 Release → 传 zip，
-  凭据只走内存），成功后把 README 下载行的 v0.9.17 改成 v0.9.18。
+- 发布链路：`npm run build` 盖章 → `repack` 五节全绿 → zip 重打 → `scripts/_publish-v0.9.18.cjs` 一键发布（自检 → push → 建 Release → 传 zip，凭据只走内存）。
+- 提交链：`2e99bc9`（发布器）→ `9ddc72a`（`package-lock.json` 根版本号字段 0.7.0→0.9.18 对齐，npm install 副产物）→ `60f1621`（README 下载行同步）。
+- Release 已上线：`v0.9.18` tag，交付包 `QuAiWei-win32-x64-v0.9.18.zip` **191.3 MB**，README 下载行已同步（发版后才改，避免点进去 404）。
+- CI：发布提交与 README 提交均 `success`。
+
+### v0.9.18 发布中的硬货：npm cache 污染三连（repack 链连环拦截）
+
+重打产物时 `verify-pruned` 第 [5] 节依赖链实测**两次拦截**，逐层定位出本机 npm cache 被污染，三个包装出残缺版：
+
+1. `@huggingface/transformers@4.2.0` `dist/` 缺全部非 min 文件（`transformers.node.cjs` 等）——包的 `main` 指向的文件不存在，require 必挂；
+2. `@img/sharp-win32-x64` 缺 `libvips-42.dll`——加载报 `ERR_DLOPEN_FAILED`；
+3. `onnxruntime-node` 被剥成 **0.7 MB** JS 骨架（`bin/napi-v6/win32/x64` 只剩 298KB 旧 binding，缺 `DirectML.dll` / `dxcompiler.dll` / `dxil.dll` / `onnxruntime.dll`）。
+
+取证手法：npm 按 lock 重装后文件仍残缺 → **从 registry 拉官方 tarball（`npm pack`）逐文件对照一锤定音**；npm **不重装"已存在"的包**，残缺包必须手动删除再 `npm install` 才生效。修复 = `npm cache clean --force` + 逐个删包重装，三个包恢复官方完整文件集（onnxruntime-node 211MB 含全平台二进制，rebuild 拷贝 win32 部分 123.6MB）。
+
+教训：cache 污染会让「重装」拿到错误内容且不自知；`verify-pruned` 的依赖链实测（按产物绝对路径加载 + 真实例化 Tensor）恰好兜住了这一层，证明它不是摆设。
 
 ### v0.9.18 修复记录：rebuild 卡死这次卡在「清空」阶段
 
