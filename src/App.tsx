@@ -7,27 +7,12 @@ import {
   DEEP_MAX_ROUNDS,
   DEEP_TARGET_SCORE,
 } from "./api/llm";
-import {
-  fingerprintCheck,
-  checkFidelityLocal,
-  pplIssues as derivePplIssues,
-  aiScore,
-  FingerprintReport,
-  type ScoreBreakdown,
-} from "./engine/humanize";
-import { classifyGenre } from "./engine/classify-genre";
-import { CALIB, trackForGenre, predictOfficialPct } from "./engine/zhuque-calib";
-import { detectSemanticStable, semanticAvailable } from "./api/zhuque-semantic";
+import { fingerprintCheck, checkFidelityLocal } from "./engine/humanize";
+import type { FingerprintReport, ScoreBreakdown } from "./engine/humanize";
+import { detectAI, type DetectReport } from "./engine/detector";
+import { detectZhuque } from "./engine/zhuque";
 import { DetectorConfig, scoreViaDetector } from "./api/detector";
-import {
-  computePplFeature,
-  ensurePplModel,
-  pplStatus,
-  isPplReady,
-  type PplProgressInfo,
-} from "./ppl/ppl-client";
-import type { PplIssueLite } from "./components/FingerprintPanel";
-import type { PplFeature } from "./ppl/scorer-core";
+import { semanticAvailable } from "./api/zhuque-semantic";
 import {
   loadApi,
   loadIntensity,
@@ -36,13 +21,10 @@ import {
   saveDetector,
   loadZhuqueMode,
   saveZhuqueMode,
-  loadPplEnabled,
   savePplEnabled,
   hasSecureStore,
   persistApiConfig,
   saveDetectorKeySecure,
-  loadFuseWeight,
-  saveFuseWeight,
   loadLocal,
   saveLocal,
   loadProtectedTerms,
@@ -54,35 +36,7 @@ import {
   type LocalSettings,
 } from "./store";
 import { setProtectedTerms } from "./engine/term-protect";
-import { readDocxText, writeDocxText } from "./docx-io";
-import {
-  detectZhuque,
-  ZHUQUE_URL,
-  type ZhuqueReport,
-  type Calibration,
-  type SemanticLayer,
-} from "./engine/zhuque";
-import { detectAI, type DetectReport } from "./engine/detector";
-import {
-  addCalibPoint,
-  buildSubmission,
-  clearAllCalibration,
-  copyText,
-  loadCalibration,
-  openOfficial,
-  parseOfficialResult,
-  submissionAdvice,
-} from "./api/zhuque";
-import {
-  loadSamples,
-  generateBatch,
-  fillOfficial,
-  deleteSample,
-  clearAllSamples,
-  labStats,
-  seedTruthAnchors,
-  type CalibSample,
-} from "./api/calib-lab";
+import { copyText } from "./api/zhuque";
 import { SettingsModal } from "./components/SettingsModal";
 import { ScoreBadge } from "./components/ScoreBadge";
 import { TextPane } from "./components/TextPane";
@@ -100,11 +54,19 @@ import {
   makeHistoryEntry,
   type HistoryEntry,
 } from "./store-history";
+import { usePplFlow } from "./hooks/usePplFlow";
+import { useZhuqueLab } from "./hooks/useZhuqueLab";
+import { buildHumanizeNote, formatRestoredNote } from "./app-messages";
+import {
+  importFileToText,
+  makeDatedName,
+  downloadBlob,
+  exportDocxBlob,
+  makeTxtBlob,
+} from "./app-fileio";
+import type { PplFeature } from "./ppl/scorer-core";
 
 type Score = ScoreBreakdown;
-
-/** 朱雀网页版检测文本长度门槛：送检前给出提示，去味本身不受影响 */
-const ZHUQUE_MIN_CHARS = 350;
 
 /** 「示例」按钮载入的样例文本 */
 const SAMPLE_TEXT = `值得注意的是，随着人工智能技术的快速发展，AI 写作工具应运而生。
@@ -146,96 +108,84 @@ export default function App({
   const [roundScores, setRoundScores] = useState<number[]>([]);
   const [fingerprint, setFingerprint] = useState<FingerprintReport | null>(null);
   const [fidelity, setFidelity] = useState<{ pass: boolean; problems: string[] } | null>(null);
-  // ---- 困惑度第 8 项状态机 ----
-  const [pplEnabled, setPplEnabled] = useState<boolean>(loadPplEnabled());
-  const [pplState, setPplState] = useState<
-    "idle" | "need-download" | "downloading" | "loading" | "done" | "error" | "unsupported"
-  >("idle");
-  const [pplFeature, setPplFeature] = useState<PplFeature | null>(null);
-  const [pplIssues, setPplIssues] = useState<PplIssueLite[] | null>(null);
-  const [pplProgress, setPplProgress] = useState<number | null>(null);
-  const [pplNote, setPplNote] = useState<string | null>(null);
   const [showDiff, setShowDiff] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [history, setHistory] = useState<HistoryEntry[]>(() => loadHistory());
-  // ---- 朱雀检测（本地近似 + 官方校准）与本地 AI 检测 ----
+  // ---- 本地 AI 检测（14 特征离线启发式） ----
   const [detectIn, setDetectIn] = useState<DetectReport | null>(null);
   const [detectOut, setDetectOut] = useState<DetectReport | null>(null);
   const [showDetectFeatures, setShowDetectFeatures] = useState(false);
-  const [zq, setZq] = useState<ZhuqueReport | null>(null);
-  const [zqText, setZqText] = useState("");
-  const [zqCalib, setZqCalib] = useState<Calibration>(() => loadCalibration());
-  const [zqPaste, setZqPaste] = useState("");
-  const [zqMsg, setZqMsg] = useState("");
-  const [zqFeatures, setZqFeatures] = useState(false);
-  const [zqSem, setZqSem] = useState<SemanticLayer | null>(null);
-  const [zqSemLoading, setZqSemLoading] = useState(false);
-  const [zqWeight, setZqWeight] = useState<number>(() => loadFuseWeight());
-  const [showLab, setShowLab] = useState(false);
-  const [labSamples, setLabSamples] = useState<CalibSample[]>([]);
-  const [labText, setLabText] = useState("");
-  const [labPaste, setLabPaste] = useState<Record<string, string>>({});
-  const [labMsg, setLabMsg] = useState("");
   const [local, setLocal] = useState<LocalSettings>(() => loadLocal());
   // 自定义保护术语（原文）。term-protect 的保护集是模块级全局，挂载时注入一次；
   // 设置里改完由 handleSaveSettings 再注入。
   const [protectedTermsRaw, setProtectedTermsRaw] = useState<string>(() => loadProtectedTerms());
 
-  // 第 8 项（困惑度）：模型就绪才推理；未下载转引导态；失败静默降级为仅 7 项
-  async function runPplFeature(target: string): Promise<void> {
-    if (!loadPplEnabled()) return;
-    try {
-      const st = await pplStatus();
-      if (!st.supported) {
-        setPplState("unsupported");
-        return;
-      }
-      if (!isPplReady()) {
-        setPplState("need-download");
-        return;
-      }
-      setPplState("loading");
-      const feature = await computePplFeature(target);
-      setPplFeature(feature);
-      setPplIssues(derivePplIssues(feature));
-      setPplState("done");
-      // 困惑度层就绪：朱雀检测面板若已打开，自动带上第 13 维重算综合分
-      if (zqText) {
-        setZq(
-          detectZhuque(zqText, {
-            calibration: zqCalib,
-            ppl: {
-              meanNll: feature.meanNll,
-              winStd: feature.winStd,
-              scoredChars: feature.scoredChars,
-              windowCount: feature.windows.length,
-            },
-          }),
-        );
-      }
-    } catch {
-      setPplFeature(null);
-      setPplIssues(null);
-      setPplState("error");
-    }
-  }
-
-  async function ensurePpl(): Promise<void> {
-    if (pplState === "downloading") return;
-    setPplState("downloading");
-    setPplProgress(0);
-    try {
-      await ensurePplModel((p: PplProgressInfo) => {
-        if (typeof p.progress === "number") setPplProgress(p.progress);
-      });
-      setPplState("idle");
-      const target = output.trim() ? output : input;
-      if (target.trim()) void runPplFeature(target);
-    } catch (e: unknown) {
-      setPplState("error");
-      setPplNote("模型下载失败：" + (e instanceof Error ? e.message : String(e)));
-    }
-  }
+  // ---- 困惑度第 8 项 + 朱雀检测/校准实验室编排（自本组件抽出，行为不变） ----
+  // 两个 hook 互有依赖（ppl 特征 → 朱雀面板重算），用 ref 中转打破声明顺序循环：
+  // usePplFlow 先声明（useZhuqueLab 要吃 pplFeature），其 applyPplToZhuque 回调
+  // 经 ref 转发到 useZhuqueLab 的 rerunWithPpl——ref.current 每次渲染刷新，语义等价
+  // 于原实现里闭包直读最新 state。
+  const rerunPplRef = useRef<(f: PplFeature) => void>(() => {});
+  const {
+    pplEnabled,
+    setPplEnabled,
+    pplState,
+    pplFeature,
+    pplIssues,
+    pplProgress,
+    pplNote,
+    setPplNote,
+    runPplFeature,
+    ensurePpl,
+  } = usePplFlow({
+    applyPplToZhuque: (feature) => rerunPplRef.current(feature),
+    getAnalysisTarget: () => (output.trim() ? output : input),
+  });
+  const {
+    zq,
+    zqText,
+    zqCalib,
+    zqPaste,
+    zqMsg,
+    zqFeatures,
+    zqSem,
+    zqSemLoading,
+    zqWeight,
+    zqGenreEstimate,
+    setZq,
+    setZqText,
+    setZqSem,
+    setZqPaste,
+    setZqMsg,
+    setZqFeatures,
+    setLabMsg,
+    zqOpts,
+    zqTarget,
+    handleZhuque,
+    handleZqCopySubmit,
+    handleZqOpenOfficial,
+    handleZqSaveCalib,
+    handleZqSemantic,
+    handleZqWeight,
+    handleZqClearCalib,
+    handleLabOpen,
+    handleLabGenerate,
+    handleLabFill,
+    handleLabDelete,
+    handleLabClear,
+    handleLabApplyWeight,
+    handleLabSeed,
+    setShowLab,
+    setLabText,
+    labSamples,
+    labText,
+    labMsg,
+    labPaste,
+    showLab,
+    setLabPaste,
+    rerunWithPpl,
+  } = useZhuqueLab({ input, output, api, pplFeature, genreOverride });
+  rerunPplRef.current = rerunWithPpl;
 
   function handleFingerprint() {
     const target = output.trim() ? output : input;
@@ -285,44 +235,23 @@ export default function App({
       setZqSem(null); // 新去味稿：旧语义层结果作废
       const zt = r.text.trim();
       setZqText(zt);
-      const zr = detectZhuque(zt, zhuqueOpts(zqCalib));
+      const zr = detectZhuque(zt, zqOpts(zqCalib));
       setZq(zr);
-      // 按**真实产出引擎**出文案。旧写法只看 usedApi，于是"API 调用失败回退本地"
-      // 时界面写的是「使用本地引擎去味（未配置/未启用 API）」——用户明明付了调用，
-      // 看到的是假话；而长文分块混拼时 usedApi 仍是 true，更分不出这稿是谁写的。
-      let msg: string;
-      if (r.engine === "llm") {
-        msg = r.roundScores?.length ? "已使用 API 深度去味" : "已使用 API（LLM）去味";
-      } else if (r.engine === "mixed") {
-        msg = "⚠️ 本稿是 LLM + 本地引擎混拼（部分块 LLM 未产出，已本地补位）";
-      } else if (r.engine === "passthrough") {
-        msg = "文本过短，未做去味处理";
-      } else {
-        msg = r.usedApi
-          ? "⚠️ 调用过 API 但最终仍由本地引擎产出"
-          : "使用本地引擎去味（未走 LLM）";
-      }
-      if (r.note) msg += " · " + r.note;
-      if (r.bestOf) {
-        msg += ` · 多候选择优：${r.bestOf.tried} 稿中挑最优（淘汰 ${r.bestOf.rejected} 稿，中选种子 ${r.bestOf.seed}）`;
-      }
-      const visibleLen = input.replace(/\s/g, "").length;
-      if (visibleLen < ZHUQUE_MIN_CHARS) {
-        msg += ` · 提示：朱雀检测要求不少于 ${ZHUQUE_MIN_CHARS} 字（当前 ${visibleLen} 字），去味本身不受影响`;
-      }
-      msg += ` · 本地检测：${din.levelText}(${din.probability}%) → ${dout.levelText}(${dout.probability}%)`;
-      msg += ` · 朱雀口径：AI特征占比 ${zr.ratios.ai}%（${zr.labelText}）`;
+      // 结果文案组装已抽纯函数（src/app-messages.ts）：按真实产出引擎如实标注，
+      // 回归防护见 src/app-messages.test.ts
+      let detectorNote: string | undefined;
       // 检测器自动闭环：已配置外部检测器时，去味后自动送检一次（真实分回显，
       // 形成"改写→检测"闭环的一部分），不再需要手动点「用外部检测器」
       if (detector.enabled && detector.url.trim() && r.text.trim()) {
         try {
           const s = await scoreViaDetector(r.text, detector);
           setDetectorScore(s);
-          msg += ` · 检测器自动送检：${s} 分`;
+          detectorNote = ` · 检测器自动送检：${s} 分`;
         } catch (de: unknown) {
-          msg += " · 检测器送检失败：" + (de instanceof Error ? de.message : String(de));
+          detectorNote = " · 检测器送检失败：" + (de instanceof Error ? de.message : String(de));
         }
       }
+      const msg = buildHumanizeNote({ r, input, din, dout, zr, detectorNote });
       setNote(msg);
       // 保存到历史记录
       const entry = makeHistoryEntry(input, r.text, r.before, r.after, intensity, r.usedApi, r.engine);
@@ -378,162 +307,6 @@ export default function App({
     setShowDetectFeatures(false);
   }
 
-  /* ---- 朱雀检测（本地近似 + 官方校准） ---- */
-
-  function zqTarget(): string {
-    return (output.trim() ? output : input).trim();
-  }
-
-  /** 检测选项：校准映射 + 困惑度层（模型就绪时自动并入，字数不足时引擎内部忽略） */
-  function zhuqueOpts(cal: Calibration | null) {
-    return {
-      calibration: cal,
-      ppl: pplFeature
-        ? {
-            meanNll: pplFeature.meanNll,
-            winStd: pplFeature.winStd,
-            scoredChars: pplFeature.scoredChars,
-            windowCount: pplFeature.windows.length,
-          }
-        : null,
-    };
-  }
-
-  function handleZhuque() {
-    const t = zqTarget();
-    if (!t) return;
-    setZqText(t);
-    setZq(detectZhuque(t, zhuqueOpts(zqCalib)));
-    setZqMsg("");
-    setZqSem(null); // 换文本即作废旧的语义层结果，防止张冠李戴
-  }
-
-  async function handleZqCopySubmit() {
-    const sub = buildSubmission(zqTarget());
-    if (!sub.chars) return;
-    const ok = await copyText(sub.text);
-    setZqMsg(
-      `${submissionAdvice(sub.chars)}｜${ok ? "已复制，去官方页面粘贴即可" : "复制失败，请手动复制"}`,
-    );
-  }
-
-  function handleZqOpenOfficial() {
-    if (!openOfficial()) setZqMsg(`浏览器拦截了弹窗，请手动打开 ${ZHUQUE_URL}`);
-  }
-
-  function handleZqSaveCalib() {
-    const p = parseOfficialResult(zqPaste);
-    if (!p.ok || p.probability === null || !zq) {
-      setZqMsg(p.note || "解析失败，粘一行官方结果再试");
-      return;
-    }
-    const cal = addCalibPoint(zq.composite, p.probability);
-    setZqCalib(cal);
-    setZq(detectZhuque(zqText || zqTarget(), zhuqueOpts(cal)));
-    setZqPaste("");
-    setZqMsg(
-      `已记录：本地综合分 ${zq.composite} → 官方 ${p.probability}%（${p.labelText}），现有 ${cal.n} 个校准点`,
-    );
-  }
-
-  async function handleZqSemantic(bypassCache = false) {
-    const t = zqText || zqTarget();
-    if (!t || !semanticAvailable(api)) return;
-    setZqSemLoading(true);
-    setZqMsg("");
-    try {
-      // 面板「重跑语义层」= 已有结果再点 → 显式绕过缓存真跑一次（LLM 评分会漂移）
-      const r = await detectSemanticStable(t, api, { bypassCache });
-      setZqSem({ score: r.score, critique: r.critique, source: r.source });
-    } catch (e: unknown) {
-      setZqMsg(
-        "语义层评判失败：" +
-          (e instanceof Error ? e.message : String(e)) +
-          "（本地表层结果不受影响）",
-      );
-    } finally {
-      setZqSemLoading(false);
-    }
-  }
-
-  function handleZqWeight(v: number) {
-    setZqWeight(v);
-    saveFuseWeight(v);
-  }
-
-  function handleZqClearCalib() {
-    clearAllCalibration();
-    setZqCalib({ a: 1, b: 0, n: 0, points: [] });
-    if (zqText) setZq(detectZhuque(zqText, zhuqueOpts(null)));
-    setZqMsg("已清空校准数据（样本保留，可重新回填）");
-  }
-
-  /* ---- 校准实验室（攒真值 → 自动重拟映射与权重） ---- */
-
-  function handleLabOpen() {
-    setLabSamples(loadSamples());
-    setLabMsg("");
-    setShowLab(true);
-  }
-
-  function handleLabGenerate() {
-    if (!labText.trim()) return;
-    const batch = generateBatch(labText);
-    if (!batch.length) return;
-    setLabSamples(loadSamples());
-    setLabText("");
-    setLabMsg(
-      `已生成 ${batch.length} 条样本（原文 + 本地引擎 0.3/0.6/0.9），逐条「复制」去官方送检`,
-    );
-  }
-
-  function handleLabFill(id: string, input: string) {
-    const r = fillOfficial(id, input);
-    setLabMsg(r.note);
-    if (r.ok) {
-      setLabSamples(loadSamples());
-      setLabPaste((p) => ({ ...p, [id]: "" }));
-      // 回填成功 → 同步主面板的校准映射
-      const cal = loadCalibration();
-      setZqCalib(cal);
-      if (zqText) setZq(detectZhuque(zqText, zhuqueOpts(cal)));
-    }
-  }
-
-  function handleLabDelete(id: string) {
-    deleteSample(id);
-    setLabSamples(loadSamples());
-    setLabMsg("已删除该样本");
-  }
-
-  function handleLabClear() {
-    clearAllSamples();
-    setLabSamples([]);
-    setZqCalib({ a: 1, b: 0, n: 0, points: [] });
-    if (zqText) setZq(detectZhuque(zqText, zhuqueOpts(null)));
-    setLabMsg("已清空样本库与校准点");
-  }
-
-  function handleLabApplyWeight(w: number) {
-    handleZqWeight(w);
-    setLabMsg(
-      `已把语义层权重默认值设为 ${Math.round(w * 100)}%（拟合自 ${labStats().filled} 条回填样本）`,
-    );
-  }
-
-  function handleLabSeed() {
-    const r = seedTruthAnchors();
-    setLabSamples(loadSamples());
-    const cal = loadCalibration();
-    setZqCalib(cal);
-    if (zqText) setZq(detectZhuque(zqText, zhuqueOpts(cal)));
-    setLabMsg(
-      r.added
-        ? `已预置 ${r.added} 条样本D官方真值锚点（surface 按当前引擎重算）；注意：锚点参与拟合属自证，真评估靠后续留出样本`
-        : `真值锚点已存在（共 ${r.total} 条样本）`,
-    );
-  }
-
   async function handleSaveSettings(
     a: ApiConfig,
     d: DetectorConfig,
@@ -568,13 +341,11 @@ export default function App({
     setNote("设置已保存（仅存本地）");
   }
 
-  // 挂载时提示草稿已恢复（只跑一次）
+  // 挂载时提示草稿已恢复（只跑一次）；时长文案见 src/app-messages.ts
   useEffect(() => {
     const d = restoredDraft.current;
     if (!d || (!d.input.trim() && !d.output.trim())) return;
-    const mins = d.ts ? Math.max(0, Math.round((Date.now() - d.ts) / 60000)) : 0;
-    const when = mins < 1 ? "刚刚" : mins < 60 ? `${mins} 分钟前` : `${Math.round(mins / 60)} 小时前`;
-    setNote(`已恢复${when}未完成的稿（${d.input.length} 字）。点「清空」可丢弃。`);
+    setNote(formatRestoredNote(d.ts, d.input.length));
   }, []);
 
   // 草稿防抖落盘：每次键入都写会让长文手感变卡（与强度滑块同一手法）
@@ -605,21 +376,6 @@ export default function App({
   // 非空判定派生为布尔值：渲染体里只比布尔，避免每次按键对全文做 trim() 拷贝
   const inputHasText = useMemo(() => input.trim().length > 0, [input]);
   const outputHasText = useMemo(() => output.trim().length > 0, [output]);
-
-  // 朱雀面板的体裁线预测：v3 18 点 OLS（与对标评分面板共用 engine/zhuque-calib 同一把尺子）。
-  // aiScore + classifyGenre 都是全文扫描，用 useMemo 缓存——面板未开（zq 为 null）时直接跳过，
-  // 开着时也只随检测文本/体裁覆盖变化重算，不跟着每次输入键入白跑。
-  const zqGenreEstimate = useMemo(() => {
-    if (!zq) return null;
-    const t = zqText || (output.trim() ? output : input).trim();
-    if (!t) return null;
-    const g = genreOverride ?? classifyGenre(t).genre;
-    const track = trackForGenre(g);
-    return {
-      pct: Math.round(predictOfficialPct(aiScore(t).score, track) * 10) / 10,
-      tag: CALIB[track].x40Tag,
-    };
-  }, [zq, zqText, input, output, genreOverride]);
 
   // ---- 稳定回调（供 memo 化的 TextPane 使用，避免右侧面板随左侧输入重渲） ----
   const hotkeyRef = useRef<() => void>(() => {});
@@ -658,9 +414,8 @@ export default function App({
   }
 
   /* ---------------- 文件导入 / 导出（v0.9.15） ----------------
-   * 此前 UI 只有「粘贴进 → 复制出」，改一篇 3000 字论文要先从编辑器里复制、
-   * 改完再粘回去，中间格式全丢。纯文本 .txt/.md 零依赖就能做，先补上；
-   * .docx 需要引入解析库，README 竞品表里仍标「⏳ 未做」，不在此列。
+   * 纯逻辑已抽到 src/app-fileio.ts（导入分支/导出文件名/下载），
+   * 这里只做状态接线；行为与文案逐字保留。
    */
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -668,41 +423,13 @@ export default function App({
     const f = e.target.files?.[0];
     e.target.value = ""; // 清空 value，否则连选两次同一文件不会触发 change
     if (!f) return;
-    // 2MB 上限：引擎是纯字符串操作，超大文本会卡住 UI（长文本应走 CLI 批量）
-    if (f.size > 2 * 1024 * 1024) {
-      setNote("文件超过 2MB，请拆分后再导入（更大批量请用 CLI：scripts/humanize-cli.ts）。");
-      return;
-    }
-    // v0.9.16：.docx 走零依赖 OOXML 提取（src/docx-io.ts）；.txt/.md 仍走 FileReader
-    if (/\.docx$/i.test(f.name)) {
-      readDocxText(f)
-        .then((t) => {
-          if (!t.trim()) {
-            setNote("docx 里没有可提取的文字（可能是纯图片/空文档），未导入。");
-            return;
-          }
-          setInput(t);
-          setOutput("");
-          setNote(`已导入 ${f.name}（${t.length} 字，格式不保留），点「去味」开始。`);
-        })
-        .catch((err: unknown) =>
-          setNote(`docx 解析失败：${err instanceof Error ? err.message : String(err)}`),
-        );
-      return;
-    }
-    const r = new FileReader();
-    r.onload = () => {
-      const t = String(r.result ?? "");
-      if (!t.trim()) {
-        setNote("文件内容为空，未导入。");
-        return;
+    void importFileToText(f).then((res) => {
+      if (res.text) {
+        setInput(res.text);
+        setOutput("");
       }
-      setInput(t);
-      setOutput("");
-      setNote(`已导入 ${f.name}（${t.length} 字），点「去味」开始。`);
-    };
-    r.onerror = () => setNote("读取文件失败，请重试或改用粘贴。");
-    r.readAsText(f, "utf-8");
+      setNote(res.note);
+    });
   }
 
   // v0.9.16：导出 .docx——纯文本按段落生成最小合法 OOXML（零依赖，src/docx-io.ts）。
@@ -710,16 +437,9 @@ export default function App({
   async function handleExportDocx() {
     if (!output) return;
     try {
-      const d = new Date();
-      const p = (n: number) => String(n).padStart(2, "0");
-      const name = `去味-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}.docx`;
-      const blob = await writeDocxText(output);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = name;
-      a.click();
-      URL.revokeObjectURL(url);
+      const name = makeDatedName("docx");
+      const blob = await exportDocxBlob(output);
+      downloadBlob(blob, name);
       setNote("已导出 .docx（纯文本内容，Word/WPS 可打开）。");
     } catch (err: unknown) {
       setNote(`docx 导出失败：${err instanceof Error ? err.message : String(err)}`);
@@ -728,15 +448,8 @@ export default function App({
 
   function handleExport() {
     if (!output) return;
-    const d = new Date();
-    const p = (n: number) => String(n).padStart(2, "0");
-    const name = `去味-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}.txt`;
-    const url = URL.createObjectURL(new Blob([output], { type: "text/plain;charset=utf-8" }));
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = name;
-    a.click();
-    URL.revokeObjectURL(url);
+    const name = makeDatedName("txt");
+    downloadBlob(makeTxtBlob(output), name);
     setNote(`已导出 ${name}`);
   }
 

@@ -12,12 +12,32 @@ import { render, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import App from "./App";
 import { aiScore } from "./engine/humanize";
 import { loadHistory } from "./store-history";
-import { loadIntensity } from "./store";
+import { loadIntensity, saveDraft, loadDraft } from "./store";
+import { DEFAULT_API } from "./api/llm-config";
+import { DEFAULT_DETECTOR } from "./api/detector";
 
-const { runHumanizeMock, readDocxTextMock, createObjectURLMock } = vi.hoisted(() => ({
+const {
+  runHumanizeMock,
+  readDocxTextMock,
+  createObjectURLMock,
+  judgeScoreStableMock,
+  writeDocxTextMock,
+  scoreViaDetectorMock,
+  computePplFeatureMock,
+  ensurePplModelMock,
+  pplStatusMock,
+  isPplReadyMock,
+} = vi.hoisted(() => ({
   runHumanizeMock: vi.fn(),
   readDocxTextMock: vi.fn(),
   createObjectURLMock: vi.fn(),
+  judgeScoreStableMock: vi.fn(),
+  writeDocxTextMock: vi.fn(),
+  scoreViaDetectorMock: vi.fn(),
+  computePplFeatureMock: vi.fn(),
+  ensurePplModelMock: vi.fn(),
+  pplStatusMock: vi.fn(),
+  isPplReadyMock: vi.fn(() => false),
 }));
 
 // 混合 mock：保留真实导出（DEFAULT_API / DEFAULT_DETECTOR / SENSENOVA_PRESET 等
@@ -25,21 +45,28 @@ const { runHumanizeMock, readDocxTextMock, createObjectURLMock } = vi.hoisted(()
 vi.mock("./api/llm", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./api/llm")>()),
   runHumanize: runHumanizeMock,
+  judgeScoreStable: judgeScoreStableMock,
 }));
 
-// docx-io：readDocxText 换成可控 mock（导入路径分支测试用），
-// writeDocxText 保留真实实现（导出测试捕获真实生成的 Blob）。
-vi.mock("./docx-io", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./docx-io")>()),
-  readDocxText: readDocxTextMock,
+// docx-io：readDocxText 换成可控 mock（导入路径分支测试用）；
+// writeDocxText 默认转发真实实现（导出测试捕获真实生成的 Blob），
+// 失败分支用例可临时覆盖为 rejected。真实实现经 hoisted 容器中转，
+// 规避 vi.mock 工厂先于 let 声明执行的 TDZ 问题。
+const docxReal = vi.hoisted(() => ({
+  writeDocxText: null as null | ((text: string) => Promise<Blob>),
 }));
+vi.mock("./docx-io", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./docx-io")>();
+  docxReal.writeDocxText = real.writeDocxText;
+  return { ...real, readDocxText: readDocxTextMock, writeDocxText: writeDocxTextMock };
+});
 
 vi.mock("./ppl/ppl-client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./ppl/ppl-client")>()),
-  computePplFeature: vi.fn(),
-  ensurePplModel: vi.fn(),
-  pplStatus: vi.fn(async () => ({ supported: false, ready: false })),
-  isPplReady: () => false,
+  computePplFeature: computePplFeatureMock,
+  ensurePplModel: ensurePplModelMock,
+  pplStatus: pplStatusMock,
+  isPplReady: isPplReadyMock,
 }));
 
 vi.mock("./api/zhuque-semantic", async (importOriginal) => ({
@@ -50,7 +77,7 @@ vi.mock("./api/zhuque-semantic", async (importOriginal) => ({
 
 vi.mock("./api/detector", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./api/detector")>()),
-  scoreViaDetector: vi.fn(),
+  scoreViaDetector: scoreViaDetectorMock,
 }));
 
 const INPUT_TEXT =
@@ -84,6 +111,15 @@ beforeEach(() => {
   localStorage.clear();
   runHumanizeMock.mockReset();
   readDocxTextMock.mockReset();
+  judgeScoreStableMock.mockReset();
+  scoreViaDetectorMock.mockReset();
+  computePplFeatureMock.mockReset();
+  ensurePplModelMock.mockReset();
+  pplStatusMock.mockReset();
+  isPplReadyMock.mockReset();
+  isPplReadyMock.mockReturnValue(false);
+  writeDocxTextMock.mockReset();
+  writeDocxTextMock.mockImplementation((t: string) => docxReal.writeDocxText!(t));
   // happy-dom 未实现 URL.createObjectURL/revokeObjectURL——直接赋值 stub（下载路径断言用）
   (URL as unknown as Record<string, unknown>).createObjectURL = createObjectURLMock;
   (URL as unknown as Record<string, unknown>).revokeObjectURL = vi.fn();
@@ -356,5 +392,249 @@ describe("App 文件导入 / 导出（v0.9.15/16/17 UI 能力补锁）", () => {
     });
     const text = await captured!.text();
     expect(text).toBe(OUTPUT_TEXT);
+  });
+});
+
+describe("App 集成：评分 / 检测闭环 / 设置 / 历史 / 草稿 / 面板", () => {
+  const ENABLED_API = { ...DEFAULT_API, enabled: true, apiKey: "sk-test" };
+  const ENABLED_DETECTOR = {
+    ...DEFAULT_DETECTOR,
+    enabled: true,
+    url: "http://detector.local/score",
+  };
+
+  async function humanizeFirst(utils: ReturnType<typeof render>) {
+    runHumanizeMock.mockResolvedValue(makeRunResult(OUTPUT_TEXT, "local"));
+    const { getByText, getByPlaceholderText } = utils;
+    fireEvent.change(getByPlaceholderText(/把 AI 写的文章粘进来/), {
+      target: { value: INPUT_TEXT },
+    });
+    fireEvent.click(getByText("去味"));
+    await waitFor(() => {
+      expect((getByPlaceholderText(/点击「去味」生成/) as HTMLTextAreaElement).value).toBe(
+        OUTPUT_TEXT,
+      );
+    });
+    return { getByText, getByPlaceholderText };
+  }
+
+  it("已配置检测器时去味后自动送检：真实分回显进文案", async () => {
+    scoreViaDetectorMock.mockResolvedValue(21);
+    const utils = render(<App initialDetector={ENABLED_DETECTOR} />);
+    await humanizeFirst(utils);
+    await waitFor(() => {
+      expect(utils.getByText(/检测器自动送检：21 分/)).toBeTruthy();
+    });
+  });
+
+  it("检测器自动送检失败：失败原因进文案且不崩", async () => {
+    scoreViaDetectorMock.mockRejectedValue(new Error("502 Bad Gateway"));
+    const utils = render(<App initialDetector={ENABLED_DETECTOR} />);
+    await humanizeFirst(utils);
+    await waitFor(() => {
+      expect(utils.getByText(/检测器送检失败：502/)).toBeTruthy();
+    });
+  });
+
+  it("深度模式轮次回调：评分中与评分失败两种播报都不崩（最终文案以结果为准）", async () => {
+    runHumanizeMock.mockImplementation(
+      async (_input: string, _i: number, _a: unknown, onRound?: (r: number, s: number | null, st?: string) => void) => {
+        onRound?.(1, 88);
+        onRound?.(2, null);
+        return makeRunResult(OUTPUT_TEXT, "llm", true, [88, 0]);
+      },
+    );
+    const { getByText, getByPlaceholderText } = await renderApp();
+    fireEvent.change(getByPlaceholderText(/把 AI 写的文章粘进来/), {
+      target: { value: INPUT_TEXT },
+    });
+    fireEvent.click(getByText("去味"));
+    await waitFor(() => {
+      expect(getByText(/已使用 API 深度去味/)).toBeTruthy();
+    });
+  });
+
+  it("「用 LLM 评判」：成功后展示评判分与残留痕迹", async () => {
+    judgeScoreStableMock.mockResolvedValue({ score: 21, critique: ["仍有总分总骨架"] });
+    const utils = render(<App initialApi={ENABLED_API} />);
+    const { getByText } = await humanizeFirst(utils);
+    fireEvent.click(getByText("用 LLM 评判"));
+    await waitFor(() => {
+      expect(getByText(/LLM 评判：21/)).toBeTruthy();
+      expect(getByText(/仍有总分总骨架/)).toBeTruthy();
+    });
+  });
+
+  it("「用 LLM 评判」：失败给真实原因且不崩", async () => {
+    judgeScoreStableMock.mockRejectedValue(new Error("网关 429"));
+    const utils = render(<App initialApi={ENABLED_API} />);
+    const { getByText } = await humanizeFirst(utils);
+    fireEvent.click(getByText("用 LLM 评判"));
+    await waitFor(() => {
+      expect(getByText(/LLM 评判失败：网关 429/)).toBeTruthy();
+    });
+  });
+
+  it("「用外部检测器」：手动送检回显分数", async () => {
+    scoreViaDetectorMock.mockResolvedValue(35);
+    const utils = render(<App initialDetector={ENABLED_DETECTOR} />);
+    const { getByText } = await humanizeFirst(utils);
+    fireEvent.click(getByText("用外部检测器"));
+    await waitFor(() => {
+      expect(getByText(/检测器：35/)).toBeTruthy();
+    });
+  });
+
+  it("「复制」按钮：提示已复制到剪贴板", async () => {
+    const utils = render(<App />);
+    const { getByText } = await humanizeFirst(utils);
+    fireEvent.click(getByText("复制"));
+    expect(getByText("已复制到剪贴板")).toBeTruthy();
+  });
+
+  it("「AI 检测」：14 特征面板出现，特征明细可展开收起", async () => {
+    const utils = render(<App />);
+    await humanizeFirst(utils);
+    fireEvent.click(utils.getByText("AI 检测"));
+    fireEvent.click(utils.getByText("看特征明细"));
+    expect(utils.getByText("收起特征")).toBeTruthy();
+    fireEvent.click(utils.getByText("收起特征"));
+    expect(utils.getByText("看特征明细")).toBeTruthy();
+  });
+
+  it("「指纹体检」+ 困惑度引导：模型未就绪出现下载按钮，点击后进入下载流程", async () => {
+    pplStatusMock.mockResolvedValue({ supported: true, ready: true });
+    ensurePplModelMock.mockResolvedValue(undefined);
+    const utils = render(<App />);
+    await humanizeFirst(utils);
+    fireEvent.click(utils.getByText("指纹体检"));
+    await waitFor(() => {
+      expect(utils.getByText(/下载模型（约 100MB，仅一次，之后离线）/)).toBeTruthy();
+    });
+    // 下载完成后模型就绪：自动对目标文本跑特征 → done（第 13 维并入朱雀面板的链路）
+    isPplReadyMock.mockReturnValue(true);
+    computePplFeatureMock.mockResolvedValue({
+      meanNll: 3.2,
+      winStd: 0.6,
+      scoredChars: 500,
+      windows: [{ charStart: 0, charEnd: 500, scoredCount: 480, meanNll: 3.2 }],
+    });
+    fireEvent.click(utils.getByText(/下载模型（约 100MB，仅一次，之后离线）/));
+    await waitFor(() => {
+      expect(utils.queryByText(/下载模型（约 100MB，仅一次，之后离线）/)).toBeNull();
+    });
+    expect(ensurePplModelMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("「设置」保存：走真实 store 落盘并给出提示", async () => {
+    const utils = render(<App />);
+    fireEvent.click(utils.getByText("⚙ 设置"));
+    fireEvent.click(utils.getByText("保存"));
+    await waitFor(() => {
+      expect(utils.getByText(/设置已保存（仅存本地）/)).toBeTruthy();
+    });
+    expect(utils.container.querySelector('[aria-label="API 设置"]')).toBeNull();
+  });
+
+  it("docx 导出失败：报真实原因且不崩", async () => {
+    writeDocxTextMock.mockRejectedValueOnce(new Error("磁盘空间不足"));
+    const utils = render(<App />);
+    const { getByText } = await humanizeFirst(utils);
+    fireEvent.click(getByText("导出 .docx"));
+    await waitFor(() => {
+      expect(getByText(/docx 导出失败：磁盘空间不足/)).toBeTruthy();
+    });
+  });
+
+  it("降幅徽章：去味后分数反升时如实显示 + 号（不粉饰）", async () => {
+    const mildInput = "我今天出门买菜，路上碰见老王，聊了几句家常，挺开心的。";
+    runHumanizeMock.mockResolvedValue({
+      ...makeRunResult(INPUT_TEXT, "local"),
+      before: aiScore(mildInput),
+    });
+    const { getByText, getByPlaceholderText, container } = await renderApp();
+    fireEvent.change(getByPlaceholderText(/把 AI 写的文章粘进来/), {
+      target: { value: mildInput },
+    });
+    fireEvent.click(getByText("去味"));
+    await waitFor(() => {
+      expect(container.querySelector(".delta-value")).toBeTruthy();
+    });
+    expect(container.querySelector(".delta-value")!.textContent).toContain("+");
+  });
+
+  it("「对比」：DiffView 打开并可关闭", async () => {
+    const utils = render(<App />);
+    const { getByText } = await humanizeFirst(utils);
+    fireEvent.click(getByText("对比"));
+    expect(utils.container.querySelector(".modal-tip") || utils.getByText("关闭")).toBeTruthy();
+    fireEvent.click(utils.getByText("关闭"));
+    expect(utils.queryByText("关闭")).toBeNull();
+  });
+
+  it("「导入」按钮：触发隐藏文件选择器不崩", async () => {
+    const { getByText } = await renderApp();
+    fireEvent.click(getByText("导入"));
+    expect(getByText("导入")).toBeTruthy();
+  });
+
+  it("「朱雀检测」：面板出现并可打开校准实验室完成复制动作", async () => {
+    const utils = render(<App />);
+    await humanizeFirst(utils);
+    fireEvent.click(utils.getByText("朱雀检测"));
+    fireEvent.click(utils.getByText(/校准实验室（攒真值）/));
+    fireEvent.click(utils.getByText(/预置真值锚点/));
+    // 页面存在两个「复制」按钮（主工具条 + 实验室样本行），逐个点击直到实验室给出回执
+    for (const btn of utils.getAllByText("复制")) fireEvent.click(btn);
+    await waitFor(() => {
+      expect(utils.getByText(/已复制|复制失败/)).toBeTruthy();
+    });
+  });
+
+  it("历史条目点击载入：输入输出回填；「清空历史」后为空", async () => {
+    const utils = await renderApp();
+    const { getByText, getByPlaceholderText } = await humanizeFirst(utils);
+    fireEvent.click(getByText("历史"));
+    // 注意：getAllByText 第一个匹配是输入面板 TEXTAREA（value 相同），历史条目是 DIV
+    const entry = utils
+      .getAllByText(new RegExp(INPUT_TEXT.slice(0, 20)))
+      .find((el) => el.tagName === "DIV");
+    expect(entry).toBeTruthy();
+    fireEvent.click(entry!);
+    await waitFor(() => {
+      expect((getByPlaceholderText(/把 AI 写的文章粘进来/) as HTMLTextAreaElement).value).toBe(
+        INPUT_TEXT,
+      );
+      expect(utils.getByText(/已载入历史记录/)).toBeTruthy();
+    });
+    // 点条目时 HistoryPanel 的 onClick 已同步 onClose——重新打开再清空
+    fireEvent.click(utils.getByText("历史"));
+    fireEvent.click(utils.getByText("清空历史"));
+    expect(loadHistory().length).toBe(0);
+  });
+
+  it("草稿恢复：刷新后提示恢复时长；再清空后草稿被丢弃", async () => {
+    saveDraft("上次没写完的稿子内容", "");
+    const utils = render(<App />);
+    await waitFor(() => {
+      expect(utils.getByText(/已恢复.*未完成的稿（10 字）/)).toBeTruthy();
+    });
+    expect((utils.getByPlaceholderText(/把 AI 写的文章粘进来/) as HTMLTextAreaElement).value).toBe(
+      "上次没写完的稿子内容",
+    );
+    // 输入后清空：500ms 防抖落盘走 clearDraft 分支
+    fireEvent.change(utils.getByPlaceholderText(/把 AI 写的文章粘进来/), {
+      target: { value: "临时的字" },
+    });
+    fireEvent.change(utils.getByPlaceholderText(/把 AI 写的文章粘进来/), {
+      target: { value: "" },
+    });
+    await waitFor(
+      () => {
+        expect(loadDraft()?.input ?? "").toBe("");
+      },
+      { timeout: 1500 },
+    );
+    expect(loadDraft()?.output ?? "").toBe("");
   });
 });
