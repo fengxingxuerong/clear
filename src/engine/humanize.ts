@@ -150,7 +150,7 @@ const DROP_CONNECTIVE_INTENSITY_THRESHOLD = 0.45;
 /**
  * 强度斜坡：把 [RAMP_START, RAMP_END] 区间的有效注入强度从 0 线性升到 intensity。
  *
- * 起因（scripts/_stability.ts 全档位扫描）：
+ * 起因（scripts/archive/_stability.ts 全档位扫描）：
  *   0.35 档近乎干净（叙事均值 2.4），0.40 档突然爆分（叙事均值 23.4，最差 55）——
  *   用户把强度上调 0.05，输出质量断崖式下降，体验上像"开关"而不是"旋钮"。
  *
@@ -839,7 +839,7 @@ export function applyZhuqueFeatures(
 
   // v0.9.8 P0 收敛（六）：0.35 硬门槛 → 强度斜坡。
   //
-  // 缺陷（scripts/_stability.ts 全档位扫描）：
+  // 缺陷（scripts/archive/_stability.ts 全档位扫描）：
   //   0.35 档近乎干净（叙事均值 2.4），0.40 档突然爆分（叙事均值 23.4，最差 seed 46）——
   //   跨过 0.35 后多个注入器同时以完整概率启动，中间没有过渡。
   //
@@ -882,7 +882,7 @@ export function applyZhuqueFeatures(
   //
   // v0.9.8 P0 收敛（六·续）：叙事/人写体裁**整体**禁用插话/观点注入（含句内分支）。
   //
-  // 补丁起因（scripts/_n60.ts / _narr_ab.ts，叙事 seed=2 恒定 31 分）：
+  // 补丁起因（scripts/archive/_n60.ts / _narr_ab.ts，叙事 seed=2 恒定 31 分）：
   //   句首垫词的三重门控只挡了句首入口，injectParentheticals 的**句内**分支漏网——
   //   seed=1 插出「坦白讲，…，在我看来，」、seed=2 恒定在开头插出「我个人的看法，」
   //   句尾插出「往好听了说，」，句式分 28，且**不随强度变化**（确定性路径，非概率抖动）。
@@ -1110,7 +1110,7 @@ function humanizeSingle(text: string, opts: HumanizeOptions = {}): string {
       const r = rng();
       // v0.9.8 P0 收敛（六·续）：叙事/人写体裁禁句尾语气词。
       //
-      // 证据（scripts/_narr9.ts，叙事种子 9）：即使句尾软化走了斜坡，
+      // 证据（scripts/archive/_narr9.ts，叙事种子 9）：即使句尾软化走了斜坡，
       //   0.80/1.00 档仍恒定产出 29 分（句式 28），污染源就是句尾「哈。」「呢。」——
       //   「…停不了哈。」「…叶子贴了一地呢。」这类聊天腔落在叙事文上是语体错位。
       //   avg 只有 2.1 却 max 29，一个坏种子的体验远重于均值。

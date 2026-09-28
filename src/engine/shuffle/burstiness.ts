@@ -385,7 +385,7 @@ export function boostBurstinessByCutting(text: string, targetCv: number, maxCuts
   //   （实测 CV 判别力≈0 且方向反：人写口语随笔 CV=0.27 是全场最低）。
   //   为已废除的指标服务的手段，只会制造新标尺要抓的污染。
   //
-  // 废除理由二（确定性破坏作者结构，证据 scripts/_shape.ts）：
+  // 废除理由二（确定性破坏作者结构，证据 scripts/archive/_shape.ts）：
   //   同一段文本「3 个 20+ 字句」，单段调用时不触发（0.3~0.9 档均保持 3 句），
   //   但在多段调用（NARR_MULTI 等）下 0.5 档起稳定被焊成 1 句——
   //   因为逐段调用时 sentenceStats 的 CV 基准变小，更容易落到 cutsDone===0 分支。
