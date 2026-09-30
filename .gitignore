@@ -60,3 +60,8 @@ coverage/
 
 # 构建期盖章产物（npm run build 生成），不是源
 electron-app/build-info.json
+
+# Agent 运行期产物（任务注册表、artifact 卡片元数据）——既不是源也不进产物，
+# 但会让 sync-dist 的"工作区是否干净"盖章判定误报，故在此忽略
+.box-agent/
+*.artifact.json
