@@ -10,6 +10,7 @@ import os from "os";
 import vm from "vm";
 import { VOCAB } from "../src/engine/humanize-vocab";
 import { FORMULAIC_EXTRA } from "../src/engine/humanize-vocab-extra";
+import { GUARD_AFTER, VERB_PHRASE_AFTER } from "../src/engine/humanize-guard";
 
 /* ---------------- 词表卫生（check-vocab-hygiene.ts 的核心规则固化） ---------------- */
 
@@ -38,6 +39,120 @@ describe("词表卫生（check-vocab-hygiene 规则固化）", () => {
 
   it("黑名单本身非空（防止守卫被悄悄清空）", () => {
     expect(FORBIDDEN.size).toBeGreaterThanOrEqual(25);
+  });
+});
+
+/* ---------------- 搭配卫生（2026-09-30 新增，防 A/B 类病句复发） ---------------- */
+
+describe("搭配卫生（单音节/动补式替身必须带守卫或豁免）", () => {
+  /**
+   * 缘起：docs/2026-09-30-sentence-defects-report.md —— 词表按词替换、不看搭配，
+   * 于是产出「坚持下去→守住下去」「通过引入→借引入」。更糟的是**同类处置会回退**：
+   * 2026-08-17 已裁定移除的「保障→守住」后来又出现在词表里。
+   *
+   * 本测试把"危险替身必须显式声明"钉在单测层——新增危险替身时在 vitest 就红，
+   * 不必等到 scan-bugs（那要跑 700+ 次 humanize 才发现）。
+   *
+   * 判据：替身是单音节动词（搭配能力窄）或 X住/X好 式动补（只能带体词宾语）时，
+   * 必须在 GUARD_AFTER 里有守卫、或在豁免清单里并写明理由。
+   */
+  const COMPLEMENT_RE = /(?:守住|保住|护住|管好|盯住|接住|顶住|对上|贴上|就着)/;
+  const isSingleVerb = (w: string) => /^[\u4e00-\u9fa5]$/.test(w);
+
+  /** 豁免清单：名称 → 理由（有理由才准豁免，防止拿豁免当万能挡箭牌） */
+  const EXEMPT: Record<string, string> = {
+    而且: "连词互替，不影响搭配",
+    然而: "连词互替",
+    务必: "助动词，等价替换",
+    愈发: "副词替换",
+    切实: "副词作状语",
+    尽量: "副词",
+    诸如: "列举引导词",
+    坐落于: "处所介词，后接体词",
+    力图: "「力图改变/突破」动词短语宾语兼容",
+    旨在: "同力图",
+    利用: "同为动词，搭配能力相当",
+    契合: "作谓语，无补语用法",
+    切忌: "祈使语境，等价",
+    实施: "已收窄为 ['执行']（2026-09-30）——「干」语体错位、「做起来」不及物；勿回退",
+    全面: "弱替身，仅作定语/状语",
+    征程: "名词替换",
+    促使: "兼语句里通顺，无补语用法",
+    打造: "已有 GUARD_AFTER 覆盖术语残缺场景",
+    促进: "「促进发展」可通",
+    取得: "低危，已由 scan-bugs 金丝雀覆盖",
+    针对: "已有 GUARD_AFTER「性」",
+    应对: "低危",
+    满足: "低危",
+    拉齐: "低危",
+    对齐: "低危",
+    聚焦于: "低危",
+    维护: "整条移除（2026-09-30）——在 SCORING_EXCLUDE 内零收益，且动名双词性需额外守卫，净负收益",
+    保障: "整条移除（2026-08-17 裁定 + 2026-09-30 纠正回退）",
+    驱动: "已移除「拉着」，余项低危",
+    牵引: "同驱动",
+    借助于: "「借助于X」X 为体词，替身后仍通",
+    取得成效: "低危",
+  };
+
+  it("单音节/动补式替身必须在 GUARD_AFTER 内或豁免清单内（且有理由）", () => {
+    const offenders: string[] = [];
+    for (const [from, tos] of Object.entries(VOCAB)) {
+      if (!Array.isArray(tos)) continue;
+      for (const to of tos) {
+        const dangerous = isSingleVerb(to) || COMPLEMENT_RE.test(to);
+        if (!dangerous) continue;
+        const guarded = (GUARD_AFTER[from]?.length ?? 0) > 0;
+        const exempt = Object.prototype.hasOwnProperty.call(EXEMPT, from);
+        if (!guarded && !exempt) offenders.push(`${from} → "${to}"`);
+        if (exempt && !EXEMPT[from]?.trim()) offenders.push(`${from}：豁免理由为空`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("豁免清单条目不得为空（防止空理由占位）", () => {
+    const empty = Object.entries(EXEMPT).filter(([, why]) => !why.trim());
+    expect(empty).toEqual([]);
+    expect(Object.keys(EXEMPT).length).toBeGreaterThanOrEqual(20);
+  });
+
+  it("已裁定移除/收窄的替身不得复活（回归闸门）", () => {
+    // 依据：2026-08-17 裁定 + 2026-09-30 报告 §5.3 / §5.3.1
+    const MUST_NOT_EXIST: [string, string][] = [
+      ["坚持", "守住"], // 可带补语与动词性宾语，词表无法表达（2026-09-30 移除）
+      ["保障", "守住"], // 名词位「提供保障」→ 动词病句（2026-08-17 已裁定）
+      ["发挥", "起"], // 单字替身在名词位/被动位全崩（2026-08-17 已裁定）
+      ["实施", "干"], // 语体错位："实施新规"→"干新规"（2026-09-30 收窄为 ["执行"]）
+      ["实施", "做起来"], // 不及物："实施这项工作"→"做起来这项工作"不成话
+      ["维护", "护住"], // 搭配别扭 + 该词有被剔除记录（看"保驾护航"条）
+      ["维护", "管好"], // 接抽象宾语别扭："维护秩序"→"管好秩序"
+      ["维护", "守住"], // 同上："维护系统"→"守住系统"
+    ];
+    const alive = MUST_NOT_EXIST.filter(([k, v]) => VOCAB[k]?.includes(v)).map(([k, v]) => `${k}→${v}`);
+    expect(alive).toEqual([]);
+  });
+
+  it("实施/维护/保障 的替身只保留裁定后的那一个（2026-09-30 裁定，勿回退）", () => {
+    // 这条是 MUST_NOT_EXIST 的正面镜像：上面只能断言"不许有谁"，
+    // 漏掉"不许只剩谁 / 不许又多出别的"这类缺口。
+    expect(VOCAB["实施"]).toEqual(["执行"]);
+    // 「维护」整条移除（2026-09-30 按纯收益判断）：SCORING_EXCLUDE 内零收益，
+    // 且动名双词性需额外守卫，净负收益。见报告 §5.3.1 ⑩。
+    expect(VOCAB["维护"]).toBeUndefined();
+  });
+
+  it("「通过+动词短语」守卫存在且为紧邻判据（A/B 类根因守卫）", () => {
+    // 实现说明：这条不能放 GUARD_AFTER（那里是 8 字窗口「包含」判据，
+    // 拦动词短语会过度拦截：实测「通过三条路径实现了目标」被误判），
+    // 故由 humanize-guard.ts 的 VERB_PHRASE_AFTER 按词定制、紧邻匹配。
+    for (const w of ["引入", "采用", "实现", "推动", "提升"]) {
+      expect(VERB_PHRASE_AFTER.test(w), `「通过${w}」若未被守卫会崩成「借${w}」`).toBe(true);
+    }
+    // 紧邻语义：动词短语前若已有别的字，不算紧邻（"通过引入的方式"不该被拦）
+    expect(VERB_PHRASE_AFTER.test("的方式引入")).toBe(false);
+    // 反向：守卫词不得出现在 GUARD_AFTER.通过 里（那会退回 8 字窗口误拦）
+    expect(GUARD_AFTER["通过"] ?? []).not.toContain("引入");
   });
 });
 

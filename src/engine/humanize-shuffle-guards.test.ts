@@ -14,6 +14,7 @@ import {
   ensureEmDashCountHardCap,
 } from "./humanize-shuffle.ts";
 import { fragmentFrontCanStand } from "./humanize-primitives.ts";
+import { fragmentCanStand } from "./humanize-vocab.ts";
 
 /** 按句末标点切句，返回去掉空白后的纯字数序列（够用，不引第三方分词） */
 function sentLens(text: string): number[] {
@@ -219,5 +220,54 @@ describe("fragmentFrontCanStand（末段切分必须含冒号）", () => {
   it("逗号路径的原有否决不受影响（≤4 字无谓语仍拦）", () => {
     expect(fragmentFrontCanStand("这套工艺")).toBe(false);
     expect(fragmentFrontCanStand("这套工艺已经成熟量产了")).toBe(true);
+  });
+});
+
+/**
+ * 2026-09-30 C 类（谓语被切出成句）：见 docs/2026-09-30-sentence-defects-report.md §5.3 ②。
+ *
+ * 两条守卫各管一个触发面：
+ *   fragmentCanStand    —— 后半句以承接性副词+谓语起头（「也能决定」「正在成为」），
+ *                          原来的守卫要求副词后必须带体标记（着/了/过），这类不带故漏过；
+ *   fragmentFrontCanStand —— 前半句以「的+名词」收尾的长名词短语（「采用智能化系统的企业」），
+ *                          句号化即无谓语残句，原守卫只管 ≤4 字短残片，10 字的它得以放行。
+ *
+ * 每组都配一条"仍应放行"的反向断言：这两条守卫的失败模式都是**过度否决**
+ *（把正常可切的分句也否掉 = 白丢劈句机会），光有正向断言是永真式。
+ */
+describe("C 类切分守卫（2026-09-30）", () => {
+  it("后半句：承接性副词 + 谓语（无体标记）→ 否决", () => {
+    expect(fragmentCanStand("也能决定一整天的节奏")).toBe(false);
+    expect(fragmentCanStand("正在成为转型路上的三块硬骨头")).toBe(false);
+    expect(fragmentCanStand("将推动整个行业重新洗牌")).toBe(false);
+  });
+
+  it("后半句：自带主语的副词句 → 仍放行（别把守卫写成一刀切）", () => {
+    expect(fragmentCanStand("也有很多企业失败了")).toBe(true);
+    expect(fragmentCanStand("正在推进的项目已经过半")).toBe(true);
+    // 普通主谓句不受影响
+    expect(fragmentCanStand("这套工艺已经成熟量产了")).toBe(true);
+  });
+
+  it("前半句：「的+名词」长名词短语 → 否决", () => {
+    expect(fragmentFrontCanStand("数据显示，采用智能化系统的企业")).toBe(false);
+    expect(fragmentFrontCanStand("报告指出，参与试点的机构")).toBe(false);
+  });
+
+  it("前半句：有真谓语（体标记/双字谓词）的分句 → 仍放行", () => {
+    // 「了」是体标记 → 是动宾分句，不是名词短语
+    expect(fragmentFrontCanStand("公司采用了新的技术")).toBe(true);
+    // 「提升」是双字谓词
+    expect(fragmentFrontCanStand("这次调整提升了整体的效率")).toBe(true);
+    // 既有行为：完整小句照常放行
+    expect(fragmentFrontCanStand("这件事有三个原因：趋势已经很明显了")).toBe(true);
+  });
+
+  it("谓语判据不得退化成单字宽表（两次踩坑的回归闸门）", () => {
+    // 「智**能**化」含「能」、「机**会**」含「会」——单字情态表会把这类纯名词短语
+    // 误判成"有谓语"，守卫形同虚设（实测：加了守卫签名仍 119/119 不动）。
+    // 这条断言钉死"名词内部嵌情态单字时仍须判为无谓语"。
+    expect(fragmentFrontCanStand("数据显示，采用智能化系统的企业")).toBe(false);
+    expect(fragmentFrontCanStand("统计表明，抓住转型机会的企业")).toBe(false);
   });
 });
