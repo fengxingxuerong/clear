@@ -310,7 +310,8 @@ npm run test:quality   # 词典泄漏质量门禁
 npm run test:calib     # 标定数据源自检（参数一致/拟合误差/x 轴漂移棘轮，退出码可拦）
 npm run test:evidence  # 官方送检凭证审计（哈希复算 + 页面原文互证，见下节）
 npm run check:ledger   # 凭证账本 append-only（历史行被删/改/重排即拦；hook 里也跑这条）
-npm run check:release  # 上面六条 + 单测，全绿才允许打 tag
+npm run check:version  # 版本号一致性（根/electron-app/README 标题与下载行/CHANGELOG/产物 六处比对）
+npm run check:release  # 上面七条 + 单测，全绿才允许打 tag
 npm run bench          # 性能基准（实测 2026-09-19：1x/571字 3ms、10x/5710字 14ms、50x/2.85万字 57ms）
 ```
 
