@@ -97,23 +97,28 @@ console.log(`    生产依赖 ${pkgs.length} 项（已排除 devDeps 与 onnxrun
 /* 2. 重建 resources/app */
 console.log("\n[2] 重建 resources/app");
 if (fs.existsSync(APP)) {
-  // Windows 上杀软/索引服务会瞬时持有刚写过的文件，rmSync 默认不重试会直接 EPERM。
-  // 实测同样的目录用 rm -rf 能删掉，说明不是硬占用——加退避重试即可。
-  for (let attempt = 1; attempt <= 5; attempt++) {
-    try {
-      fs.rmSync(APP, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
-      break;
-    } catch (e) {
-      if (attempt === 5) {
-        console.error(`✗ 清空 app 目录失败（已重试 5 次）：${e.message}`);
-        console.error("  提示：可能有进程占用该目录，或实时防护正在扫描。可先手动删除后重试。");
-        process.exit(1);
-      }
-      console.log(`    ⚠️  第 ${attempt} 次删除失败（${e.code || e.message}），退避后重试…`);
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 800);
-    }
+  // 为什么是「改名」而不是「递归删除」（2026-09-28 与 10-01 实测两次，加上 cpSync 那次共三次）：
+  // fs.rmSync 清空这个目录时会**静默卡死**——10+ 分钟零进展、逐包打点一行未出；
+  // 而同一个目录手动 rmSync 只要 0.1~0.2 秒，renameSync 与 open r+ 也都成功，
+  // 说明**不是文件被占用，是那个进程自己挂住了**（每次都要人肉 taskkill + 手动删 + 重跑）。
+  // 改名是纯元数据操作，不做递归遍历，不会卡；旧目录在后台尽力清掉即可。
+  const stale = `${APP}.stale-${Date.now()}`;
+  try {
+    fs.renameSync(APP, stale);
+    console.log(`    旧 app 目录已改名让位：${path.basename(stale)}`);
+  } catch (e) {
+    console.error(`✗ 改名失败（可能有进程占用该目录）：${e.message}`);
+    console.error("  提示：关掉可能打开该目录的资源管理器/编辑器窗口后重试。");
+    process.exit(1);
   }
-  console.log("    已清空旧 app 目录");
+  try {
+    fs.rmSync(stale, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+  } catch (e) {
+    // 删不掉就停下：残留的 stale 目录会被 Compress-Archive 打进交付包，宁可不产也不出脏包
+    console.error(`✗ 旧目录清理失败（${e.code ?? e.message}）—— 残留会被打进交付包，本次中止。`);
+    console.error(`  请手动删除后重跑：${stale}`);
+    process.exit(1);
+  }
 }
 fs.mkdirSync(path.join(APP, "node_modules"), { recursive: true });
 

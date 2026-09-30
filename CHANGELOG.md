@@ -62,6 +62,38 @@ v0.9.19 追加里刚上线的 `check:version` 把 README **下载行**也纳入�
 `check-version-sync.ts` 相应从六处变**四处**（根 / electron-app / README 标题 / CHANGELOG[/产物]），
 并新增一条测试**断言下载行不参与比对**——防止后人"顺手加回来"再堵一次发布。
 
+### v0.9.20 追加：rebuild 清空阶段改为原子改名（同一个卡死第三次了）
+
+`repack` 又卡了 **7 分钟零进展**（停在 `[2] 重建 resources/app`，逐包打点一行未出；
+采样 `resources/app` 只剩 30 文件 / 1.2 MB、两次采样零变化）。
+这是第三次同一症状：第一次记的是 `fs.cpSync` 卡死，之后两次都卡在 **`fs.rmSync` 清空阶段**
+（手动 `rmSync` 同一目录只要 0.1~0.2 秒，`renameSync` / `open r+` 也都成功 ⇒ 不是文件占用，是进程挂住）。
+每次都要人肉 taskkill + 手动删 + 重跑，所以这次**改了脚本**：
+
+- 清空改为**先 `renameSync` 让位**（纯元数据操作，不做递归遍历，不会卡），
+  再尽力删那个改名后的 `app.stale-<ts>`；改名或删除失败则**明确报错并 exit 1**——
+  残留的 stale 目录会被 `Compress-Archive` 打进交付包，宁可不产也不出脏包。
+- 改后实测：repack 一次跑通，**47 个包逐行打点齐全**，无卡顿。
+
+### ⚠️ v0.9.20 发现但未修：PPL 的 wasm 资产不再进产物（离线可用性待查）
+
+重打产物时发现体积从 **485.3 MB 掉到 462.8 MB**（`resources/app` 183.5 → 161.1 MB），
+差额 ≈ 22.4 MB，正是 `ort-wasm-simd-threaded.asyncify-*.wasm`（23.5 MB）——
+这次 `vite build` **没有生成它**（`dist/assets/` 只剩 4 个文件）。
+
+- 追因：`@huggingface/transformers` 现在是 **4.2.0**，其 `dist/` 里**不再自带 `.wasm`**；
+  而 v0.9.19 那次提交（`6fe6a05`）**动过 `package-lock.json`**（跑过 npm install），
+  依赖就是那时升上去的 ⇒ **这不是随机退化，是依赖升级带来的行为变化**。
+- 影响面：`src/ppl/ppl-worker.ts` 只做 `import("@huggingface/transformers")`，
+  **没有配置本地 wasm 路径**，wasm 由此改为从 CDN 取 —— 而 README 对 PPL 的承诺是
+  「首次联网下载约 99MB 模型，**下载完成后离线可用**，已断网实测验证」。
+  v3 时代 wasm 被打进产物，正是那句"离线可用"的支撑之一。
+- **本版不修**（不夹带未验证的构建改动）：需要先查 v4 的 wasm 加载策略，
+  再决定是 pin 回 v3、显式配置 `env.backends.onnx.wasm.wasmPaths` 指向本地资产，
+  还是接受"PPL 需联网"。**v0.9.19 已发布的包同样缺这个资产**，所以这不是新引入的回归。
+- 同一处还给出一条旧结论的修正：`repack` 体积基线 **485.3 MB / 183.5 MB 已过时**，
+  当前是 **462.8 MB / 161.1 MB**（在 wasm 问题解决前，两个数字要一起看，别只盯一个）。
+
 ## v0.9.19 更新（三类病句根因修复：A/B 词表搭配 + C 切分守卫，六条签名归零并升级为硬拦）
 
 **这一版有引擎行为改动。** 按 [`docs/2026-09-30-sentence-defects-report.md`](docs/2026-09-30-sentence-defects-report.md)
