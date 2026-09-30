@@ -10,6 +10,9 @@
  * 本脚本把"版本号出现在哪几处"这件事本身当成检查对象：任何一处与 `package.json` 不一致即退出 1，
  * 并逐处打印"期望值 vs 实际值"，不用再去猜是谁落后了。
  *
+ * ⚠️ 2026-10-01 设计修正：README **下载行**的版本号已从强校验中移除（并把那个版本号从 README 里删掉）。
+ *   原因见下方 README_DL_RE 位置的注释——它在每次发版前必然落后一格，纳入强校验会挡住正常发布流程。
+ *
  * 用法：
  *   npx tsx scripts/check-version-sync.ts [--repo <目录>]
  *   退出码：0 = 全部一致；1 = 有不一致（逐条列出）；2 = 用法/环境错（例如读不到 package.json）
@@ -28,8 +31,23 @@ export interface VersionCheckResult {
 
 /** README 标题行：# 趣AI味 · QuAiWei v0.9.19 */
 const README_TITLE_RE = /^#\s*趣AI味\s*·\s*QuAiWei\s*v(\d+\.\d+\.\d+)\s*$/m;
-/** README 下载行：**下载**：[Windows 免安装包（v0.9.19）](...)，容错链接文案变化 */
-const README_DL_RE = /\*\*下载\*\*[\s\S]{0,120}?（v(\d+\.\d+\.\d+)）/;
+/**
+ * README 文末的「当前版本 **vX.Y.Z**」声明。
+ * 与下载行不同：它是**源码版本声明**，不存在"发版前必然落后"的问题，所以纳入强校验。
+ * （2026-10-01 补：上版门禁只查了标题行，这一行在 v0.9.19 发版时停在了 v0.9.18 没人发现 ——
+ *   同一个文件里两行版本号能差一版，正是"只查一处不够"的实物证据。）
+ */
+const README_CURRENT_RE = /当前版本\s*\*\*v(\d+\.\d+\.\d+)\*\*/;
+/**
+ * 下载行**刻意不检查**（2026-10-01 设计修正，同日上线当天发现的问题）：
+ * 它此前写作「**下载**：[Windows 免安装包（v0.9.19）](…/releases/latest)」，
+ * 而正常的发版流程是「先 bump 版本 → 提交 → build/repack → 发布 → 再改下载行」——
+ * 也就是**每一次发版前它都必然落后一格**。把它纳入强校验，等于让门禁在正常流程里红，
+ * 那是自己挡住发布；而改成"只警告不拦"又违反本项目自己的教训
+ *（天天响的警告最后一定被忽略，见 CHANGELOG 里 dirty 章那条）。
+ * 所以处置是**删掉这个落点**：下载链接本来就指向 `releases/latest`，
+ * 不需要再手抄一遍版本号（版本号在标题行已经有，且标题行是强校验的）。
+ */
 /** CHANGELOG 章节标题：## v0.9.19 更新（…） */
 const CHANGELOG_SEC_RE = /^##\s+v(\d+\.\d+\.\d+)\s+更新/gm;
 
@@ -73,7 +91,7 @@ export function checkVersionSync(root: string): VersionCheckResult {
     push("README.md 标题行", null, "文件不存在");
   } else {
     push("README.md 标题行", README_TITLE_RE.exec(readme)?.[1] ?? null);
-    push("README.md 下载行", README_DL_RE.exec(readme)?.[1] ?? null);
+    push("README.md「当前版本」行", README_CURRENT_RE.exec(readme)?.[1] ?? null);
   }
 
   const changelog = read(root, "CHANGELOG.md");
@@ -116,7 +134,7 @@ function main(): void {
   }
 
   if (result.ok) {
-    console.log("\n✅ 全部落点一致（根/electron-app/README 标题/README 下载行/CHANGELOG[/产物]）");
+    console.log("\n✅ 全部落点一致（根 / electron-app / README 标题 / CHANGELOG[/产物]）");
     return;
   }
 

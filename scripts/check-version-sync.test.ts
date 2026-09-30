@@ -2,7 +2,8 @@
  * check-version-sync.test.ts —— 版本号一致性门禁的自测
  *
  * 为什么每条都要"故意造一次不一致"：这道门禁的存在理由就是"漏改三次没人发现"，
- * 所以它自己必须证明**五种漏法都能被抓到**，否则它只是又一道绿着的摆设。
+ * 所以它自己必须证明**每一种漏法都能被抓到**，否则它只是又一道绿着的摆设。
+ * 另有一条专门断言"下载行**不**参与比对"——那是发版流程的正常中间态，加了会挡住发布。
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
@@ -22,7 +23,7 @@ const write = (rel: string, content: string) => {
 function makeRepo(version = "0.9.19"): string {
   write("package.json", JSON.stringify({ name: "x", version }, null, 2));
   write("electron-app/package.json", JSON.stringify({ name: "x", version }, null, 2));
-  write("README.md", `# 趣AI味 · QuAiWei v${version}\n\n**下载**：[Windows 免安装包（v${version}）](https://example.com)——解压即用。\n`);
+  write("README.md", `# 趣AI味 · QuAiWei v${version}\n\n**下载**：[Windows 免安装包（v${version}）](https://example.com)——解压即用。\n\n完整版本历史见 CHANGELOG.md。当前版本 **v${version}**（以 \`package.json\` 为准）。\n`);
   write("CHANGELOG.md", `# 更新日志\n\n## v${version} 更新（本版）\n\n内容。\n\n## v0.9.18 更新（上一版）\n`);
   return dir;
 }
@@ -36,7 +37,7 @@ afterEach(() => {
 });
 
 describe("checkVersionSync", () => {
-  it("五处全部一致 → ok，且每行都标 ✅", () => {
+  it("四处全部一致 → ok，且每行都标 ✅", () => {
     const r = checkVersionSync(makeRepo());
     expect(r.ok).toBe(true);
     expect(r.expected).toBe("0.9.19");
@@ -44,10 +45,30 @@ describe("checkVersionSync", () => {
       "根 package.json",
       "electron-app/package.json",
       "README.md 标题行",
-      "README.md 下载行",
+      "README.md「当前版本」行",
       "CHANGELOG.md 本版章节",
     ]);
     expect(r.rows.every((x) => x.ok)).toBe(true);
+  });
+
+  it("README「当前版本」行落后 → 红（v0.9.19 发版时它停在 v0.9.18，标题行查了、这行没查）", () => {
+    makeRepo();
+    const readme = fs.readFileSync(path.join(dir, "README.md"), "utf-8").replace("当前版本 **v0.9.19**", "当前版本 **v0.9.18**");
+    write("README.md", readme);
+    const r = checkVersionSync(dir);
+    expect(r.ok).toBe(false);
+    expect(r.rows.filter((x) => !x.ok).map((x) => x.loc)).toEqual(["README.md「当前版本」行"]);
+  });
+
+  it("README 下载行**不参与**比对：发版前它必然落后，纳入强校验会挡住正常发布流程", () => {
+    makeRepo();
+    // 「先 bump 版本 → 提交 → build/repack → 发布 → 才改下载行」是本项目的固定顺序，
+    // 所以"下载行还标着上一版"是**正常中间态**，不能判红。
+    const readme = fs.readFileSync(path.join(dir, "README.md"), "utf-8").replace("包（v0.9.19）", "包（v0.9.18）");
+    write("README.md", readme);
+    const r = checkVersionSync(dir);
+    expect(r.ok).toBe(true);
+    expect(r.rows.some((x) => x.loc.includes("下载行"))).toBe(false);
   });
 
   it("README 标题行落后 → 红，且指出是标题行（v0.9.19 的真实漏法）", () => {
@@ -59,15 +80,6 @@ describe("checkVersionSync", () => {
     const bad = r.rows.filter((x) => !x.ok);
     expect(bad.map((x) => x.loc)).toEqual(["README.md 标题行"]);
     expect(bad[0].actual).toBe("0.9.18");
-  });
-
-  it("README 下载行落后 → 红，且指出是下载行（v0.9.16 的真实漏法）", () => {
-    makeRepo();
-    const readme = fs.readFileSync(path.join(dir, "README.md"), "utf-8").replace("包（v0.9.19）", "包（v0.9.17）");
-    write("README.md", readme);
-    const r = checkVersionSync(dir);
-    expect(r.ok).toBe(false);
-    expect(r.rows.filter((x) => !x.ok).map((x) => x.loc)).toEqual(["README.md 下载行"]);
   });
 
   it("CHANGELOG 缺本版章节 → 红（改了版本号却没写更新日志）", () => {

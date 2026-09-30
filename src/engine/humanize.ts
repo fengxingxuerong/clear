@@ -931,13 +931,19 @@ export function applyZhuqueFeatures(
     const skipFlag = opts.skipSceneInject ?? false;
     // v0.9 专家修复 P5：academic 文风禁自问自答（已由外层条件拦截）。
     // plain 走克制型池，casual 走表演型池 —— 词池由 injectSelfQA 按 style 自选。
+    //
+    // 2026-10-01 修：这里此前逐段各调一次 injectSelfQA，**段与段之间没有记忆**，
+    // plain 池只有 6 条 → 两段撞同一条是 1/6 概率的必然偶发（实测 1/5 种子复现
+    // 「是不是只有这一种解释？未必，但这一种最直接。」连出两遍）。
+    // 现在整个 split 共享一个 usedQA 集合，逐段去重。
+    const usedQA = new Set<string>();
     result = result
       .split(/\n\n+/)
       .map((p) => {
         if (skipFlag || p.split(/\n/).some((ln) => SCENE_BLOCK_LINE_RE.test(ln))) return p;
         const sents = splitSentences(p);
         if (sents.length < 5) return p;
-        return injectSelfQA(sents, qrng, intensity, style).join("");
+        return injectSelfQA(sents, qrng, intensity, style, usedQA).join("");
       })
       .join("\n\n");
   }

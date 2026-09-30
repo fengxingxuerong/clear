@@ -18,6 +18,7 @@ import {
   injectSelfQA,
   preDetectHumanFingerprint,
 } from "./humanize-shuffle.ts";
+import { SELF_QA_POOLS } from "./shuffle/structure";
 
 /** 固定 rng：所有概率分支都命中（0 < x < 1 的"中间"行为） */
 const rngMid = () => 0.5;
@@ -86,6 +87,34 @@ describe("injectSelfQA（自问自答注入）", () => {
 
   it("确定性：同 rng 同输入输出完全一致", () => {
     expect(injectSelfQA(base, rngMid, 0.8)).toEqual(injectSelfQA(base, rngMid, 0.8));
+  });
+
+  // 2026-10-01：本函数按段落逐个调用（humanize.ts 里对每个 \n\n 块各调一次），
+  // 段落之间此前没有任何记忆 —— plain 池只有 6 条，两段撞同一条是 1/6 概率的必然偶发，
+  // 实测「是不是只有这一种解释？未必，但这一种最直接。」连出两遍。
+  it("跨段去重：共用 usedPairs 时两段不会注入同一条模板", () => {
+    const used = new Set<string>();
+    // 用不同的 rng 相位模拟"两段"（真实现场每段消耗的 rng 次数不同）
+    const a = injectSelfQA(base, rngMid, 0.8, "plain", used);
+    const b = injectSelfQA(base, rngMid, 0.8, "plain", used);
+    const pickOf = (out: string[]) => out.filter((s) => !base.includes(s))[0] ?? "";
+    expect(pickOf(a)).not.toBe("");
+    expect(pickOf(b)).not.toBe("");
+    expect(pickOf(a)).not.toBe(pickOf(b));
+    expect(used.size).toBe(2);
+  });
+
+  it("模板池耗尽后退回整池：宁可重复也不静默不注入", () => {
+    const used = new Set<string>();
+    for (const [q] of SELF_QA_POOLS.plain) used.add(q); // 先把 6 条全标成已用
+    const out = injectSelfQA(base, rngMid, 0.8, "plain", used);
+    expect(out.length).toBe(base.length + 1); // 仍然注入了 1 次
+  });
+
+  it("不传 usedPairs 时行为与本改动前一致（纯函数、可重复）", () => {
+    const first = injectSelfQA(base, rngMid, 0.8, "plain");
+    const second = injectSelfQA(base, rngMid, 0.8, "plain");
+    expect(first).toEqual(second);
   });
 });
 

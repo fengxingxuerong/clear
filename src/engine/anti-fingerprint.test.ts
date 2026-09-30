@@ -11,6 +11,7 @@ import {
   isSceneMetaSentence,
 } from "./anti-fingerprint";
 import { humanize } from "./humanize";
+import { SELF_QA_POOLS } from "./shuffle/structure";
 
 describe("capLongTemplateRepetition（模板复读封顶）", () => {
   it("同模板复读只保留首次", () => {
@@ -109,6 +110,28 @@ describe("isSceneMetaSentence（场景块行识别）", () => {
     expect(isSceneMetaSentence("【人物：张总、李工】")).toBe(true);
     expect(isSceneMetaSentence("张总（项目经理）：大家早上好。")).toBe(false);
   });
+});
+
+describe("复读表与模板池对齐（默认风格转 plain 后漏掉的整池）", () => {
+  // 2026-10-01：本表此前**只覆盖 casual 池**（"你可能会问——…""例子呢？…"），
+  // 而 v0.9.8 起默认风格已是 plain ⇒ 默认路径上注入的模板一条都不在管辖内。
+  // 实测代价：plain 池 6 条、逐段各注入 1 次，两段撞同一条概率 1/6，
+  // 5 个种子里复现 1 次整对连出两遍（「是不是只有这一种解释？未必，但这一种最直接。」）。
+  //
+  // 这组测试**遍历模板池本身**，不硬编码条目 —— 以后池子再扩、
+  // 或再新增一个文风池，忘了同步复读表会立刻在这里红，不用等人眼再发现第四次。
+  for (const [style, pool] of Object.entries(SELF_QA_POOLS)) {
+    for (const [q, a] of pool) {
+      it(`${style} 池「${q}」整对复读 → 第二次被删，全文只剩 1 次`, () => {
+        const tpl = q + a;
+        const text = `开头一句。${tpl}中间一句。${tpl}收尾一句。`;
+        const out = capLongTemplateRepetition(text);
+        expect(out.split(tpl).length - 1, `复读未被去重：${tpl}`).toBe(1);
+        // 且不能把首次出现也删掉（防"过度删除"这个反向失效）
+        expect(out).toContain(tpl);
+      });
+    }
+  }
 });
 
 describe("v0.9 引擎集成（对话剧本场景块保护 + 指纹健康）", () => {
