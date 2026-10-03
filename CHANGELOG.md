@@ -51,7 +51,7 @@ GitHub 项目做全面优化」的勘查。查了 6 个高星同类（blader/hum
   逐位相同、舍入未被绕过、同 seed 幂等。
 - **缺陷注入复验**：删掉 detector 的 `需要进一步` 分支 → 只有"反向守卫"变红；恢复 → 全绿。
 
-**门禁**：`npm run check:release` 八步全绿，vitest **1099 passed / 62 文件**（较上版 +5）。
+**门禁**：`npm run check:release` 八步全绿，vitest **1102 passed / 63 文件**（较上版 +2 文件 / +8 用例）。
 
 ---
 
