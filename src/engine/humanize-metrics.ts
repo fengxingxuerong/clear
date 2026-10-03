@@ -209,6 +209,20 @@ function countPollutedSentences(text: string): { total: number; polluted: number
   return { total: sents.length, polluted, ratio: polluted / sents.length };
 }
 
+/**
+ * 句长节奏（burstiness）：`aiScore().burstiness` 的**同一口径**快捷取法。
+ *
+ * v0.9.21：此前 humanize.ts 为了读这一个字段，调了整个 `aiScore(text)`——
+ * 而 aiScore 除了句长统计外还要跑 4 组词表全表扫描 + 污染句统计。
+ * 实测（artifacts/_probe-burstiness.ts，同一输入 200 次取均值）：
+ *   15680 字：aiScore 1.399ms vs 本函数 0.131ms（≈10×），结果逐位相同。
+ * ⚠️ 必须保留 `toFixed(2)`——`aiScore` 返回的 burstiness 是舍入后的值，
+ * 直接返回 cv 会让 `burstiness < 0.48` 这类阈值判定在边界上改变行为。
+ */
+export function burstinessOf(text: string): number {
+  return Number(sentenceStats(text).cv.toFixed(2));
+}
+
 export function aiScore(text: string): ScoreBreakdown {
   const stats = sentenceStats(text);
   const n = stats.count;

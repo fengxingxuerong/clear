@@ -74,6 +74,7 @@ import { countPadHeads, PAD_INJECT_CAP } from "./humanize-primitives.ts";
 
 import {
   aiScore,
+  burstinessOf,
   ScoreBreakdown,
   fingerprintCheck,
   FingerprintReport,
@@ -806,7 +807,9 @@ export function humanize(text: string, opts: HumanizeOptions = {}): string {
     // P7-F 段落感知：必须按段分发——boostBurstinessByCutting 内部 splitSentences
     // 会剥掉段尾 \n\n，整篇直调会把多段焊成单段（v4.3 段落保留探针实测 37 次违规）。
     const FP_LINE = 0.48; // 指纹体检红线 0.45 + 余量
-    if (aiScore(result).burstiness < FP_LINE) {
+    // v0.9.21 性能：此处原为 `aiScore(result).burstiness`——只为读一个字段却跑完整个
+    // aiScore（含 4 组词表全表扫描）。改用 burstinessOf（同口径、结果逐位相同，实测快约 10×）。
+    if (burstinessOf(result) < FP_LINE) {
       result = result.includes("\n\n")
         ? result
             .split(/\n\n+/)
@@ -1028,9 +1031,16 @@ function humanizeSingle(text: string, opts: HumanizeOptions = {}): string {
     //      （humanHand 的 intensityCap=0.48 也说明该体裁本就该轻改）；
     //   c) 全篇垫词未超预算 —— 各注入点独立掷骰会叠加，必须有全局约束。
     //      v0.9.4 P2 已引入 countPadHeads/PAD_INJECT_CAP 跨轮守卫，此处复用同一口径。
-    const padBudgetLeft = countPadHeads(out.join("")) < PAD_INJECT_CAP;
+    // v0.9.21 性能：原实现是先无条件算 `countPadHeads(out.join(""))`，再拿结果去和
+    // 三个更便宜的布尔做 `&&`——而 countPadHeads 要扫描「已累积全文」，逐句调用即
+    // O(句数 × 全文长)。单段长文实测超线性（38400 字 / 800 句：99.8ms，倍率 ×1.58）。
+    // 挪到 `&&` 链**末端**后：默认风格是 plain（isCasual=false），这三条先短路，
+    // 昂贵调用根本不会执行。countPadHeads 是纯函数、无副作用，短路掉它行为完全等价。
     const padInjectAllowed =
-      !isAcademic && isCasual && !padForbiddenGenre && padBudgetLeft;
+      !isAcademic &&
+      isCasual &&
+      !padForbiddenGenre &&
+      countPadHeads(out.join("")) < PAD_INJECT_CAP;
     if (
       padInjectAllowed &&
       rng() < INTERJECTION_RATE * intensity &&

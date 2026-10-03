@@ -1,4 +1,4 @@
-# 趣AI味 · QuAiWei v0.9.20
+# 趣AI味 · QuAiWei v0.9.21
 
 [![CI](https://github.com/fengxingxuerong/clear/actions/workflows/ci.yml/badge.svg)](https://github.com/fengxingxuerong/clear/actions/workflows/ci.yml)
 
@@ -531,6 +531,28 @@ npm run check:publish   # = audit --strict：连"历史点无凭证"一起拦 �
 | 交叉模型评判 | —（多数竞品无此能力） | ✅ 领先：glm-5.2 交叉 + 痕迹定向修法（多数竞品单模型黑盒） |
 | 本地离线零成本 | —（竞品全部 SaaS 按字收费 1~8 元/千字） | ✅ 领先：纯本地引擎不联网不花钱（PPL 首次需联网下载一次约 99MB 模型，之后离线） |
 
+### 2026-10-03 开源同类对标（GitHub，Agent Skill 生态）
+
+上面两次对标的是**商业 SaaS**。这一次对标的是**开源同类**——本赛道 GitHub 上真正高 star 的
+不是应用，而是 **Agent Skill**（一份 `SKILL.md` 规则清单，靠 `npx skills add <repo>` 一行装进
+Claude Code / Codex）。实测数据（GitHub API，2026-10-03）：
+
+| 项目 | star | 形态 | 内置检测打分 | 闭环复测 | 交付形态 |
+|---|---|---|---|---|---|
+| [blader/humanizer](https://github.com/blader/humanizer) | 53.6k | Agent Skill | ❌ | ❌ | 规则清单 |
+| [op7418/Humanizer-zh](https://github.com/op7418/Humanizer-zh) | 18.8k | Agent Skill | ❌ | ❌ | 规则清单（31 检查点） |
+| [hardikpandya/stop-slop](https://github.com/hardikpandya/stop-slop) | 17.7k | Agent Skill | ❌（仅 LLM 自评） | ❌ | 规则清单 |
+| [larashero3-dotcom/lieflat-less-ai-tone](https://github.com/larashero3-dotcom/lieflat-less-ai-tone) | 2.2k | Agent Skill | ❌ | ❌ | 规则清单 |
+| [MrGeDiao/shuorenhua](https://github.com/MrGeDiao/shuorenhua) | 2.0k | Agent Skill | ❌ | ❌ | 规则清单 |
+| [pengong101/ai-humanizer-cn](https://github.com/pengong101/ai-humanizer-cn) | 1 | Python 包 | ❌（质量评分非 AI 检测） | ❌ | pip |
+| **本项目** | — | **Electron + Web + CLI** | ✅ 启发式 14 维 | ✅ 朱雀官方 API 自动送检 | 免安装 exe / 静态站 / CLI |
+
+**结论（诚实版）**：同类项目**全部**是"给 LLM 的规则清单"，无一具备内置检测打分、闭环复测或
+桌面交付——本项目的引擎与验证闭环是同类里的超集。差距不在能力，**在分发形态**：
+`SKILL.md` 能一行装进 agent、零安装成本，而本项目要先 clone + `npm install`。
+⇒ 待办（未做）：补一份薄壳 `SKILL.md` 指向 `scripts/humanize-cli.ts`，吃这条赛道的入口；
+本版只修代码内已核实的真缺陷（见 CHANGELOG v0.9.21），不做功能扩张。
+
 ---
 
 ## 许可
@@ -547,5 +569,5 @@ MIT（见 LICENSE）。
 
 ## 更新日志
 
-完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。当前版本 **v0.9.20**（以 `package.json` 的 `version` 为准）。
+完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。当前版本 **v0.9.21**（以 `package.json` 的 `version` 为准）。
 

@@ -25,7 +25,18 @@ import {
   PPL_MIN_WINDOWS,
 } from "./humanize-metrics";
 // v0.8.5：四套词表收拢到 zhuque-lexicon.ts 共享（与 detector.ts 同一把词汇尺，防漂移）
-import { FORMULAIC, OFFICIAL, SKELETON, CONNECTIVES } from "./zhuque-lexicon";
+// v0.9.21：5 条特征正则同样收拢（此前两份硬编码且 MODAL 已漂移）
+import {
+  FORMULAIC,
+  OFFICIAL,
+  SKELETON,
+  CONNECTIVES,
+  NOMINAL_SUFFIX,
+  rePersonal,
+  reConcrete,
+  reModalZhuque,
+  reIdiomLike,
+} from "./zhuque-lexicon";
 
 /* ----------------------------- 类型 ----------------------------- */
 
@@ -133,19 +144,20 @@ export const ZHUQUE_URL = "https://matrix.tencent.com/ai-detect/";
 const TH_AI = 62;
 const TH_SUSPECTED = 38;
 
-/* ----------------------------- 词表 -----------------------------
- * 已收拢至 ./zhuque-lexicon.ts（FORMULAIC/OFFICIAL/SKELETON/CONNECTIVES 共享）。
+/* ----------------------------- 特征正则 -----------------------------
+ * v0.9.21：5 条特征正则收拢至 ./zhuque-lexicon.ts（单一事实源）。
+ * 注意这些正则带 `g` 标志，有状态：本文件全部走 `countRe`（内部重置 lastIndex），
+ * 不使用 `.test()`——详见 zhuque-lexicon.ts 的说明。
  */
+const PERSONAL = rePersonal();
+const CONCRETE = reConcrete();
+const MODAL = reModalZhuque();
+const IDIOM_LIKE = reIdiomLike();
 
+// 以下两条是 zhuque 检测器专属口径，detector 不用，故留在本文件
 // 泛指主语（AI 爱写"我们/人们/大家"，真人常写"我/你+具体情境"）
 const VAGUE_SUBJECT =
   /(我们每个人|我们应当|我们要|人们|大家|每个人|一个人|任何人都|双方均|各方应)/g;
-const PERSONAL = /(我|我们|咱|你|您|我觉得|个人|身边|记得|那次|当时|小时候|昨天|上周|我家|朋友)/g;
-const CONCRETE =
-  /([0-9０-９]+[年月日%％元块个次万亿度公里分秒]|[一二三四五六七八九十百千万亿两几]{1,3}[块元个年月天次度岁遍]|[A-Za-z][A-Za-z0-9-]{2,}|第[一二三四五六七八九十]+[章节部])/g;
-const NOMINAL_SUFFIX = /(性|化|度|感|力|型|式|机制|体系|格局|举措|效能|路径|维度|层面)$/;
-const MODAL = /(应该|应当|必须|需要|有助于|意味着|表明|说明|能够|可以|我们要|既要|也要|不仅|而且)/g;
-const IDIOM_LIKE = /[\u4e00-\u9fa5]{4}(?:、[\u4e00-\u9fa5]{4}){1,}/g;
 // 真人痕迹：语气词、口癖、破折号省略号、口语短词
 const COLLOQUIAL =
   /(吧|啊|呢|嘛|呗|啦|呗儿|说实话|其实|反正|倒是|压根|就这么|怎么说|那会儿|挺|贼|忒)/g;

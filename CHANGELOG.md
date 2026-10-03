@@ -1,6 +1,60 @@
 ﻿# 更新日志 · QuAiWei
 > 完整版本历史，细节以对应 Git 提交为准。
 
+## v0.9.21 更新（同类开源项目对标：检测器收拢、g 标志状态缺陷、两处热点）
+
+**这一版有引擎行为改动**（一处修复 + 两处等价性能优化 + 一次收拢），起因是「对比同类
+GitHub 项目做全面优化」的勘查。查了 6 个高星同类（blader/humanizer 53.6k、op7418/Humanizer-zh
+18.8k、stop-slop 17.7k、shuorenhua 1.9k、lieflat-less-ai-tone 2.2k、pengong101/ai-humanizer-cn），
+结论是**本项目的引擎与闭环能力在同类里是超集**（同类全部只有 SKILL.md 规则清单，无内置检测打分、
+无闭环复测、无 exe 打包）；这版因此不做功能扩张，只修自己代码里的真问题。
+
+**① `detector.ts` / `zhuque.ts` 两份特征正则漂移（合并为单一事实源）**
+
+5 条特征正则（`PERSONAL` / `CONCRETE` / `NOMINAL_SUFFIX` / `IDIOM_LIKE` / `MODAL`）
+在两个检测器里各硬编码了一份，`MODAL` **已经漂移**。现收拢进 `zhuque-lexicon.ts`。
+核实两个分叉点，结论比"重复"更具体：
+
+- `需要进一步` 是**死分支**——JS 正则交替"首次匹配优先"，前面的 `需要` 先命中，
+  该分支永不生效（实测 `"需要进一步".match(re)` 返回 `["需要"]`）。保留原样是为零行为变化。
+- `值得注意的是` 与 `FORMULAIC` 是同一处被"套话密度"和"情态密度"两个特征各计一次，属既有口径。
+
+⚠️ **两个 MODAL 变体刻意不统一**：统一会移动 zhuque 的 x 轴打分，而标定漂移棘轮已压满
+（6/18 点、Δmax 35/35），任何 x 轴移动都会把它顶红——真要统一必须与四条体裁线重拟合。
+所以改成 `reModalDetector()` / `reModalZhuque()` 两个显式命名 + 差异登记，而不是静默分叉。
+
+**② 真缺陷：带 `g` 标志的正则用 `.test()` 有状态**（`detector.ts` segmentRisk）
+
+`segmentRisk` 逐句调 `CONCRETE.test(sent)`，而 `CONCRETE` 带 `g` 标志——`test()` 会读写
+`lastIndex`，连续调用**交替返回 true/false**。实测：同一句"他昨天买了3个苹果。"连判 4 次得到
+`true,false,true,false`。后果是一半"有具体细节"的句子被吞掉、少减 12 分风险，直接影响
+`topSegments` 的句级高亮。改用 `sent.search(CONCRETE) >= 0`（不读也不写 `lastIndex`）。
+
+**③ 两处热点（均为等价优化，输出不变）**
+
+- `humanize.ts` 逐句循环里 `countPadHeads(out.join(""))` **无条件执行**，而它要扫描"已累积全文"
+  → 逐句调用即 O(句数 × 全文长)。多段文本因 `humanize()` 按段分派而不明显，**单段长文**
+  （无换行）实测超线性：38400 字 / 800 句 99.8ms，相邻倍率涨到 ×1.58。
+  把该调用挪到 `&&` 链**末端**（纯函数、无副作用，短路行为完全等价）后：
+  **同输入 99.8ms → 20.8ms（4.8×），倍率回到 ×0.94（线性）**。
+  默认风格是 `plain`（`isCasual=false`）→ 三条更便宜的布尔先短路，昂贵调用根本不会发生。
+- `humanize.ts` 为读一个 `burstiness` 字段调了整个 `aiScore()`（含 4 组词表全表扫描）。
+  新增 `burstinessOf(text)`（同口径，保留 `toFixed(2)` 舍入）：
+  15680 字实测 1.399ms → 0.131ms（≈10×），结果逐位相同。
+
+**防漏的测试**
+
+- `zhuque-lexicon.test.ts`（新增 5 条）：正向守卫（5 条正则字符级与登记值一致）+ 反向守卫
+  （两个 MODAL 变体差异**只允许**是那 2 个已登记的词）+ 自检（比对逻辑失效也要红）+
+  本次 `g` 标志缺陷的回归。
+- `humanize-metrics-perf.test.ts`（新增 3 条）：`burstinessOf` 与 `aiScore().burstiness`
+  逐位相同、舍入未被绕过、同 seed 幂等。
+- **缺陷注入复验**：删掉 detector 的 `需要进一步` 分支 → 只有"反向守卫"变红；恢复 → 全绿。
+
+**门禁**：`npm run check:release` 八步全绿，vitest **1099 passed / 62 文件**（较上版 +5）。
+
+---
+
 ## v0.9.20 更新（模板句复读修复：复读表漏了默认风格的整池）
 
 **这一版有引擎行为改动。** 缘起是 2026-09-28 的能力评估探针

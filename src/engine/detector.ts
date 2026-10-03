@@ -22,7 +22,18 @@
  */
 
 // v0.8.5：四套词表收拢至 ./zhuque-lexicon.ts 共享（与 engine/zhuque.ts 同一把词汇尺）
-import { FORMULAIC, OFFICIAL, SKELETON, CONNECTIVES } from "./zhuque-lexicon";
+// v0.9.21：5 条特征正则同样收拢（此前两份硬编码且 MODAL 已漂移）
+import {
+  FORMULAIC,
+  OFFICIAL,
+  SKELETON,
+  CONNECTIVES,
+  NOMINAL_SUFFIX,
+  rePersonal,
+  reConcrete,
+  reModalDetector,
+  reIdiomLike,
+} from "./zhuque-lexicon";
 
 /* ----------------------------- 类型 ----------------------------- */
 
@@ -75,26 +86,20 @@ export interface DetectReport {
   warnings: string[];
 }
 
-/* ----------------------------- 词表 -----------------------------
- * 已收拢至 ./zhuque-lexicon.ts（FORMULAIC/OFFICIAL/SKELETON/CONNECTIVES 共享）。
+/* ----------------------------- 特征正则 -----------------------------
+ * v0.9.21：5 条特征正则收拢至 ./zhuque-lexicon.ts（单一事实源）。
+ *
+ * ⚠️ 关键：这些正则带 `g` 标志，**有状态**。
+ *   - `String.prototype.match(g)` 会忽略并重置 lastIndex → 计次用法安全；
+ *   - `RegExp.prototype.test()` **读写 lastIndex** → 连续调用会交替返回
+ *     true/false。此前 segmentRisk 里逐句 `CONCRETE.test(sent)` 就踩了这个坑：
+ *     同一「有具体细节」的判据被吞掉一半句子（少减 12 分风险）。
+ *   ⇒ 布尔判定一律用 `.search(...) >= 0`（不读也不写 lastIndex），不要用 `.test()`。
  */
-
-// 名物化/书面后缀词：AI 爱用抽象名词堆砌
-const NOMINAL_SUFFIX = /(性|化|度|感|力|型|式|机制|体系|格局|举措|效能|路径|维度|层面)$/;
-
-// 第一人称与主观标记（真人显著更高）
-const PERSONAL = /(我|我们|咱|你|您|我觉得|个人|身边|记得|那次|当时|小时候|昨天|上周|我家|朋友)/g;
-
-// 具体细节标记：数字、专名、时间、地点、中文数量词（"两百多块""快十年了"都是真人痕迹）
-const CONCRETE =
-  /([0-9０-９]+[年月日%％元块个次万亿度公里分秒]|[一二三四五六七八九十百千万亿两几]{1,3}[块元个年月天次度岁遍]|[A-Za-z][A-Za-z0-9-]{2,}|第[一二三四五六七八九十]+[章节部])/g;
-
-// 判断句式与情态词密度（AI 写论述文的骨架动词）
-const MODAL =
-  /(应该|应当|必须|需要|需要进一步|有助于|意味着|表明|说明|能够|可以|我们要|值得注意的是|不仅|而且|既要|也要)/g;
-
-// 四字格/对仗排比（AI 爱堆）
-const IDIOM_LIKE = /[\u4e00-\u9fa5]{4}(?:、[\u4e00-\u9fa5]{4}){1,}/g;
+const PERSONAL = rePersonal();
+const CONCRETE = reConcrete();
+const MODAL = reModalDetector();
+const IDIOM_LIKE = reIdiomLike();
 
 /* ----------------------------- 工具 ----------------------------- */
 
@@ -389,7 +394,10 @@ function segmentRisk(sent: string): { risk: number; reason: string } {
     risk -= 18;
     reasons.push("有主观视角");
   }
-  if (CONCRETE.test(sent)) {
+  // v0.9.21：此处原为 CONCRETE.test(sent)，而 CONCRETE 带 g 标志 → lastIndex 残留导致
+  // 逐句调用交替命中/落空（一半"有具体细节"的句子被吞，少减 12 分）。改用 sent.search(CONCRETE)，
+  // 不读也不写 lastIndex，语义为"该句是否含具体细节"，与原先意图一致。
+  if (sent.search(CONCRETE) >= 0) {
     risk -= 12;
     reasons.push("有具体细节");
   }
