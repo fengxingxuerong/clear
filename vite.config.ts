@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { COVERAGE_THRESHOLDS } from "./scripts/coverage-thresholds";
 
 // 中文/括号等非 ASCII 路径下，Windows 文件系统事件不可靠（HMR 失灵、改了不热更），
 // 需要轮询模式兜底（代价是一点 CPU）。纯 ASCII 路径用原生监听更省资源——
@@ -42,16 +43,15 @@ export default defineConfig({
   test: {
     include: ["src/**/*.test.ts", "src/**/*.test.tsx", "scripts/**/*.test.ts"],
     exclude: ["node_modules"],
-    // 覆盖率 75% 硬门禁（v0.9.16 硬化）：跑 --coverage 时自动断言，低于阈值测试即失败。
-    // 七轮测试补盲后的基线：Stmt 89.3 / Branch 82.3 / Func 86.0+ / Lines 90.4——
-    // 均远高于阈值；写进配置防止"某次提交悄悄拉低覆盖率"（门禁不再依赖记得手动传参）。
+    // 覆盖率阈值从 scripts/coverage-thresholds.ts 取（**唯一事实源**）。
+    // 此前阈值在本文件与 `test:cov` 的命令行参数里各写了一份，两份会各自漂移；
+    // 2026-10-03 核实发现本机覆盖率门禁从未真正生效（结构性假红，详见
+    // scripts/coverage-gate.ts 头部），"哪里是真阈值"当时已经说不清 —— 故收拢成一处。
+    // 注意：v8 provider 默认只统计**被测试加载过**的文件；src/main.tsx、
+    // src/ppl/ppl-worker.ts、src/types/*.d.ts 三者不在报告里（入口/worker/纯类型），
+    // 真实覆盖略低于报告值，差值 <1pt。不为它们追数字 —— 那是入口层测试的课题。
     coverage: {
-      thresholds: {
-        statements: 75,
-        branches: 75,
-        functions: 75,
-        lines: 75,
-      },
+      thresholds: { ...COVERAGE_THRESHOLDS },
     },
   },
 });

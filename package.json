@@ -18,11 +18,11 @@
     "score:official": "tsx scripts/zhuque-official-run.ts",
     "check:ledger": "tsx scripts/check-ledger-appendonly.ts",
     "check:version": "tsx scripts/check-version-sync.ts",
-    "check:release": "npm run check:version && npm run test && npm run test:regress && npm run test:regress12 && npm run test:quality && npm run test:calib && npm run test:evidence && npm run check:ledger",
+    "check:release": "npm run check:version && npm run test:cov && npm run test:regress && npm run test:regress12 && npm run test:quality && npm run test:calib && npm run test:evidence && npm run check:ledger",
     "check:publish": "tsx scripts/zhuque-evidence.ts audit --strict",
     "bench": "tsx scripts/bench.ts",
     "test": "vitest run",
-    "test:cov": "vitest run --coverage --coverage.thresholds.lines=75 --coverage.thresholds.statements=75",
+    "test:cov": "tsx scripts/coverage-gate.ts",
     "lint": "eslint src/ scripts/",
     "fmt": "prettier --write \"src/**/*.{ts,tsx,css}\" \"*.{ts,tsx,json,mjs}\" \"vite.config.ts\"",
     "build:electron": "tsc -b && vite build && node scripts/sync-dist.mjs"
