@@ -1,4 +1,4 @@
-# 趣AI味 · QuAiWei v0.9.22
+# 趣AI味 · QuAiWei v0.9.23
 
 [![CI](https://github.com/fengxingxuerong/clear/actions/workflows/ci.yml/badge.svg)](https://github.com/fengxingxuerong/clear/actions/workflows/ci.yml)
 
@@ -242,7 +242,7 @@ npm run repack           # = rebuild-app → prune-dist → verify-pruned
 ```
 趣AI味 QuAiWei/
 ├─ src/
-│  ├─ engine/                   # 本地去味引擎（零依赖，29 个模块）
+│  ├─ engine/                   # 本地去味引擎（零依赖，26 个模块，含 shuffle/ 子目录）
 │  │  ├─ humanize.ts            #   主流程：强度 / 文风 / 体裁分派 + 段落级处理
 │  │  ├─ humanize-shuffle.ts    #   句序安全互换 / 垫词注入 / 断句 clamp
 │  │  ├─ humanize-vocab.ts      #   书面腔 → 口语替换词表
@@ -250,13 +250,13 @@ npm run repack           # = rebuild-app → prune-dist → verify-pruned
 │  │  ├─ classify-genre.ts      #   体裁判定（论说 / 叙事 / 对话 / 人写原稿）
 │  │  ├─ term-protect.ts        #   术语保护（58 项内置 + 用户自定义，设置面板可编辑）
 │  │  └─ detector.ts            #   本地启发式 AI 味评分（代理分，与朱雀无标定关系）
-│  ├─ api/                      # 可选 LLM 通道（28 个模块）
+│  ├─ api/                      # 可选 LLM 通道（15 个模块）
 │  │  ├─ llm.ts                 #   统一分发：本地引擎 ↔ LLM 深度模式
 │  │  ├─ llm-humanize.ts        #   深度闭环：改写 → 质检 → 交叉评判 → 定向修订
 │  │  ├─ llm-quality.ts         #   通顺 / 忠实 / 编造 / 截断 四类质检
 │  │  ├─ llm-prompts.ts         #   提示词铁律与篇章范例
 │  │  └─ zhuque.ts              #   朱雀口径标定与语义层
-│  ├─ components/               # React UI 面板（15 个）
+│  ├─ components/               # React UI 面板（11 个）
 │  ├─ ppl/                      # 困惑度通道（MLM 伪困惑度，首次需联网下载模型）
 │  ├─ store.ts / store-history.ts   # 配置与历史持久化
 │  └─ App.tsx / main.tsx / styles.css
@@ -506,7 +506,7 @@ npm run check:publish   # = audit --strict：连"历史点无凭证"一起拦 �
 
 | 移植项 | 说明 |
 |---|---|
-| 中英空格处理 | **v0.9 改为跟随原文排版**：原文带空格就保留，没空格就不加。原实现无条件剥离，对技术文档是破坏性的（"从 Webpack 迁移到 Vite"→"从Webpack迁移到Vite"，连 optimizeDeps.include 都难辨认），而空格并非可靠的 AI 语义特征。旧剥离能力保留为 `stripCJKSpaces` 开关，回归探针仍在覆盖 |
+| 中英空格处理 | **v0.9 改为跟随原文排版**：原文带空格就保留，没空格就不加。原实现无条件剥离，对技术文档是破坏性的（"从 Webpack 迁移到 Vite"→"从Webpack迁移到Vite"，连 optimizeDeps.include 都难辨认），而空格并非可靠的 AI 语义特征。旧剥离能力保留为 `stripCJKSpaces` 开关（`src/engine/humanize-primitives.ts:46`），回归探针仍在覆盖。<br>⚠️ 2026-10-04 核实：**该开关目前没有入口** —— UI 与 CLI 都不传这个字段，实际恒为 `false`，只能改代码调用；需要旧行为的话请提 issue 或直接调 `humanize(text, { stripCJKSpaces: true })` |
 | 让步句重构 | "虽然A，但是B"→"你可能觉得A？其实B"（竞品实测朱雀重点特征） |
 | 总结类过渡词直删 | 综上所述/总而言之直接删（比替换更有效） |
 | 半角逗号微混入 | 模拟人类手滑，双重限频（~4% 概率 + 全文 ≤5% 硬上限） |
@@ -524,7 +524,7 @@ npm run check:publish   # = audit --strict：连"历史点无凭证"一起拦 �
 |---|---|---|
 | 中文术语零改动 | 言笔/笔灵/SpeedAI（核心卖点） | ✅ v0.8.6 `term-protect.ts` 内置 58 项；v0.9.15 起「设置 → 自定义保护术语」可由用户扩充（此前只有 API，无入口） |
 | 批量文件处理 | 嘎嘎降AI/零感AI/千笔AI（标配） | ✅ v0.8.6 `scripts/humanize-cli.ts`；v0.9.15 起 `--api` 可走 LLM 深度模式（此前只接了本地引擎） |
-| 目标 AI 率设定 | 文必过（"设定降至30%"） | ✅ 已有（深度模式 DEEP_TARGET_SCORE + 评判闭环） |
+| 目标 AI 率设定 | 文必过（"设定降至30%"） | ⚠️ **部分**：深度模式确有达标线与评判闭环，但达标线是**硬编码常量** `DEEP_TARGET_SCORE = 10`（`src/api/llm-config.ts:218`），UI 只**显示**它、CLI 无开关 ⇒ 用户目前**不能自行设定**目标值（2026-10-04 核实更正，此前标"✅ 已有"） |
 | .docx 导入导出（纯文本） | 零感AI/降重侠（"文档模式"） | ✅ v0.9.16（零依赖 OOXML 读写；富文本格式如加粗/公式不保留） |
 | 多检测平台适配策略 | 零感AI（知网/维普/格子达分策略） | ⏳ 部分（仅朱雀口径；知网/维普规则未逆向，暂缓） |
 | 不达标退款 | 降宝AI/ThouPen | N/A（本地工具零成本，无售后概念） |
@@ -569,5 +569,5 @@ MIT（见 LICENSE）。
 
 ## 更新日志
 
-完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。当前版本 **v0.9.22**（以 `package.json` 的 `version` 为准）。
+完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。当前版本 **v0.9.23**（以 `package.json` 的 `version` 为准）。
 

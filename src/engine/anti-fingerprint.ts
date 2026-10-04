@@ -116,10 +116,20 @@ export function capLongTemplateRepetition(text: string): string {
   let out = text;
   // 第一轮：完整模板去重（保留首次出现）
   for (const { re } of REPEAT_TEMPLATES) {
+    // v0.9.23 真缺陷：`re` 是**模块级且带 g 标志**的常量，而 `exec()` 会读写 `lastIndex`
+    // ——上次调用留下的 lastIndex 会让本次**从中间开始找**，前面的出现被整段跳过
+    // ⇒ 模板复读**静默漏删**（与 detector.ts 那次 g 标志缺陷同源，同一个坑第二次踩）。
+    // 实测（`artifacts/_af_probe.ts`）：先处理一段含该模板的短文本，再处理另一段，
+    // 后者的两处模板**一处都没删**；单独跑后者则正确删掉第二处。
+    re.lastIndex = 0;
     const m = re.exec(out);
     if (!m) continue;
     const firstEnd = m.index + m[0].length;
-    const tail = out.slice(firstEnd).split(re.source).join("");
+    // v0.9.23 顺带修掉一个脆弱写法：原来写 `split(re.source).join("")`，那是按
+    // **正则源码字符串**切分而不是按正则切分——当前表里 17 条模板全是纯字面量才碰巧等价，
+    // 一旦有人加一条含 `\d` / `(?:…)` / 量词的模板就会**静默失效**（切不到 = 不删）。
+    // 改用 `replace(re, "")`：按正则删，且带 g 的 replace 自己会把 lastIndex 归零。
+    const tail = out.slice(firstEnd).replace(re, "");
     out = out.slice(0, firstEnd) + tail;
   }
   // 第二轮：核心短语计数去重（每种限 1 次，容忍被拆散）

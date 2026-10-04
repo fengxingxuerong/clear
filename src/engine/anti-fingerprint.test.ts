@@ -3,6 +3,7 @@
  * 覆盖：模板复读封顶 / 语体门控 / 双连接词拆解（含 $1 bug 回归）/ 残句守卫 / 场景块保护
  */
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   capLongTemplateRepetition,
   guardFormalRegister,
@@ -21,6 +22,38 @@ describe("capLongTemplateRepetition（模板复读封顶）", () => {
     // 第二次出现被删除，全文仅剩 1 处
     expect((out.match(/我随便举一个你就懂了/g) ?? []).length).toBe(1);
     expect(out).toBe("A。例子呢？我随便举一个你就懂了。B。C。");
+  });
+
+  it("v0.9.23 回归：同一输入连调结果必须完全一致（状态污染会让结果随调用次数漂移）", () => {
+    // ⚠️ 诚实标注（2026-10-04 缺陷注入实测）：**这条对本缺陷不敏感**。
+    //   把 reset 去掉 + split 改回去（双注入）后，本条**仍然绿**——lastIndex 泄漏是
+    //   **确定性**的，同一输入每次调用走完全相同的状态轨迹，结果自然一致。
+    //   它只在**不同输入交替**时才可能显现，而那依赖具体长度/位置，做过一次复现序列
+    //   （短文本×3 再跑长文本），实测也不产生差异 ⇒ 已撤下，不拿它冒充主力断言。
+    //
+    //   留着它的理由：它是"结果不得随调用历史漂移"的通用守卫，能抓**其他**形态的状态泄漏。
+    //   本缺陷的主力断言是下面那条**源码级**守卫。
+    const input = "A。例子呢？我随便举一个你就懂了。B。例子呢？我随便举一个你就懂了。C。例子呢？我随便举一个你就懂了。";
+    const first = capLongTemplateRepetition(input);
+    for (let i = 2; i <= 6; i++) {
+      expect(
+        capLongTemplateRepetition(input),
+        `第 ${i} 次调用结果与第 1 次不同 → 模块级正则的 lastIndex 泄漏了`,
+      ).toBe(first);
+    }
+    // 顺带钉住"确实去重了"，避免"全都相等但都没删"也能通过
+    expect((first.match(/例子呢？/g) ?? []).length).toBe(1);
+  });
+
+  it("v0.9.23 守卫（主力）：模块级 g 正则必须显式归零，且不得按源码字符串切分", () => {
+    // 这是本缺陷**唯一真正敏感**的断言（双注入验证：只有它变红）。
+    // ① 17 条模板当前全是纯字面量，split(re.source) 才碰巧与 replace(re,"") 等价；
+    //    一旦有人加一条含 \d / (?:…) / 量词的模板，它就会切不到 → 静默不删。
+    // ② replace(re,"") 自带归零，reset 是纵深；两者都在时任一被拆掉都不出事，
+    //    但**同时**拆掉就回到原缺陷，而端到端抓不到 ⇒ 只能靠源码级钉住。
+    const src = readFileSync(new URL("./anti-fingerprint.ts", import.meta.url), "utf-8");
+    expect(src, "不得再按正则源码字符串切分").not.toContain(".split(re.source)");
+    expect(src, "带 g 的模块级正则 exec 前必须 lastIndex = 0").toContain("re.lastIndex = 0");
   });
 
   it("容忍模板被语气词拆散后仍去重", () => {

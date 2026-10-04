@@ -347,19 +347,31 @@ function featureList(text: string, r: Raw, chars: number): FeatureItem[] {
 
 /* ----------------------------- 分段风险（句子级） ----------------------------- */
 
+/**
+ * v0.9.23 性能：`FORMULAIC`（42 条）与 `SKELETON`（14 条）都是静态表，
+ * 而 `segmentRisk` 是**逐句**调用的 —— 原来每句都要现场 `new RegExp` 56 次
+ * （532 句 → 3 万次构造）。预编译到模块级：非 `g` 标志，`test()` 不读写 lastIndex，
+ * 行为与逐次构造**完全等价**（已由全量用例 + 12 样本回归覆盖）。
+ * 实测：FORMULAIC 2.2 → 0.9 ms、SKELETON 1.35 → 0.27 ms（532 句），合计省 ≈2.5 ms，
+ * 约占 `detectAI` 单次耗时的 26%。
+ */
+const FORMULAIC_RES: RegExp[] = FORMULAIC.map((p) => new RegExp(p));
+const SKELETON_RES: RegExp[] = SKELETON.map((s) => new RegExp("^" + s));
+
 function segmentRisk(sent: string): { risk: number; reason: string } {
   const reasons: string[] = [];
   let risk = 0;
 
-  for (const p of FORMULAIC) {
-    if (new RegExp(p).test(sent)) {
+  for (const re of FORMULAIC_RES) {
+    if (re.test(sent)) {
       risk += 34;
       reasons.push("含AI套话");
       break;
     }
   }
-  for (const s of SKELETON) {
-    if (new RegExp("^" + s).test(sent.trim())) {
+  const trimmed = sent.trim();
+  for (const re of SKELETON_RES) {
+    if (re.test(trimmed)) {
       risk += 30;
       reasons.push("提纲骨架开头");
       break;

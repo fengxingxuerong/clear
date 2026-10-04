@@ -224,6 +224,31 @@ export function varyParagraphs(text: string, rng: () => number, p: number): stri
   return out.join("\n\n");
 }
 
+/**
+ * v0.9.23 性能：下面三张表都是**静态**常量，原来每次调用都重做一遍
+ * 「逐条转义（本身就是一次 replace）+ new RegExp + 一次全文 replace」，
+ * 68 条 MECH_CLICHES + 整张 REWRITE 表 + 19 条 EXTRA_STRIP，一条不落。
+ * 预编译到模块级即可：转义函数照搬，输出**逐字等价**（实测 md5 一致）。
+ * 实测（artifacts/_perf_strip.ts，两段合计 884 字 × 2000 次，输出 md5 前后一致）：
+ *   stripAICliches 0.0473 → 0.0150 ms/次（-68.3%）
+ *   stripLeadingConnectivesHard 0.0173 → 0.0050 ms/次（-71.1%）
+ */
+const escapeForRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const CLICHE_LEADING_RES: RegExp[] = MECH_CLICHES.map(
+  (c) => new RegExp(`(^|[。！？；，、\\n])${escapeForRe(c)}`, "g"),
+);
+
+/** 长键先换（原逻辑：短键先命中会打断长键的匹配），排序保留 */
+const CLICHE_REWRITE_RES: [RegExp, string][] = Object.keys(MECH_CLICHE_REWRITE)
+  .sort((a, b) => b.length - a.length)
+  .map((c) => [new RegExp(escapeForRe(c), "g"), MECH_CLICHE_REWRITE[c]]);
+
+const EXTRA_STRIP_RES: [RegExp, RegExp][] = EXTRA_STRIP_CONNECTIVES.map((w) => [
+  new RegExp("([。！？!?\\n])[ \\t]*" + escapeForRe(w) + "[，,]?", "g"),
+  new RegExp("^" + escapeForRe(w) + "[，,]?"),
+]);
+
 export function stripAICliches(text: string): string {
   let out = text;
   // 只在**小句起始位**删除：MECH_CLICHES 里混着两类东西——句首脚手架（综上所述，/在当今社会）
@@ -231,15 +256,13 @@ export function stripAICliches(text: string): string {
   // 盲删会留下"人工智能技术。"式光杆主语，再被垫词补成"人工智能技术吧。"的废句
   //（实测谓语类 92~100/100 必塌）。判据与 stripLeadingConnectivesHard 同源：
   // 认边界不认内容，宁可留一个扣分项，也不产出读不通的句子。
-  for (const c of MECH_CLICHES) {
-    const escaped = c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    out = out.replace(new RegExp(`(^|[。！？；，、\\n])${escaped}`, "g"), "$1");
+  for (const re of CLICHE_LEADING_RES) {
+    out = out.replace(re, "$1");
   }
   // 谓语位不能删的，改用口语等价物顶掉，避免把套话原样留在稿里。
-  // 长键先换：否则短键会先命中并打断长键的匹配。
-  for (const c of Object.keys(MECH_CLICHE_REWRITE).sort((a, b) => b.length - a.length)) {
-    const escaped = c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    out = out.replace(new RegExp(escaped, "g"), MECH_CLICHE_REWRITE[c]);
+  // 长键先换：否则短键会先命中并打断长键的匹配（排序已在 CLICHE_REWRITE_RES 里做掉）。
+  for (const [re, to] of CLICHE_REWRITE_RES) {
+    out = out.replace(re, to);
   }
   return out;
 }
@@ -248,10 +271,7 @@ export function stripLeadingConnectivesHard(text: string): string {
   let out = text
     .replace(/([。！？!?\n])[ \t]*(然而|因此|此外|与此同时|更重要的是|另外|而且)[，,]?/g, "$1")
     .replace(/^(然而|因此|此外|与此同时|更重要的是)[，,]?/, "");
-  for (const w of EXTRA_STRIP_CONNECTIVES) {
-    const escaped = w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const re1 = new RegExp("([。！？!?\\n])[ \\t]*" + escaped + "[，,]?", "g");
-    const re2 = new RegExp("^" + escaped + "[，,]?");
+  for (const [re1, re2] of EXTRA_STRIP_RES) {
     out = out.replace(re1, "$1").replace(re2, "");
   }
   return out;

@@ -37,7 +37,8 @@
  */
 import fs from "fs";
 import path from "path";
-import { humanize } from "../src/engine/humanize";
+import { humanize, adviceFor } from "../src/engine/humanize";
+import { aiScore } from "../src/engine/humanize-metrics.ts";
 import { detectAI } from "../src/engine/detector";
 import { runHumanize } from "../src/api/llm";
 import { DEFAULT_API, loadPresetKeys, type ApiConfig } from "../src/api/llm-config";
@@ -387,6 +388,10 @@ async function main() {
       console.log(
         `✅ ${name}：${rep.detectBefore}→${rep.detectAfter}（${rep.ms}ms，${raw.length}→${out.length} 字）→ ${path.basename(dest)}`,
       );
+      // v0.9.22：低风险输入照常出稿，但把"其实不用去味"说出来。
+      // 不自动跳过——批量场景里静默不产出比多产出一版更难排查。
+      const advice = adviceFor(raw, aiScore(raw).score);
+      if (advice.code !== "ok") console.log(`   ⓘ ${advice.message}`);
       if (cfg) {
         const tag = rep.engine === "llm" ? "LLM" : rep.engine === "mixed" ? "混拼" : "本地回退";
         const rounds = rep.roundScores?.length ? ` 轮次分 [${rep.roundScores.join(", ")}]` : "";

@@ -560,6 +560,22 @@ let v6 = 0,
 //     （calib 当前 Δmax 35/35 已压满棘轮天花板）。
 // ============================================================
 let v7 = 0;
+/**
+ * v8.0 计数用**对象属性**，不用模块级 `let`。
+ *
+ * 原因（实测踩过，不是风格偏好）：初版在模块级写了 `let v8 = 0`，又在 v8.0 那个
+ * `{...}` 块里**同名再声明了一次** `let v8 = 0`。于是块内 `v8 += hits` 累加的是
+ * **块内**那个绑定，而文件末尾 `total` 读的是**模块级**那个——门禁明明抓到 11 次
+ * 违规，末尾却打印 `v8=0`、`total=0`、**退出码 0**。
+ *
+ * 这类"计数变量被同名声明遮蔽"的失效是**静默**的：探针照常打印"共 11 次超出基线"，
+ * 只有最后那行退出码是错的——而 CI 只看退出码。用对象属性（`V8_COUNT.n`）不存在
+ * 同名遮蔽的余地，踩不到这个坑。
+ *
+ * 另：v8.0 组必须做过**缺陷注入复验**才算数——2026-10-04 把 humanize 的裸骨架修复
+ * 改成不可能匹配后，本组报告 11 次且 exit 1；改回后 0 次 exit 0。
+ */
+const V8_COUNT = { n: 0 };
 {
   const UPDATE_V7_BASELINE = process.env.SCAN_UPDATE_V7_BASELINE === "1";
   // 本组**刻意不跟随 SCAN_TIER**：基线是"120 次里命中多少次"的绝对值，
@@ -829,7 +845,6 @@ let v7 = 0;
 // 完整矩阵见 `src/engine/humanize-quality-v0922.test.ts` 头部注释。
 // ============================================================
 {
-  let v8 = 0; // v8.0 超出基线计数（v7 块在其外层作用域声明 v7，这里同形态补声明）
   const V8_INTENSITIES = [0.4, 0.6, 0.9];
   // 语料面比种子面重要：多一段体裁比多种子更能覆盖新搭配。
   // 种子只取 0~9（10 个），网格 = 4 段 × 3 档 × 10 种子 = 120 次/探针，与 v0.2 同量级。
@@ -909,7 +924,7 @@ let v7 = 0;
     const base = V8_BASELINE[name];
     if (hits > base) {
       logDetail(`❌ v8.0[${name}] 超出基线 ${hits} > ${base} ｜ ${firstHit}`);
-      v8 += hits - base;
+      V8_COUNT.n += hits - base;
       pushV("v8.0", name, V8_INTENSITIES[0], V8_SEEDS[0], {
         pattern: bad.source,
         snippet: `${hits} 次 > 基线 ${base} ｜ ${firstHit}`,
@@ -918,13 +933,13 @@ let v7 = 0;
     }
   }
   console.log(
-    v8 === 0
+    V8_COUNT.n === 0
       ? `✅ v8.0 类别级语言质量探针 3 条 × 4 体裁语料 × 3 档 × 10 种子 = 120 次/探针，全部零命中（${Object.entries(
           v8Measured,
         )
           .map(([k, v]) => `${k}=${v}/0`)
           .join(" ")}）`
-      : `v8.0 共 ${v8} 次超出基线（${Object.entries(v8Measured)
+      : `v8.0 共 ${V8_COUNT.n} 次超出基线（${Object.entries(v8Measured)
           .map(([k, v]) => `${k}=${v}/${V8_BASELINE[k]}`)
           .join(" ")}）`,
   );
@@ -963,13 +978,13 @@ let v7 = 0;
 // ============================================================
 reportAll(violations, { summaryOnly: VERBOSE });
 
-const total = fails + dfFails + v4 + fp + v43 + v52 + v6 + bo + zq + f44 + v7;
+const total = fails + dfFails + v4 + fp + v43 + v52 + v6 + bo + zq + f44 + v7 + V8_COUNT.n;
 if (total > 0) {
   console.error(
-    `\n❌ 回归测试共 ${total} 次违规（fails=${fails} dfFails=${dfFails} v4=${v4} fp=${fp} v43=${v43} v52=${v52} v6=${v6} bo=${bo} zq=${zq} f44=${f44} v7=${v7}）`,
+    `\n❌ 回归测试共 ${total} 次违规（fails=${fails} dfFails=${dfFails} v4=${v4} fp=${fp} v43=${v43} v52=${v52} v6=${v6} bo=${bo} zq=${zq} f44=${f44} v7=${v7} v8=${V8_COUNT.n}）`,
   );
   process.exit(1);
 }
 console.log(
-  `\n✅ 全部回归通过（fails=${fails} dfFails=${dfFails} v4=${v4} fp=${fp} v43=${v43} v52=${v52} v6=${v6} bo=${bo} zq=${zq} f44=${f44} v7=${v7}）`,
+  `\n✅ 全部回归通过（fails=${fails} dfFails=${dfFails} v4=${v4} fp=${fp} v43=${v43} v52=${v52} v6=${v6} bo=${bo} zq=${zq} f44=${f44} v7=${v7} v8=${V8_COUNT.n}）`,
 );

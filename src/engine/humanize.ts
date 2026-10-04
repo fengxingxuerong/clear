@@ -85,6 +85,7 @@ import {
   pplIssues,
   PPL_MIN_MEAN_NLL,
   PPL_MAX_WIN_STD,
+  AI_SCORE_HUMAN_MAX,
 } from "./humanize-metrics.ts";
 
 // v0.9 反「新指纹」层：模板复读封顶 / 语体门控 / 残句守卫 / 场景块保护
@@ -1491,13 +1492,49 @@ function injectParentheticNotesBlock(text: string, rng: () => number, p: number)
 
 /* ----------------------------- 一键去味+评分 ----------------------------- */
 
+/** 去味建议码（v0.9.22）：告诉调用方"这篇该不该送去味" */
+export type AdviceCode = "ok" | "skip-low-risk";
+
+export interface HumanizeAdvice {
+  code: AdviceCode;
+  /** 直接可展示给用户的一句话；code==="ok" 时为空串 */
+  message: string;
+}
+
+/**
+ * v0.9.22：低风险输入的"其实不用去味"提示。
+ *
+ * 实测（2026-10-04，5 段自写文本 × 3 档）：aiScore 8 的人写叙事、aiScore 0 的口语随笔
+ * 照改不误，且**动了作者原本的断句**（「后来我才知道，那是…」→「后来我才知道。那是…」）。
+ * 而本项目自己的标定结论是反的：README §aiScore→朱雀分标定里"纯人写稿对照"线斜率
+ * 为**负**（−0.3x+18.0）——**真人原稿越去味，官方朱雀分反而越高**（H0=15% → H1/H2=17~19%）。
+ *
+ * ⇒ 因此这里只**给提示，不改行为**。为什么不顺手把这类输入跳过：
+ *   regression-12samples 的 H1/H2 两条就是纯人写样本，基线要求去味后 aiScore 从 48 降到 0；
+ *   真跳过处理会让 E 组基线瞬间爆红。那不是"顺手"，那是要连同四条体裁线重新拟合的改动，
+ *   得单独评估，不能塞在一次语言质量修复里。
+ */
+export function adviceFor(text: string, beforeScore?: number): HumanizeAdvice {
+  const score = beforeScore ?? aiScore(text).score;
+  if (score <= AI_SCORE_HUMAN_MAX) {
+    return {
+      code: "skip-low-risk",
+      message:
+        `原文 AI 味代理分 ${score}，已落在人写带（≤${AI_SCORE_HUMAN_MAX}）。` +
+        `再跑一遍只会动你的断句和用词、几乎不会再降分——按本项目标定，纯人写稿越去味官方分反而略升。` +
+        `建议：直接用原文提交；确实要动，挑 0.4 以下的轻度档。`,
+    };
+  }
+  return { code: "ok", message: "" };
+}
+
 /** 一键：去味 + 前后评分，方便 UI 直接调用 */
 export function humanizeWithScore(
   text: string,
   opts: HumanizeOptions = {},
-): { text: string; before: ScoreBreakdown; after: ScoreBreakdown } {
+): { text: string; before: ScoreBreakdown; after: ScoreBreakdown; advice: HumanizeAdvice } {
   const before = aiScore(text);
   const result = humanize(text, opts);
   const after = aiScore(result);
-  return { text: result, before, after };
+  return { text: result, before, after, advice: adviceFor(text, before.score) };
 }
