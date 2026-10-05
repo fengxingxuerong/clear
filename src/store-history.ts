@@ -48,8 +48,12 @@ export function saveHistory(entry: HistoryEntry): void {
       localStorage.setItem(K, JSON.stringify(keep));
       return;
     } catch {
-      if (!keep.length) return; // 只剩本条也写不下：放弃持久化
-      keep = keep.slice(0, Math.max(1, keep.length - 1));
+      // 只剩本条也写不下：放弃持久化。
+      // 2026-10-05 修：原条件是 `!keep.length`，但下面的裁剪恒保留 1 条
+      // （`slice(0, Math.max(1, keep.length - 1))`），条件永假 ⇒ 单条即超配额时
+      // 同一份写入会被无限重试，界面直接挂死——正是本注释描述的长文场景。
+      if (keep.length <= 1) return;
+      keep = keep.slice(0, keep.length - 1);
     }
   }
 }
