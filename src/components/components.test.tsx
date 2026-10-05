@@ -191,6 +191,38 @@ describe("HistoryPanel（去味历史）", () => {
     expect(p.onClose).toHaveBeenCalledTimes(1);
   });
 
+  /**
+   * timeAgo 的「天」档（HistoryPanel.tsx 行 26-28）
+   *
+   * 此前只测过 5 分钟前与 3 小时前，`hours < 24` 恒真，
+   * 于是 `${days} 天前` 那条从未被走过。
+   *
+   * 边界取在 **23 小时 59 分**（仍应是「23 小时前」）与
+   * **24 小时整**（应切成「1 天前」）——差一分钟就换档，
+   * 这是最容易写错的地方。
+   */
+  it("相对时间跨过 24 小时切成「天」，边界在 23:59 与 24:00", () => {
+    const MIN = 60 * 1000;
+    const at = (minsAgo: number): HistoryEntry => ({
+      ...e1,
+      id: `t${minsAgo}`,
+      timestamp: Date.now() - minsAgo * MIN,
+    });
+    const p = props({ entries: [at(60), at(60 * 23 + 59), at(60 * 24), at(60 * 50)] });
+    const { container } = render(<HistoryPanel {...p} />);
+    const txt = container.textContent ?? "";
+    // 1 小时 → 小时档
+    expect(txt).toContain("1 小时前");
+    // 23 小时 59 分 → 仍是小时档（floor 到 23）
+    expect(txt).toContain("23 小时前");
+    // 24 小时整 → 天档，floor 到 1
+    expect(txt).toContain("1 天前");
+    // 50 小时 → 天档，floor 到 2
+    expect(txt).toContain("2 天前");
+    // 天档出现后不应再有「24 小时前」这种越界表述
+    expect(txt).not.toContain("24 小时前");
+  });
+
   it("混拼条目必须显式标出（usedApi=true 不代表整稿都来自 LLM）", () => {
     const mixed: HistoryEntry = { ...e2, id: "h3", engine: "mixed" };
     const passthrough: HistoryEntry = { ...e1, id: "h4", engine: "passthrough" };
