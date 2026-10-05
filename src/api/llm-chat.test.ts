@@ -295,7 +295,7 @@ describe("入口前置校验与网络异常退避", () => {
     );
     const noKey: ApiConfig = { ...cfg, apiKey: "", apiKeys: "" };
     await expect(
-      chat(noKey, [{ role: "user", content: "原文" }], { temperature: 0.9 }),
+      chat(noKey, [{ role: "user", content: "原文" }], { temperature: 0.9, maxTokens: 100 }),
     ).rejects.toThrow("未配置 API Key");
     // 关键断言：没配 Key 就绝不能发请求（否则用户拿到的是网关 401，而不是可读提示）
     expect(calls).toBe(0);

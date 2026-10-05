@@ -954,3 +954,47 @@ describe("零可见字符的压缩率口径（目标行 192）", () => {
     expect(deep.text).toBe(GOOD_REWRITE);
   });
 });
+
+/* ─────────── 全链路失败时的对外契约（2026-10-05） ───────────
+ *
+ * 这条测的是一个**从未被测过的真实用户场景**：配了 Key 但网关全挂，
+ * 用户点一次「深度去味」，最后看到什么？
+ *
+ * 探针实测出的关键事实（写在这里免得后人重走一遍）：
+ *  ① chatNonEmpty（行 163-186）把每档的异常**全部吞掉**，全失败时返回
+ *     {content:""}。因此**行 516-521 的 catch 在任何 HTTP 失败下都不可达**——
+ *     连 BudgetStoppedError 也在 180 的 catch 里被吞了。行 517-521 是死分支。
+ *  ② 所以全链路失败的正确出口是行 544 的「模型返回空内容」，
+ *     用户看到的是可操作提示（换模型/提 token 预算），不是空稿也不是原始网络错误。
+ *  ③ 失败桩必须用 HTTP 401 而不是 fetch 抛异常：后者会走 llm-chat 的
+ *     2s+5s+12s 真实退避 sleep（行 107-110），一条用例等 19 秒直接超时。
+ *     401 只触发换 Key，单 Key 池零等待。 */
+describe("全链路失败时的对外契约（探针实证：行 517-521 是死分支）", () => {
+  const cfg = { ...DEFAULT_API, enabled: true, apiKey: "test-key" };
+
+  it("改写请求全部 401 → 抛可读提示，不静默返回空稿", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: { body?: string }) => {
+        const body = JSON.parse(init?.body ?? "{}") as {
+          messages: { role: string; content: string }[];
+        };
+        const sys = body.messages?.[0]?.content ?? "";
+        if (sys.includes("改写专家")) return new Response("unauthorized", { status: 401 });
+        if (sys.includes("质检员")) return okJson({ choices: [{ message: { content: "PASS" } }] });
+        return okJson({ choices: [{ message: { content: "句长过于均匀\n15" } }] });
+      }),
+    );
+    // 契约：抛出的必须是「可操作提示」，而不是空稿（用户看不出发生了什么）
+    await expect(
+      humanizeViaApiDeep(
+        "值得注意的是，人工智能正在深刻地改变着我们的生活方式。",
+        cfg,
+        undefined,
+        10,
+        4,
+        0.6,
+      ),
+    ).rejects.toThrow(/空内容|回退本地引擎/);
+  });
+});

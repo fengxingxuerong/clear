@@ -514,6 +514,14 @@ export async function humanizeViaApiDeep(
       content = r.content;
       retryVia = r.via;
     } catch (e: unknown) {
+      // ⚠️ 结构性死分支（2026-10-05 核实）：本 catch 在**任何网关失败下都不可达**。
+      // chatNonEmpty（行 163-186）逐档 try/catch，异常一律吞掉，全失败时
+      // 返回 {content:""}——连 llm-chat 抛的 BudgetStoppedError 也在 180 被吞。
+      // 所以这里等不到异常，失败会走到行 523 的 `!content` 分支或行 544 的
+      // 「模型返回空内容」。实测：改写请求全 401 时，note 记的是"空响应"口径，
+      // 而不是本分支的"第 N 轮调用失败"。
+      // 保留它做防御：若将来 chatNonEmpty 改成向上抛（让上层决定降级），
+      // 这里正好是"有最优稿就带它收场、否则把错误抛给用户"的正确落点。
       if (bestText) {
         note = `第 ${round} 轮调用失败（${errMsg(e)}），返回已有最优结果`;
         break;
