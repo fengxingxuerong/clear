@@ -847,3 +847,115 @@ describe("App 守卫分支与面板回调（行覆盖补锁）", () => {
     expect(utils.queryByText(/校准实验室 · 攒真值/)).toBeNull();
   });
 });
+
+/**
+ * 引擎返回值的边界形状（目标行 221 / 229）
+ *
+ * 之前所有用例都走 makeRunResult(...) 这个**规整的**工厂：
+ * 它恒带 roundScores（默认 []），且从不带 bestOf。
+ * 于是 App 里两处兜底写法一次都没被走过：
+ *   · 行 221 `local.bestOf ? {...} : undefined` —— 短路取 undefined 那半边
+ *   · 行 229 `r.roundScores || []`             —— undefined 兜底那半边
+ */
+describe("引擎返回值的边界形状（目标行 221 / 229）", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("roundScores 为 undefined 时兜底成空数组，界面不崩", async () => {
+    // makeRunResult 恒带 roundScores，这里手搓一个**不带该字段**的结果
+    runHumanizeMock.mockResolvedValue({
+      text: OUTPUT_TEXT,
+      before: aiScore(INPUT_TEXT),
+      after: aiScore(OUTPUT_TEXT),
+      usedApi: false,
+      engine: "local",
+      degrade: [],
+      note: "",
+      // roundScores 故意缺失（不是 null —— null 与 undefined 是两条不同的分支）
+    });
+    const utils = render(<App />);
+    fireEvent.change(utils.getByPlaceholderText(/把 AI 写的文章粘进来/), {
+      target: { value: INPUT_TEXT },
+    });
+    fireEvent.click(utils.getByText("去味"));
+    // 关键：没崩，且输出照常落位
+    await waitFor(() => {
+      expect((utils.getByPlaceholderText(/点击「去味」生成/) as HTMLTextAreaElement).value).toBe(
+        OUTPUT_TEXT,
+      );
+    });
+    // 轮次序列不该显示任何分数
+    expect(utils.queryByText(/第 \d+ 轮/)).toBeNull();
+  });
+
+  it("roundScores 为 null 时同样兜底（null 与 undefined 是不同分支）", async () => {
+    runHumanizeMock.mockResolvedValue({
+      text: OUTPUT_TEXT,
+      before: aiScore(INPUT_TEXT),
+      after: aiScore(OUTPUT_TEXT),
+      usedApi: false,
+      engine: "local",
+      degrade: [],
+      note: "",
+      roundScores: null as unknown as number[],
+    });
+    const utils = render(<App />);
+    fireEvent.change(utils.getByPlaceholderText(/把 AI 写的文章粘进来/), {
+      target: { value: INPUT_TEXT },
+    });
+    fireEvent.click(utils.getByText("去味"));
+    await waitFor(() => {
+      expect((utils.getByPlaceholderText(/点击「去味」生成/) as HTMLTextAreaElement).value).toBe(
+        OUTPUT_TEXT,
+      );
+    });
+  });
+
+  it("引擎开启 bestOf 时把候选数透传给 runHumanize", async () => {
+    // 行 221：`local.bestOf ? { bestOf: true, candidates: local.candidates } : undefined`
+    //
+    // ⚠️ 第一版把 key 写成 `quaiwei.cfg.local`，探针（失败信息 expected 8 to be 4）
+    // 指出读到的是默认值：store.ts 的 key 其实是 `aihumanizer.local`，
+    // 而 DEFAULT_LOCAL = { bestOf: true, candidates: 8 }——所以默认值就会透传 8。
+    // 这里显式写一份非默认的 4，才能证明「配置值确实被透传」而不是碰巧撞上默认。
+    runHumanizeMock.mockResolvedValue(makeRunResult(OUTPUT_TEXT, "local"));
+    localStorage.setItem("aihumanizer.local", JSON.stringify({ bestOf: true, candidates: 4 }));
+    const utils = render(<App />);
+    fireEvent.change(utils.getByPlaceholderText(/把 AI 写的文章粘进来/), {
+      target: { value: INPUT_TEXT },
+    });
+    fireEvent.click(utils.getByText("去味"));
+    await waitFor(() => {
+      expect((utils.getByPlaceholderText(/点击「去味」生成/) as HTMLTextAreaElement).value).toBe(
+        OUTPUT_TEXT,
+      );
+    });
+    // 第 7 个入参应带上 bestOf 与**配置里的**候选数
+    // ⚠️ 用 [len - 1] 而非 .at(-1)：项目 tsconfig target 不含 ES2022，
+    // Array.prototype.at 在类型上不存在（tsc 报 TS2550）。
+    const calls = runHumanizeMock.mock.calls;
+    const opts = calls[calls.length - 1][6] as
+      { bestOf?: boolean; candidates?: number } | undefined;
+    expect(opts?.bestOf).toBe(true);
+    expect(opts?.candidates).toBe(4); // 非默认的 8 —— 证明读到的是配置而非默认值
+  });
+
+  it("关闭 bestOf 时第 7 个入参为 undefined（短路那半边）", async () => {
+    // 覆盖行 221 的 `: undefined` 分支：optArgs 整个不传
+    runHumanizeMock.mockResolvedValue(makeRunResult(OUTPUT_TEXT, "local"));
+    localStorage.setItem("aihumanizer.local", JSON.stringify({ bestOf: false, candidates: 8 }));
+    const utils = render(<App />);
+    fireEvent.change(utils.getByPlaceholderText(/把 AI 写的文章粘进来/), {
+      target: { value: INPUT_TEXT },
+    });
+    fireEvent.click(utils.getByText("去味"));
+    await waitFor(() => {
+      expect((utils.getByPlaceholderText(/点击「去味」生成/) as HTMLTextAreaElement).value).toBe(
+        OUTPUT_TEXT,
+      );
+    });
+    const calls = runHumanizeMock.mock.calls;
+    expect(calls[calls.length - 1][6]).toBeUndefined();
+  });
+});
