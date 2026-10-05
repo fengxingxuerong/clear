@@ -5,6 +5,18 @@
 
 承接 v0.9.23「门禁可信度」的思路：这一版先修**红灯本身**，再把**绿灯的可信度**做实。
 
+### ⚠️ 提交前必须自己跑 tsc + lint——`check:release` 不含这两项
+
+`check:release` 串的是：check:version / check:regex / test:cov / test:regress /
+test:regress12 / test:quality / test:calib / test:evidence / check:ledger。
+
+**里面没有 `tsc`，也没有 `eslint`。** 本轮实测出现过一次：release 全绿 RC=0，
+而 `npx tsc -p tsconfig.json` 报 TS2322（测试里把三元组误标成 `[string, string]`）。
+
+CI 侧有独立的 `npx tsc -b` 与 lint 步骤，不会漏；本地由 pre-commit 钩子兜底
+（它跑 tsc + eslint + prettier 三项）。所以**绿灯不代表可提交**——
+提交前自己再跑一次 `npm run lint` 与 `npx tsc -p tsconfig.json`。
+
 ### ⓿ 冒号台词正则失效：一条被三道门禁同时放过的死特征
 
 补覆盖率的路上撞见的——`classifyGenre` 里 `dlgColonRatio` 在探针里恒为 0，
