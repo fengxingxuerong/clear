@@ -959,3 +959,57 @@ describe("引擎返回值的边界形状（目标行 221 / 229）", () => {
     expect(calls[calls.length - 1][6]).toBeUndefined();
   });
 });
+
+/**
+ * 「指纹体检」的空输入守卫（App.tsx 行 191-192）
+ *
+ * handleFingerprint 的第一句是
+ *   const target = output.trim() ? output : input;
+ *   if (!target.trim()) return;
+ * 之前唯一的「指纹体检」用例（行 522）都先跑了 humanizeFirst，
+ * output 非空 —— 于是「两个都是空」的早退分支一次都没被走过。
+ *
+ * 断言要点：点了**不崩、也不发起困惑度推理**。后者用 mock 调用次数钉住，
+ * 因为早退若失效，先崩的可能是异步的推理链，而不是这个 handler 本身。
+ */
+describe("指纹体检的空输入守卫（行 191-192）", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    computePplFeatureMock.mockReset();
+    ensurePplModelMock.mockReset();
+  });
+
+  it("原文与输出都为空：点「指纹体检」不崩，且不发起任何困惑度推理", async () => {
+    pplStatusMock.mockResolvedValue({ supported: true, ready: true });
+    const utils = render(<App />);
+    // 不填输入、不去味 → input 与 output 都是空串
+    expect((utils.getByPlaceholderText(/把 AI 写的文章粘进来/) as HTMLTextAreaElement).value).toBe(
+      "",
+    );
+    fireEvent.click(utils.getByText("指纹体检"));
+    // 让事件循环跑一轮，若早退失效这里就会看到 reject/异常
+    await new Promise((r) => setTimeout(r, 20));
+    expect(computePplFeatureMock).not.toHaveBeenCalled();
+    expect(ensurePplModelMock).not.toHaveBeenCalled();
+    // 界面还在，且没冒出任何报错文案
+    expect(utils.getByText("指纹体检")).toBeTruthy();
+    expect(utils.queryByText(/出错|失败/)).toBeNull();
+  });
+
+  it("只有原文（无输出）时走 input 侧：早退不生效，正常发起推理", async () => {
+    pplStatusMock.mockResolvedValue({ supported: true, ready: true });
+    isPplReadyMock.mockReturnValue(true);
+    computePplFeatureMock.mockResolvedValue({ ppl: 12.3 });
+    const utils = render(<App />);
+    fireEvent.change(utils.getByPlaceholderText(/把 AI 写的文章粘进来/), {
+      target: { value: INPUT_TEXT },
+    });
+    fireEvent.click(utils.getByText("指纹体检"));
+    await waitFor(() => {
+      expect(computePplFeatureMock).toHaveBeenCalled();
+    });
+    // 送进推理的是 input（去味稿还没有）
+    const target = (computePplFeatureMock.mock.calls[0]?.[0] ?? "") as string;
+    expect(target).toBe(INPUT_TEXT);
+  });
+});

@@ -227,6 +227,71 @@ describe("错误详情透传（v0.8.7：网关响应体里的具体原因）", (
       }),
     ).rejects.toThrow(/^API 返回 404$/);
   });
+
+  /**
+   * 响应体**不是普通对象**时的分支（llm-chat.ts 行 139）。
+   *
+   * `typeof body === "object" && body !== null ? (body.error ?? body.message ?? body.detail) : body`
+   * —— 三元表达式的 `: body` 那一支。此前三条用例的响应体都是对象，
+   * 这一支从未走过；而 `typeof null === "object"` 为真这个坑尤其要钉住。
+   *
+   * 探针实测真值（探针稿在 .covtmp，跑完即删）：
+   *   body 是数组    → "API 返回 400"（无详情：数组不是字符串，JSON 后又被 ? 判掉）
+   *   body 是字符串  → "API 返回 400：纯字符串错误"
+   *   body 是数字    → "API 返回 400：42"
+   *   body 是 null    → "API 返回 400"（raw 为 null → 不附加）
+   */
+  it("响应体是数组/字符串/数字/null 时的错误信息口径（行 139 三元的 else 支）", async () => {
+    const call = async (payload: unknown) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(JSON.stringify(payload), {
+              status: 400,
+              headers: { "Content-Type": "application/json" },
+            }),
+        ),
+      );
+      return (
+        (await chat(
+          { ...cfg, apiKey: "k1", apiKeys: undefined },
+          [{ role: "user", content: "原文" }],
+          { temperature: 0.9, maxTokens: 100 },
+        ).catch((e: unknown) => e)) as Error
+      ).message;
+    };
+    // 字符串 body：原样透出
+    expect(await call("纯字符串错误")).toBe("API 返回 400：纯字符串错误");
+    // 数字 body：JSON.stringify 后透出
+    expect(await call(42)).toBe("API 返回 400：42");
+    // 数组 body：不是字符串且 JSON 后不产生内容 → 不附加详情
+    expect(await call(["a", "b"])).toBe("API 返回 400");
+    // null：typeof null === "object" 但 body !== null 为假 → 走 : body = null → 不附加
+    expect(await call(null)).toBe("API 返回 400");
+  });
+
+  it("error 是对象时整段 JSON 透出（不是只取 message）", async () => {
+    // 探针实测：{error:{message:"模型不存在"}} 出来的是 {"message":"模型不存在"}
+    // —— 因为 `??` 取到 error 整个对象，随后 typeof raw !== "string" 走 JSON.stringify。
+    // 这个口径要钉住：用户看到的是 JSON 而不是干净的一句中文。
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: { message: "模型不存在" } }), {
+            status: 400,
+            headers: { "Content-Type": "application/json" },
+          }),
+      ),
+    );
+    const err = (await chat(
+      { ...cfg, apiKey: "k1", apiKeys: undefined },
+      [{ role: "user", content: "原文" }],
+      { temperature: 0.9, maxTokens: 100 },
+    ).catch((e: unknown) => e)) as Error;
+    expect(err.message).toBe('API 返回 400：{"message":"模型不存在"}');
+  });
 });
 
 /**
