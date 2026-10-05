@@ -8,22 +8,48 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 import vm from "vm";
+import { spawnSync } from "child_process";
 import { VOCAB } from "../src/engine/humanize-vocab";
 import { FORMULAIC_EXTRA } from "../src/engine/humanize-vocab-extra";
 import { GUARD_AFTER, VERB_PHRASE_AFTER } from "../src/engine/humanize-guard";
-
+import { readGitState, dirtyBuildAllowed } from "./build-stamp.mjs";
 /* ---------------- 词表卫生（check-vocab-hygiene.ts 的核心规则固化） ---------------- */
 
 describe("词表卫生（check-vocab-hygiene 规则固化）", () => {
   // 与 check-vocab-hygiene.ts 保持一致的黑名单（KILLER_INTRO + OFFICIALESE + FORMULAIC_EXTRA）
   const KILLER_INTRO = [
-    "值得注意的是", "值得一提的是", "毋庸置疑", "毋庸讳言", "不可否认", "众所周知",
-    "归根结底", "归根到底", "综上所述", "总而言之", "总的说来", "总的来说",
-    "简而言之", "一言以蔽之", "由此可见",
+    "值得注意的是",
+    "值得一提的是",
+    "毋庸置疑",
+    "毋庸讳言",
+    "不可否认",
+    "众所周知",
+    "归根结底",
+    "归根到底",
+    "综上所述",
+    "总而言之",
+    "总的说来",
+    "总的来说",
+    "简而言之",
+    "一言以蔽之",
+    "由此可见",
   ];
   const OFFICIALESE = [
-    "总体设计", "按图推进", "长期坚持", "夯实根基", "守牢防线", "加深优势", "盘活资产",
-    "填平缺口", "拉长长板", "做亮招牌", "排忧解难", "拓宽路子", "架起平台", "顶层规划", "凑成共识",
+    "总体设计",
+    "按图推进",
+    "长期坚持",
+    "夯实根基",
+    "守牢防线",
+    "加深优势",
+    "盘活资产",
+    "填平缺口",
+    "拉长长板",
+    "做亮招牌",
+    "排忧解难",
+    "拓宽路子",
+    "架起平台",
+    "顶层规划",
+    "凑成共识",
   ];
   const FORBIDDEN = new Set([...KILLER_INTRO, ...OFFICIALESE, ...FORMULAIC_EXTRA]);
 
@@ -129,7 +155,9 @@ describe("搭配卫生（单音节/动补式替身必须带守卫或豁免）", 
       ["维护", "管好"], // 接抽象宾语别扭："维护秩序"→"管好秩序"
       ["维护", "守住"], // 同上："维护系统"→"守住系统"
     ];
-    const alive = MUST_NOT_EXIST.filter(([k, v]) => VOCAB[k]?.includes(v)).map(([k, v]) => `${k}→${v}`);
+    const alive = MUST_NOT_EXIST.filter(([k, v]) => VOCAB[k]?.includes(v)).map(
+      ([k, v]) => `${k}→${v}`,
+    );
     expect(alive).toEqual([]);
   });
 
@@ -183,9 +211,9 @@ interface CliArgs {
 
 function loadCliFns(): {
   parseArgs: (argv: string[]) => CliArgs;
-    collectInputFiles: (input: string) => string[];
-    baseUrlHasProxyPrefix: (baseUrl: string) => boolean;
-  } {
+  collectInputFiles: (input: string) => string[];
+  baseUrlHasProxyPrefix: (baseUrl: string) => boolean;
+} {
   const src = readFileSync(path.resolve(__dirname, "humanize-cli.ts"), "utf-8");
   // 只保留纯函数段：USAGE + parseArgs + buildApiConfig + collectTxtFiles
   // （main 依赖终端 I/O，interface 是 TS 类型）
@@ -200,7 +228,11 @@ function loadCliFns(): {
   const end = m ? m.index : src.length;
   const body = src.slice(start, end).replace(/^import .*$/gm, "");
   const js = transformSync(body, { loader: "ts", format: "cjs" }).code;
-  const sandbox: { fs: typeof fs; path: typeof path; module: { exports: Record<string, unknown> } } = {
+  const sandbox: {
+    fs: typeof fs;
+    path: typeof path;
+    module: { exports: Record<string, unknown> };
+  } = {
     fs,
     path,
     module: { exports: {} },
@@ -237,7 +269,20 @@ describe("humanize-cli parseArgs", () => {
   });
 
   it("全量参数解析：out/intensity/zhuque/style/suffix", () => {
-    const a = parseArgs(base(["./in", "--out", "./out", "--intensity", "0.7", "--zhuque", "--style", "academic", "--suffix", ".h"]));
+    const a = parseArgs(
+      base([
+        "./in",
+        "--out",
+        "./out",
+        "--intensity",
+        "0.7",
+        "--zhuque",
+        "--style",
+        "academic",
+        "--suffix",
+        ".h",
+      ]),
+    );
     expect(a.out).toBe("./out");
     expect(a.intensity).toBe(0.7);
     expect(a.zhuque).toBe(true);
@@ -263,7 +308,17 @@ describe("humanize-cli parseArgs", () => {
     expect(a.deep).toBe(true);
     expect(a.contest).toBe(1);
     const b = parseArgs(
-      base(["./in", "--api", "--model", "m1", "--judge-model", "j1", "--no-deep", "--contest", "3"]),
+      base([
+        "./in",
+        "--api",
+        "--model",
+        "m1",
+        "--judge-model",
+        "j1",
+        "--no-deep",
+        "--contest",
+        "3",
+      ]),
     );
     expect(b.api).toBe(true);
     expect(b.model).toBe("m1");
@@ -334,5 +389,126 @@ describe("humanize-cli baseUrlHasProxyPrefix", () => {
   it("相对路径不越权判定（由 main 里另一条同源相对路径拦截负责）", () => {
     expect(baseUrlHasProxyPrefix("/sensenova/v1")).toBe(false);
     expect(baseUrlHasProxyPrefix("token.sensenova.cn/v1")).toBe(false);
+  });
+});
+
+/* ---------------- 构建产物脏检查（sync-dist.mjs 的 dirty 硬失败） ---------------- */
+
+/**
+ * 缘起（2026-10-05 实测）：完整跑了一遍发布链，发现 electron-app/build-info.json
+ * 一度停在 head=b330cb1 —— **产物带着旧 bundle 出过门**。而 dirty 判定此前只打印
+ * 一行警告就放过，verify-pruned 的提醒是**事后**的：等你想起来去跑它时，
+ * 脏产物早就躺在 electron-dist/ 里了。
+ *
+ * ⚠️ 这里**不**整份复制 sync-dist.mjs 到临时仓库跑：脚本用 `import.meta.url` 定位
+ * 仓库根（root = scripts/..），复制过去算的就是沙箱自己的指纹，而我真正要验的是
+ * 「git 状态 → dirty → 是否阻断」这段决策。复制整份脚本等于测了一台假机器
+ * （踩过：临时仓库跑出来 HEAD 却是真仓库的 8dfa859、137 个文件）。
+ *
+ * 所以抽成可测的纯函数，再用真 git 仓库喂它。
+ */
+describe("构建产物脏检查（sync-dist.mjs 的 dirty 硬失败）", () => {
+  /** 造一个真的 git 仓库（不留 .workbuddy/ 这类噪音） */
+  function makeGitRepo(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "quaiwei-dirty-"));
+    const g = (...args: string[]) => spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+    g("init", "-q");
+    g("config", "user.email", "t@t.t");
+    g("config", "user.name", "t");
+    fs.writeFileSync(path.join(dir, "a.txt"), "v1");
+    g("add", "-A");
+    g("commit", "-qm", "init");
+    return dir;
+  }
+
+  let repo: string;
+  beforeEach(() => {
+    repo = makeGitRepo();
+  });
+  afterEach(() => {
+    fs.rmSync(repo, { recursive: true, force: true });
+  });
+
+  it("干净工作区 → dirty=false，且 head 是短 sha", () => {
+    const s = readGitState(repo);
+    expect(s.dirty).toBe(false);
+    expect(s.files).toEqual([]);
+    expect(s.head).toMatch(/^[0-9a-f]{7,}$/);
+  });
+
+  it("已改动但未提交 → dirty=true，且清单里能认出是哪个文件", () => {
+    fs.writeFileSync(path.join(repo, "a.txt"), "v2");
+    const s = readGitState(repo);
+    expect(s.dirty).toBe(true);
+    expect(s.files.join(" ")).toContain("a.txt");
+  });
+
+  it("未跟踪的新文件也算脏（产物里可能有不属于任何提交的代码）", () => {
+    fs.writeFileSync(path.join(repo, "new.ts"), "x");
+    expect(readGitState(repo).dirty).toBe(true);
+  });
+
+  it("已 add 未 commit 也算脏（staged 不等于已提交）", () => {
+    fs.writeFileSync(path.join(repo, "b.ts"), "x");
+    spawnSync("git", ["add", "-A"], { cwd: repo });
+    const s = readGitState(repo);
+    expect(s.dirty).toBe(true);
+  });
+
+  it(".workbuddy/ 噪音被排除（它是工具数据目录，不该让每次打包都报脏）", () => {
+    fs.mkdirSync(path.join(repo, ".workbuddy"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".workbuddy", "state.json"), "{}");
+    expect(readGitState(repo).dirty).toBe(false);
+  });
+
+  it("非 git 目录 → dirty=null（不是 false！），head 落回占位串", () => {
+    // 语义要点：null 与 false 必须分清。false 是「确认干净、可以发」，
+    // null 是「查不到、别装作干净」——后者若被当 false，会放行一个来路不明的产物。
+    const plain = fs.mkdtempSync(path.join(os.tmpdir(), "quaiwei-nogit-"));
+    try {
+      const s = readGitState(plain);
+      expect(s.dirty).toBeNull();
+      expect(s.head).toContain("非 git 检出");
+    } finally {
+      fs.rmSync(plain, { recursive: true, force: true });
+    }
+  });
+
+  /* -------- 逃生口的语义 -------- */
+
+  it("逃生口只认精确值 1：'0'/'true'/'yes'/空串/未设一律不放行", () => {
+    expect(dirtyBuildAllowed({ QUAIWEI_ALLOW_DIRTY_BUILD: "1" })).toBe(true);
+    // typo 必须退化成「不放行」这个安全侧——一旦写错就把唯一的硬约束静默关掉了
+    for (const v of ["0", "true", "yes", "", " 1", "1 "]) {
+      expect(dirtyBuildAllowed({ QUAIWEI_ALLOW_DIRTY_BUILD: v })).toBe(false);
+    }
+    expect(dirtyBuildAllowed({})).toBe(false);
+  });
+
+  it("逃生口放行时不改 dirty 本身——放行不等于洗白", () => {
+    // 设计意图：ALLOW 只跳 exit 1，不许把章里的 dirty 改成 false。
+    // 一旦洗白，verify-pruned 就不会再提示「别发布」，逃生口变成了免检通道。
+    fs.writeFileSync(path.join(repo, "a.txt"), "v2");
+    expect(dirtyBuildAllowed({ QUAIWEI_ALLOW_DIRTY_BUILD: "1" })).toBe(true);
+    expect(readGitState(repo).dirty).toBe(true);
+  });
+
+  /* -------- 类型声明与实现的一致性 -------- */
+
+  it("build-stamp.d.mts 与 .mjs 导出同名且签名不漂移", () => {
+    // 这份 .d.mts 是手写的，没法自动同步实现。一天不同步，TS 就会按旧签名
+    // 放行一段实际会崩的调用——而 tsc 全绿，正是「以为有类型检查」的典型死法。
+    // 所以在这里显式比对导出名：少一个/多一个/改名，vitest 当场红。
+    const dir = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"));
+    const impl = fs.readFileSync(path.join(dir, "build-stamp.mjs"), "utf8");
+    const decl = fs.readFileSync(path.join(dir, "build-stamp.d.mts"), "utf8");
+
+    const names = (src: string) =>
+      [...src.matchAll(/export function (\w+)/g)].map((m) => m[1]).sort();
+    expect(names(decl)).toEqual(names(impl));
+
+    // 逃生口的精确匹配必须在两处都在（实现里写错成 truthy 判定就抓得到）
+    expect(impl).toContain('QUAIWEI_ALLOW_DIRTY_BUILD === "1"');
+    expect(decl).toContain("boolean | null");
   });
 });
