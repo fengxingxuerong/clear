@@ -5,6 +5,16 @@ on:
     branches: [main, master]
   pull_request:
 
+# 同一分支只保留最新一次 CI。
+# 没有这段时，网络不稳期间积压的多个推送会各自排一个 run，而 GitHub
+# 在 runner 紧张时会让排队中的 job **恰好 15 分钟后**被判 cancelled
+# （2026-10-05 实测 run #74/#75 均 created→updated 15分03秒/15分02秒，
+#  job 从未 started；本地 check:release 全绿）。
+# cancel-in-progress 保证新推送一来就把旧的取消掉，不会互相排队。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
