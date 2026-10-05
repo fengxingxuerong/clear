@@ -207,3 +207,68 @@ describe("v0.9 引擎集成（对话剧本场景块保护 + 指纹健康）", ()
     expect(templateHits.length).toBeLessThanOrEqual(4);
   });
 });
+
+/* =========================================================
+   2026-10-05 全面优化验证轮 · 分支覆盖补测（此前分支 74.41%）
+   目标：144-150 与 175-183 的「前邻标点」两侧判定、
+         338 空分段、339/340 残句合并与不合并两侧
+   ========================================================= */
+
+describe("capLongTemplateRepetition：前邻标点判定（144-150 / 175-183）", () => {
+  it("第二处前邻是非标点（「后」）→ 只删短语本身，start 不回退", () => {
+    // if 为假：start 保持 idx，前邻的「后」不被连带吃掉
+    expect(capLongTemplateRepetition("你细品然后你细品。")).toBe("你细品然后。");
+  });
+
+  it("第二处前邻是五种标点之一 → 连同前邻标点一起删", () => {
+    // 逐个喂，，同时覆盖 144-150 各比较为真的路径
+    for (const punct of ["，", "、", "？", "。", "！"]) {
+      const src = `前句。你细品${punct}你细品。尾句`;
+      expect(capLongTemplateRepetition(src), src).toBe("前句。你细品。尾句");
+    }
+  });
+
+  it("第三轮总量封顶（MAX=4）：9 个互异短语删最早 5、保留最晚 4", () => {
+    // hits 按 idx 降序排 → 先删下标最大的，故 5 次删除都发生在更小下标之前，
+    // 早先算好的 idx 不会因前面的删除而失效；这 9 个短语的前邻依次是
+    // 非标点/，/、/？/！——同一轮里把 175 的 if 真与假两侧都走一遍。
+    const src =
+      "开头侃真的，你细品、讲道理？话又侃回来！搁谁都一样。据我观察，不瞒你说、客观讲？老实讲！";
+    const out = capLongTemplateRepetition(src);
+
+    for (const keep of ["据我观察", "不瞒你说", "客观讲", "老实讲"]) expect(out).toContain(keep);
+    for (const gone of ["侃真的", "你细品", "讲道理", "话又侃回来", "搁谁都一样"]) {
+      expect(out, `应已删除：${gone}`).not.toContain(gone);
+    }
+    expect(out).toBe("开头。据我观察，不瞒你说、客观讲？老实讲！");
+    expect(out.match(/。/g)).toHaveLength(1); // 首删连带的「。」已被后续删除吸收，只留一个
+  });
+});
+
+describe("fixOrphanConnectiveLeads：残句合并两侧（338-346）", () => {
+  it("句末标点后的空分段被丢弃 → 输出无尾空白（行 338 then）", () => {
+    // split 探针实测："这是一句挺长的正文。 ".split(/(?<=[。…])/) === ["这是一句挺长的正文。", " "]
+    expect(fixOrphanConnectiveLeads("这是一句挺长的正文。 ")).toBe("这是一句挺长的正文。");
+  });
+
+  it("删词后残句 <8 字且上句以句号收尾 → 合并成逗号连接（339/340 全真）", () => {
+    expect(fixOrphanConnectiveLeads("这是一句挺长的正文。且很短")).toBe("这是一句挺长的正文，很短");
+  });
+
+  it("上句以问号收尾 → 不合并（行 340 的 /[。…]$/ 为假）", () => {
+    expect(fixOrphanConnectiveLeads("这样真的好吗？且很短")).toBe("这样真的好吗？很短");
+  });
+
+  it("残句 ≥8 字（MERGE_MIN_CHARS）→ 不合并（行 341 为假）", () => {
+    const src = "这是一句挺长的正文。且这里的内容足足有八九个字";
+    expect(fixOrphanConnectiveLeads(src)).toBe("这是一句挺长的正文。这里的内容足足有八九个字");
+  });
+});
+
+/**
+ * 结构性不可达说明（2026-10-05 复核，不是漏测）：
+ * `assertCaptureRefsValid`（源码约 275-300 行）未导出，仅在模块加载时以合法的
+ * FORMAL_RESTORE 调用一次——其 `maxRef > groups` 抛错分支与命名组分支
+ * （行 287、288×2、291、292）没有任何测试入口，任何用例都到不了。
+ * 要覆盖必须改生产源码（导出或注入），本任务禁止改源码，故如实记在此处。
+ */

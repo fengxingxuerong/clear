@@ -203,3 +203,77 @@ describe("痕迹归一与解析细节（v0.9.9 补深）", () => {
     expect(seatA.critique).toEqual(["句长过于均匀", "对仗工整"]);
   });
 });
+
+describe("分数解析边界补深（b16@171 / 165 行）", () => {
+  it("J1 空席位：同步抛「合议庭无席位」，不发起任何请求", async () => {
+    await expect(judgeByPanel("x", [])).rejects.toThrow(/合议庭无席位/);
+  });
+
+  it("J2 三席混合：a 超范围分 150 落空抛错、b reasoning 兜底 62 且 scoreLineIdx=-1、c 正常 40", async () => {
+    mockFetchBySeat({
+      // content 末行 150：s<=100 落空 → 解析循环走完仍 null → 177 行抛「无有效分数」→ 错误席
+      "gw-a": { content: "句长过于均匀\n150" },
+      // content 无数字 → 解析落空；reasoning 含「62」→ 171 行 reasoning 兜底；
+      // content 各行都不含数字 → scoreLineIdx=-1 → critique 取全部行
+      "gw-b": { content: "过渡词残留\n用词重复", reasoning: "综合判断给出 62 分" },
+      "gw-c": { content: "句长过于均匀\n40" },
+    });
+    const r = await judgeByPanel("测试文本", SEATS);
+    // 有效票 62/40 → 加权中位 round((40+62)/2)=51；席间满分差 22；有效席 2
+    expect(r.score).toBe(51);
+    expect(r.spread).toBe(22);
+    expect(r.validCount).toBe(2);
+    const seatA = r.seats.find((s) => s.id === "a")!;
+    expect(seatA.score).toBeNull();
+    expect(seatA.error).toContain("无有效分数");
+    const seatB = r.seats.find((s) => s.id === "b")!;
+    expect(seatB.score).toBe(62); // reasoning 兜底
+    // scoreLineIdx=-1 → 不截断，critique 取全部行（无分数行可剥离）
+    expect(seatB.critique).toEqual(["过渡词残留", "用词重复"]);
+    // 两票重合桶不存在（b 两票各一桶、c 一票）→ 不定罪
+    expect(r.critique).toEqual([]);
+  });
+
+  /*
+   * 覆盖注释（结构性说明，非用例）：
+   * - b16@171（`score === null && r.reasoning`）的各子态：reasoning 真且含数字
+   *   → J2 的 gw-b（reasoning 兜底 62）；reasoning 真但 match(/\d+/g) 为 null
+   *   → J4；reasoning 为空串（falsy）→ J3；score 已在 content 解析命中 →
+   *   本文件其余正常席用例。四条子态全部有实测用例覆盖。
+   * - 165 行 `if (s >= 0 && s <= 100)` 的 `s >= 0` false 支结构性不可达：
+   *   s 由 /^…(\d{1,3})…$/ 捕获组 parseInt 得来，\d 恒非负，s>=0 恒真——
+   *   该支是防御性写法，测试无法（也不应）触达。
+   */
+  it("J3 content 与 reasoning 皆空：走 reasoning falsy 支 → 无有效分数错误席", async () => {
+    mockFetchBySeat({
+      "gw-a": { content: "句长过于均匀\n40" },
+      "gw-b": { content: "", reasoning: "" },
+      "gw-c": { content: "句长过于均匀\n44" },
+    });
+    const r = await judgeByPanel("测试文本", SEATS);
+    expect(r.validCount).toBe(2);
+    expect(r.score).toBe(42); // (40+44)/2
+    const seatB = r.seats.find((s) => s.id === "b")!;
+    expect(seatB.score).toBeNull();
+    expect(seatB.error).toContain("无有效分数");
+    expect(seatB.critique).toEqual([]);
+  });
+
+  it("J4 reasoning 非空但无数字：nums && nums.length 为 false → 仍抛「无有效分数」", async () => {
+    mockFetchBySeat({
+      "gw-a": { content: "句长过于均匀\n40" },
+      // content 无数字行 → 解析落空；reasoning 真但不含任何数字 → 兜底支 false
+      "gw-b": {
+        content: "句长过于均匀",
+        reasoning: "整体看下来很像真人写的，没有别的要补充",
+      },
+      "gw-c": { content: "句长过于均匀\n44" },
+    });
+    const r = await judgeByPanel("测试文本", SEATS);
+    expect(r.validCount).toBe(2);
+    expect(r.score).toBe(42);
+    const seatB = r.seats.find((s) => s.id === "b")!;
+    expect(seatB.score).toBeNull();
+    expect(seatB.error).toContain("无有效分数");
+  });
+});

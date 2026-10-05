@@ -20,12 +20,19 @@
  *   让余量回到 3.4~3.6pt。**阈值贴着实际值，门禁才有牙齿**；
  *   覆盖 CI(ubuntu/node20) 与本机(win/node24) 的平台差异，以及后续正常改动的小幅波动；
  *   低于它即红，只许变好，不许回调。要降阈值请先在提交信息里写清为什么这不是回退。
+ *
+ * 2026-10-05 同日第三档（覆盖尾巴补测全部收尾后）：
+ *   实测 **Stmt 97.9 / Branch 92.8 / Func 99.2 / Lines 98.6**（68 文件/1336 用例），
+ *   93/87/94/94 的余量漂到 4.6~5.8pt，Branch 已越过上面写的「3~5pt」上限
+ *   ⇒ 按同一纪律收到 **94/89/95/95**，余量回到 3.6~4.2pt。
+ *   这不是「为过门禁调数字」——是门禁先绿、余量变松，再把线往上抬；
+ *   方向永远是单向收紧，且每次都在此留档（改了什么、为什么、当时实测值）。
  */
 export const COVERAGE_THRESHOLDS = {
-  statements: 93,
-  branches: 87,
-  functions: 94,
-  lines: 94,
+  statements: 94,
+  branches: 89,
+  functions: 95,
+  lines: 95,
 } as const;
 
 export type CoverageThresholds = typeof COVERAGE_THRESHOLDS;
