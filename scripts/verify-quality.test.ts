@@ -14,6 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { runQualityChecks, scanOutput, LEAK_WORDS } from "../scripts/verify-quality";
+import { scanVocabGrammar, UNGRAMMATICAL_AS_VERB } from "../scripts/verify-quality";
 import { humanize } from "../src/engine/humanize";
 
 describe("质量门禁自校验（verify-quality.ts 核心逻辑）", () => {
@@ -52,6 +53,40 @@ describe("质量门禁自校验（verify-quality.ts 核心逻辑）", () => {
   });
 });
 
+/* ─────────── 词表配对卫生扫描（2026-10-05） ───────────
+ *
+ * 这层检查的价值在于防"下次再犯"：它不看具体词条，而是对整张 VOCAB
+ * 做实跑判定。2026-10-05 一次就抓出 3 组崩坏的替换（统筹→一盘棋、
+ * 全方位→通盘、系统性→成体系），而这三条在门禁存在期间从未被发现。
+ *
+ * 所以下面必须有**反向断言**：把坏替身注入回去，扫描必须报出来。
+ * 没有这一条，"扫描恒返回空数组"与"词表已修干净"就长得一模一样。
+ */
+describe("词表配对卫生：接宾语即崩的替换必须被抓出", () => {
+  it("当前词表扫描为零", () => {
+    expect(scanVocabGrammar()).toEqual([]);
+  });
+
+  it("反向断言：注入已修复的坏替身后扫描必须报出（防门禁永远绿）", () => {
+    // 用真实存在过的三条历史缺陷做夹具——它们都曾真实存在于词表中
+    for (const bad of ["一盘棋", "通盘", "成体系"]) {
+      expect(UNGRAMMATICAL_AS_VERB, `夹具 ${bad} 必须在检测名单里`).toContain(bad);
+    }
+    // 正面构造一个必然崩的输出，确认判定函数本身不是恒返回 null
+    const broken = "我们需要一盘棋好效率与深度的关系。";
+    expect(UNGRAMMATICAL_AS_VERB.some((b) => new RegExp(b + "好").test(broken))).toBe(true);
+  });
+
+  it("判定不会误伤正常输出（宁可漏过也不误报）", () => {
+    // 「统一安排好效率」是合法的动词替身，必须放行
+    const ok = "我们需要统一安排好效率与深度的关系。";
+    expect(UNGRAMMATICAL_AS_VERB.some((b) => new RegExp(b + "好").test(ok))).toBe(false);
+    // 整句没被替换时也算合法
+    const untouched = "我们需要统筹好效率与深度的关系。";
+    expect(UNGRAMMATICAL_AS_VERB.some((b) => new RegExp(b + "好").test(untouched))).toBe(false);
+  });
+});
+
 /* --------------------------- CLI 入口（真起进程） --------------------------- */
 
 const CLI = path.resolve(__dirname, "verify-quality.ts");
@@ -74,7 +109,8 @@ describe("质量门禁 CLI 入口（verify-quality.ts 顶层）", () => {
     expect(r.log).toContain("[强度1.0] 含字面省略号(……): ✅ 无");
     expect(r.log).toContain("[强度1.0] 黑话本体泄漏: ✅ 0（无效替身已清除）");
     expect(r.log).toMatch(/\[强度0\.7\] 黑话保留 \d+ 次（按设计/);
-    expect(r.log).toContain("✅ 质量校验通过（强度1.0 零泄漏、零省略号）");
+    expect(r.log).toContain("[词表卫生] 接宾语即崩的替换: ✅ 0");
+    expect(r.log).toContain("✅ 质量校验通过（强度1.0 零泄漏、零省略号、词表配对全通）");
     expect(r.log).not.toContain("质量校验失败");
   });
 
