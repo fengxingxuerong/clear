@@ -92,6 +92,47 @@ describe("hasUnescapedBracketInCharClass —— 判据边界", () => {
       // eslint-disable-next-line no-useless-escape
       expect(hasUnescapedBracketInCharClass(src(/[（）()【】\[\]]/))).toBe(false);
     });
+
+    /**
+     * 字符类**没闭合**的输入（行 94-95）。
+     *
+     * 这条不能写成正则字面量——未闭合的 `/[abc/` 在 JS 里是语法错误，
+     * 根本进不了源码。所以只能直接传字符串给判据（判据本来就只吃字符串）。
+     *
+     * 为什么值得测：scanRegexDefects 会先 `new RegExp(body)` 兜一道，
+     * 语法非法的字面量在**真实扫描里到不了这里**；但判据是导出的，
+     * 单独调用时这条防御必须自己站得住——否则将来有人绕过那层兜底直接调它，
+     * 就会在 open 之后拿 close = -1 去索引 body。
+     *
+     * 探针实测真值：全部返回 false（不误报）。
+     */
+    it("字符类未闭合时返回 false，且不越界索引（行 94-95）", () => {
+      const unclosed: [string, string][] = [
+        ["类没有闭合符", "abc[def"],
+        ["类在末尾未闭合", "abc["],
+        ["未闭合且以反斜杠收尾", "abc[" + "\\"],
+        ["未闭合但结尾是 ]（那是类内容）", "abc[def]"],
+        ["多个未闭合的类", "[a[b[c"],
+      ];
+      for (const [label, body] of unclosed) {
+        expect(hasUnescapedBracketInCharClass(body), label).toBe(false);
+      }
+    });
+
+    it("未闭合类后面若跟着落单 ] 反而判 true——因为那确实构成提前闭合", () => {
+      /**
+       * ⚠️ 第一版把这条断言成 false，探针/测试双双否掉，返回的是 true。
+       *
+       * 机制：`abc[def]]` 里 findCharClassStart 找 index 3 的 `[`，
+       * findCharClassEnd 从 index 4 找到 index 7 的 `]`（**类在这里闭合了**），
+       * 于是 body[8] === "]" → 判为「类提前闭合」。
+       *
+       * 这在 JS 语义下确实是缺陷：原意多半是把 `]` 放进类里，
+       * 却写成裸 `[` + `]`。所以 true 是对的——「类没闭合」和
+       * 「类闭合了但后面多一个 ]」是两回事，后者要报。
+       */
+      expect(hasUnescapedBracketInCharClass("abc[def]]")).toBe(true);
+    });
   });
 });
 
