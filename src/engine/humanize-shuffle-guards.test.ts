@@ -16,6 +16,7 @@ import {
 import { fragmentFrontCanStand } from "./humanize-primitives.ts";
 import { fragmentCanStand } from "./humanize-vocab.ts";
 import { humanize } from "./humanize.ts";
+import { boostBurstinessIfLow } from "./shuffle/burstiness.ts";
 
 /** 按句末标点切句，返回去掉空白后的纯字数序列（够用，不引第三方分词） */
 function sentLens(text: string): number[] {
@@ -274,6 +275,68 @@ describe("C 类切分守卫（2026-09-30）", () => {
     // 这条断言钉死"名词内部嵌情态单字时仍须判为无谓语"。
     expect(fragmentFrontCanStand("数据显示，采用智能化系统的企业")).toBe(false);
     expect(fragmentFrontCanStand("统计表明，抓住转型机会的企业")).toBe(false);
+  });
+});
+
+/**
+ * 句尾锚点注入的三条收口（burstiness.ts 的 boostBurstinessIfLow）
+ *
+ * 这层管的是「往句子里插语气锚点」，两个失败模式是实测出来的病句：
+ *   ① 「不信嗯？」——问句前挂锚，语体错位
+ *   ② 「挑战哈对哦。啊。。就这样。」——句末标点前插锚却没去掉锚自带的句号
+ * 两条都是「插了才知道错」，所以守卫必须在插之前拦。
+ */
+describe("句尾锚点注入收口", () => {
+  // rng 恒为 0 → 每次都取候选表第一个，结果确定可断言
+  const rng = () => 0;
+  const UNIFORM = "这件事很清楚。事情确实这样。别的也差不多。结论很明白。数据不会骗人。";
+
+  it("均匀长句（CV 低）→ 注入锚点提高 CV", () => {
+    const out = boostBurstinessIfLow(UNIFORM, rng, 1.0);
+    expect(out).not.toBe(UNIFORM);
+    expect(out.endsWith("对哦。嗯。")).toBe(true); // 探针实测
+  });
+
+  it("问句/感叹句不被挂锚（语体错位防线）", () => {
+    // 探针实测：含「吗？」和含「！」的语料，句末问号/感叹号原样保留，
+    // 锚点只挂到后面的普通句上——问句自带节奏突变，不需要锚。
+    for (const [q, e] of [
+      ["这件事值得思考吗？", "？"],
+      ["这件事真的惊人！", "！"],
+    ] as const) {
+      const text = q + "事情确实这样。别的也差不多。结论很清楚。数据不会骗人。";
+      const out = boostBurstinessIfLow(text, rng, 1.0);
+      expect(out, q).toContain(e); // 问号/感叹号仍在
+      expect(out, q).not.toContain(q.replace(/[？！]$/, "") + "嗯" + e); // 没被挂锚
+    }
+  });
+
+  it("句末标点前插锚不产生「。。」（双句号防线）", () => {
+    // 源码注释记的实测病句：「挑战哈对哦。啊。。就这样。」
+    const out = boostBurstinessIfLow(UNIFORM, rng, 1.0);
+    expect(out).not.toContain("。。");
+    expect(out).not.toContain("。。。");
+  });
+
+  it("单轮只注入一次（锚点表不重复消耗）", () => {
+    // 探针实测：4/6/10/20 句等长文本，无论长度，注入次数**恒为 1**，
+    // 输出长度恒 +5。所以 235 行那个 `if (!fresh.length) break` 在单轮调用下
+    // 走不到——usedAnchors 每轮新建，候选表远大于一轮的需求。
+    // 这条钉的是「不重复注入」这个真实性质，而不是我一开始以为的
+    // 「锚点用尽会 break」——那个假设探针直接否掉了。
+    for (const n of [4, 6, 10, 20]) {
+      const text = Array.from({ length: n }, () => "甲乙丙丁戊己庚。").join("");
+      const out = boostBurstinessIfLow(text, rng, 1.0);
+      expect((out.match(/对哦。嗯。/g) || []).length, `${n} 句`).toBe(1);
+      expect(out.length - text.length, `${n} 句`).toBe(5);
+    }
+  });
+
+  it("已足够参差的长文本不注入（CV 达标就不动）", () => {
+    // 反向对照：探针实测 30 句「第N句话内容差不多啊。」**完全不注入**——
+    // 长度有差异 ⇒ CV 达标 ⇒ 第 67 行直接 return。
+    const long = Array.from({ length: 30 }, (_, i) => `第${i}句话内容差不多啊。`).join("");
+    expect(boostBurstinessIfLow(long, rng, 1.0)).toBe(long);
   });
 });
 
