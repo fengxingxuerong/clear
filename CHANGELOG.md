@@ -5,17 +5,39 @@
 
 承接 v0.9.23「门禁可信度」的思路：这一版先修**红灯本身**，再把**绿灯的可信度**做实。
 
+### 📌 剩余覆盖率缺口的主因：防御性写法制造的不可达分支
+
+补覆盖到这一轮，**连续五次撞上同一个模式**——代码里有大量
+「用防御性写法掩盖上游已经排除的输入」，于是这些分支在任何测试下都走不到：
+
+| 位置 | 写法 | 为什么不可达 |
+|---|---|---|
+| `humanize.ts:1063` | `if (!text.trim())` | 空输入在 `humanize()` 层已被挡掉 |
+| `shuffle/structure.ts:200` | `avg > 0 ? … : 1` | 上游 `.filter(s => s.trim())` 已排除空段 |
+| `shuffle/fingerprint.ts:147` | `if (!sub) return 0` | `sub` 来自硬编码词表，永不为空 |
+| `shuffle/fingerprint.ts:175/181/187` | `sents.length ? … : 0` 等 | 158 行的 50 字下限已保证 |
+| `llm-chat.ts:76` | `if (keyIdx < 0) throw` | 行 132 首个 401 就抛，走不到退避后判定 |
+| `calib-lab.ts:310` | `if (length < 2) return null` | 上游已保证 ≥2 |
+| `detector.ts:142/175` | `m === 0` / `chars > 0` | `detectAI` 已先校验空输入 |
+| `App.tsx:276/446/458`、`BenchmarkPanel.tsx:602` | `if (!output) return` | 按钮已 `disabled` |
+| `diff.ts:214/229/230` | — | 源码已自行标注（2000 组随机语料佐证） |
+
+**这些不是缺陷，也不为凑覆盖率改生产源码。** 按项目纪律逐条查明后记录在此，
+省得后人为同一批行号再花几轮探针。
+
+真正可补的缺口已经不多，且集中在少数几处**业务边界**上
+（如 `llm-chat` 的错误体非对象分支、App 的指纹体检空输入守卫）。
+
 ### ⚠️ 提交前必须自己跑 tsc + lint——`check:release` 不含这两项
 
 `check:release` 串的是：check:version / check:regex / test:cov / test:regress /
 test:regress12 / test:quality / test:calib / test:evidence / check:ledger。
 
-**里面没有 `tsc`，也没有 `eslint`。** 本轮实测出现过一次：release 全绿 RC=0，
-而 `npx tsc -p tsconfig.json` 报 TS2322（测试里把三元组误标成 `[string, string]`）。
+**里面没有 `tsc`，也没有 `eslint`。** 实测出现过一次：release 全绿 RC=0，
+而 `npx tsc -p tsconfig.json` 报 TS2322。
 
-CI 侧有独立的 `npx tsc -b` 与 lint 步骤，不会漏；本地由 pre-commit 钩子兜底
-（它跑 tsc + eslint + prettier 三项）。所以**绿灯不代表可提交**——
-提交前自己再跑一次 `npm run lint` 与 `npx tsc -p tsconfig.json`。
+CI 侧有独立的 `npx tsc -b` 与 lint 步骤，不会漏；本地由 pre-commit 钩子兜底。
+所以**绿灯不代表可提交**——提交前自己再跑一次 `npm run lint` 与 `npx tsc -p tsconfig.json`。
 
 ### ⓿ 冒号台词正则失效：一条被三道门禁同时放过的死特征
 
