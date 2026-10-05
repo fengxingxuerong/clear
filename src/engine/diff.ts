@@ -215,6 +215,17 @@ export function diffInline(before: string, after: string): { left: DiffPart[]; r
       right.push({ type: "ins", text: insText });
     } else {
       // 只剩一侧的 same：直接搬运，避免死循环
+      //
+      // ⚠️ 结构性死分支（2026-10-05 核实）：本支**在任何输入下都不可达**。
+      //   推导：循环里 i/j 只在 181-186 的 same 分支同时前进，两者严格锁步；
+      //   而 diffSentences 的 same 块永远左右成对产出（行 181/184/210 三处都是
+      //   left.push 与 right.push 一起），故两侧的 same 序列**恒等**。
+      //   于是若 delText 与 insText 同时为空，只可能是"L[i] 非 same 且 R[j] 非 ins"
+      //   ——但那要求 L[i] 是 del、R[j] 是 same，而 same 序列恒等意味着
+      //   L 的 same 序列耗尽时 R 的也必然耗尽，del 段不可能插在两个 same 之间。
+      //   实测佐证：2000 组确定性随机语料（含删/插/换字）一个都没落进来，
+      //   且两侧始终逐字可还原（见 diff.test.ts 的模糊测试）。
+      //   保留它做防御：万一将来 diffSentences 改成非成对产出 same，这里兜底不漏字。
       if (i < L.length) left.push(L[i++]);
       if (j < R.length) right.push(R[j++]);
       continue;

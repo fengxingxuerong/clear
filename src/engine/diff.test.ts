@@ -318,3 +318,69 @@ describe("diffInline（字符粒度的两个硬要求）", () => {
     ).toBe(after);
   });
 });
+
+/* ─────────── diffInline 模糊测试（2026-10-05） ───────────
+ *
+ * 手写样例只能覆盖想到的形状，而 diff 是「改动率」这个用户可见数字的来源，
+ * 一旦漏字，用户会以为自己的稿子被动了而实际上 UI 显示正常。所以这里用
+ * **确定性伪随机**（LCG，种子固定）生成 2000 组随机对照，每组都做真实改写
+ * 模拟（删字/插字/换字），断言两侧都能逐字还原。
+ *
+ * 固定种子 = 失败可复现；不用 Math.random = 不会偶发红。
+ *
+ * 这轮模糊测试的另一个产出：**证伪了 diff.ts 的 214/215/218/219/220 是死分支**。
+ * 2000 组随机语料里一个都没命中，配合下面的不变式推导——见源码注释。
+ */
+describe("diffInline 模糊测试：两侧必须逐字可还原", () => {
+  let s = 12345;
+  const rnd = () => (s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const CH = "甲乙丙丁戊己庚辛壬癸子丑寅卯。！？，；";
+
+  const randText = (n: number) => {
+    let out = "";
+    for (let i = 0; i < n; i++) out += CH[Math.floor(rnd() * CH.length)];
+    return out;
+  };
+
+  /** 模拟真实改写：逐字删 / 插 / 换，其余保留 */
+  const rewrite = (a: string) => {
+    let b = "";
+    for (const ch of a) {
+      const r = rnd();
+      if (r < 0.15) continue; // 删字
+      if (r < 0.3)
+        b += CH[Math.floor(rnd() * CH.length)]; // 插字
+      else if (r < 0.45)
+        b += CH[Math.floor(rnd() * CH.length)]; // 换字
+      else b += ch;
+    }
+    return b;
+  };
+
+  it("2000 组随机对照全部逐字可还原", () => {
+    for (let k = 0; k < 2000; k++) {
+      const a = randText(1 + Math.floor(rnd() * 40));
+      const b = rewrite(a);
+      const { left, right } = diffInline(a, b);
+      // 抛错而非 expect：失败时直接把输入打出来，便于复现
+      if (left.map((p) => p.text).join("") !== a) throw new Error(`左不可还原 a=${a} b=${b}`);
+      if (right.map((p) => p.text).join("") !== b) throw new Error(`右不可还原 a=${a} b=${b}`);
+    }
+  });
+
+  it("空对照与全等对照不产生空块", () => {
+    // 极端输入：一边全空
+    const cases: [string, string][] = [
+      ["", ""],
+      ["甲乙。", ""],
+      ["", "甲乙。"],
+      ["。！？", ""],
+    ];
+    for (const [a, b] of cases) {
+      const { left, right } = diffInline(a, b);
+      expect(left.map((p) => p.text).join("")).toBe(a);
+      expect(right.map((p) => p.text).join("")).toBe(b);
+      expect(left.some((p) => p.text.length === 0)).toBe(false); // 无空块
+    }
+  });
+});

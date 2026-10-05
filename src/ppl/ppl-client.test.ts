@@ -296,4 +296,57 @@ describe("computePplFeature（打分聚合与错误路径）", () => {
     expect(feat.meanNll).toBeCloseTo(3, 6);
     expect(feat.scoredChars).toBe(20);
   });
+
+  /* 2026-10-05 分支补测：workerCall 的两处边界此前从未被执行——
+     ① progress 消息在「没传 onProgress」或「消息里没有 progress 体」时必须被安静跳过；
+     ② worker 回了一条既非 ok 也非 progress 的消息（type 未知/缺失）时的兜底错误文案。
+     两者都是真实故障面的产物：宿主换了协议版本、worker 半路崩了。 */
+
+  it("行 95：progress 消息在无回调 / 无 progress 体时安静跳过，不得当成失败", async () => {
+    // (a) 不传 onProgress：progress 消息必须被忽略，最终仍正常返回 ok
+    FakeWorker.script = (w, msg) => {
+      if (msg.type === "download") {
+        w.emit("message", { type: "progress", progress: { status: "下载权重" } });
+        w.emit("message", { type: "ok", result: { ok: true } });
+      } else {
+        w.emit("message", { type: "ok", result: { ok: true, results: SCORE_RESULTS } });
+      }
+    };
+    const mod = await loadClient();
+    // 前置：不传回调 ⇒ 行 95 的 onProgress 为假值，progress 走「跳过」支
+    await expect(mod.ensurePplModel()).resolves.toBeUndefined();
+
+    // (b) 传了回调但消息里没有 progress 体：同样跳过，不得抛错
+    const seen: unknown[] = [];
+    FakeWorker.script = (w, msg) => {
+      if (msg.type === "download") {
+        w.emit("message", { type: "progress" }); // 缺 progress 字段
+        w.emit("message", { type: "ok", result: { ok: true } });
+      } else {
+        w.emit("message", { type: "ok", result: { ok: true, results: SCORE_RESULTS } });
+      }
+    };
+    const mod2 = await loadClient();
+    await mod2.ensurePplModel((p) => seen.push(p));
+    expect(seen).toEqual([]); // 回调一次都没被调用，且流程正常走完
+    expect(mod2.isPplReady()).toBe(true);
+  });
+
+  it("行 100：worker 回未知消息类型 → 兜底错误文案，不静默挂死", async () => {
+    FakeWorker.script = (w, msg) => {
+      // 模拟协议错位：worker 回了一条既没有 type 也没有 error 的消息
+      w.emit("message", msg.type === "download" ? { nothing: true } : {});
+    };
+    const mod = await loadClient();
+    await expect(mod.ensurePplModel()).rejects.toThrow("未知错误");
+  });
+
+  it("行 154：worker 回 ok 但缺 results 时按失败处理（与 Electron 侧同口径）", async () => {
+    FakeWorker.script = (w, msg) => {
+      if (msg.type === "download") w.emit("message", { type: "ok", result: { ok: true } });
+      else w.emit("message", { type: "ok", result: { ok: true } }); // 缺 results
+    };
+    const mod = await loadClient();
+    await expect(mod.computePplFeature("字".repeat(400))).rejects.toThrow("worker 打分失败");
+  });
 });
