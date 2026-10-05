@@ -276,3 +276,82 @@ describe("预算到点停止重试（v0.9.14）", () => {
     expect(calls).toHaveLength(3);
   });
 });
+
+/* ─────────── 入口前置与网络异常退避（2026-10-05） ───────────
+ *
+ * 这两条都是**用户看得见的失败路径**：
+ *  ① 没配 Key 时若不拦，会拿空 Authorization 去请求网关，拿到一个语焉不详的 401；
+ *  ② fetch 直接抛（断网/代理挂/DNS 失败）时若不重试，用户会看到"网络错误"就丢掉稿子。
+ * ②的退避档位是 2s+5s+12s 真等待，所以必须挂假定时器，否则一次用例 19 秒。 */
+describe("入口前置校验与网络异常退避", () => {
+  it("行 52：Key 池为空时立即抛「未配置 API Key」，一个请求都不发", async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        calls++;
+        return resp(200);
+      }),
+    );
+    const noKey: ApiConfig = { ...cfg, apiKey: "", apiKeys: "" };
+    await expect(
+      chat(noKey, [{ role: "user", content: "原文" }], { temperature: 0.9 }),
+    ).rejects.toThrow("未配置 API Key");
+    // 关键断言：没配 Key 就绝不能发请求（否则用户拿到的是网关 401，而不是可读提示）
+    expect(calls).toBe(0);
+  });
+
+  it("行 105-113：fetch 抛异常时按 2s/5s/12s 退避重试，重试成功即返回", async () => {
+    vi.useFakeTimers();
+    let n = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        n++;
+        // 前两次是网络瞬断（fetch 直接 reject），第三次恢复
+        if (n <= 2) throw new TypeError("fetch failed");
+        return resp(200);
+      }),
+    );
+    const pending = chat(cfg, [{ role: "user", content: "原文" }], {
+      temperature: 0.9,
+      maxTokens: 100,
+    });
+    // 先挂断言再推进定时器，避免 unhandled rejection
+    const assertion = pending.then((r) => {
+      expect(r.content).toBeTruthy();
+      expect(n).toBe(3);
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    await assertion;
+  });
+
+  it("行 112：网络异常退避彻底耗尽后，把原始异常原样抛出（不吞错）", async () => {
+    vi.useFakeTimers();
+    let n = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        n++;
+        throw new TypeError("fetch failed");
+      }),
+    );
+    const pending = chat(cfg, [{ role: "user", content: "原文" }], {
+      temperature: 0.9,
+      maxTokens: 100,
+    });
+    const assertion = pending.then(
+      () => {
+        throw new Error("本该抛错却成功了");
+      },
+      (e: unknown) => {
+        // 耗尽后必须把原始异常抛出去，用户才能看到"网络错误"而不是一个含糊的文案
+        expect((e as Error).message).toBe("fetch failed");
+        // 首轮 + 3 档退避 = 4 次（attempt 0/1/2 退避，attempt 3 时 attempt<3 已假）
+        expect(n).toBe(4);
+      },
+    );
+    await vi.advanceTimersByTimeAsync(60_000);
+    await assertion;
+  });
+});
