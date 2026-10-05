@@ -179,22 +179,38 @@ export function runRegexSelfCheck(root: string): { ok: boolean; defects: RegexDe
   return { ok: defects.length === 0, defects };
 }
 
+/**
+ * 生成 CLI 的输出行（抽出以便测试）。
+ *
+ * 为什么不直接测 CLI 入口：入口里有 `process.exit(1)`，测它就得真的退出子进程，
+ * 覆盖率还停在"跑了但断言不了输出"的半截状态。把「算结果」与「打印/退出」分开，
+ * 前者可断言，后者只剩两行胶水。
+ */
+export function formatReport(defects: RegexDefect[]): { lines: string[]; exitCode: number } {
+  if (defects.length === 0) {
+    return {
+      lines: [
+        "✅ 正则自检通过：全项目无「字符类提前闭合」写法",
+        "   （判据：字符类闭合后不得紧跟落单的 ]。这类缺陷行覆盖率抓不到——行被执行了，只是结果永远错）",
+      ],
+      exitCode: 0,
+    };
+  }
+  const lines = [`❌ 正则自检失败：${defects.length} 处「字符类提前闭合」写法`, ""];
+  for (const d of defects) {
+    lines.push(`   ${d.file}:${d.line}  ${d.reason}`);
+    lines.push(`     ${d.literal}`);
+    lines.push(`     修法：把字符类里的 [ 写成 \\[`);
+  }
+  return { lines, exitCode: 1 };
+}
+
 /* CLI 入口：npx tsx scripts/check-regex-defects.ts */
 if (process.argv[1] && process.argv[1].replace(/\\/g, "/").endsWith("check-regex-defects.ts")) {
-  const root = process.cwd();
-  const { ok, defects } = runRegexSelfCheck(root);
-  if (ok) {
-    console.log("✅ 正则自检通过：全项目无「字符类提前闭合」写法");
-    console.log(
-      "   （判据：字符类闭合后不得紧跟落单的 ]。这类缺陷行覆盖率抓不到——行被执行了，只是结果永远错）",
-    );
-  } else {
-    console.error(`❌ 正则自检失败：${defects.length} 处「字符类提前闭合」写法\n`);
-    for (const d of defects) {
-      console.error(`   ${d.file}:${d.line}  ${d.reason}`);
-      console.error(`     ${d.literal}`);
-      console.error(`     修法：把字符类里的 [ 写成 \\[\n`);
-    }
-    process.exit(1);
+  const { lines, exitCode } = formatReport(scanRegexDefects(process.cwd()));
+  for (const l of lines) {
+    if (exitCode === 0) console.log(l);
+    else console.error(l);
   }
+  process.exit(exitCode);
 }

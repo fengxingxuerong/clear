@@ -14,7 +14,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { runQualityChecks, scanOutput, LEAK_WORDS } from "../scripts/verify-quality";
-import { scanVocabGrammar, UNGRAMMATICAL_AS_VERB } from "../scripts/verify-quality";
+import {
+  scanVocabGrammar,
+  UNGRAMMATICAL_AS_VERB,
+  isGrammaticallyBroken,
+} from "../scripts/verify-quality";
 import { humanize } from "../src/engine/humanize";
 
 describe("质量门禁自校验（verify-quality.ts 核心逻辑）", () => {
@@ -166,5 +170,45 @@ describe("质量门禁 CLI 入口（verify-quality.ts 顶层）", () => {
     expect(captured.log).toContainEqual(["[强度1.0] 黑话本体泄漏:", `❌ ${expectedLeak}`]);
     // 失败时绝不能打印通过文案——否则"红"会被刷成"绿"
     expect(captured.log.some((c) => String(c[0]).includes("质量校验通过"))).toBe(false);
+  });
+
+  // ─────────────────────────────────────────────────────────────────
+  // 词表配对卫生（scanVocabGrammar）的「会拦人」能力
+  // ─────────────────────────────────────────────────────────────────
+  // 为什么单独测：真实词表里一个崩的组合都没有，scanVocabGrammar 实跑恒返回 []。
+  // 于是 CLI 里 `grammarHits.length > 0` 这条**失败分支永远不会执行**——
+  // 门禁最关键的能力（发现崩的替换就拦下）没有任何测试背书。
+  // 探针实测判据本身有效：「一盘棋好」「通盘推进」这类都能检出，
+  // 所以问题只在于「没有反例喂给它」。
+
+  describe("isGrammaticallyBroken —— 判据本身（不依赖真实词表）", () => {
+    it("识别出名词/副词性替身接宾语的崩句", () => {
+      for (const bad of UNGRAMMATICAL_AS_VERB) {
+        for (const tail of ["好", "推进", "建设", "落实", "开展"]) {
+          expect(isGrammaticallyBroken("源词", bad + tail)).toBe(bad);
+        }
+      }
+    });
+
+    it("没发生替换时一律判过（避免把「原文照抄」当成崩）", () => {
+      const same = "我们需要统筹好效率与深度的关系。";
+      expect(isGrammaticallyBroken("统筹", same)).toBeNull();
+    });
+
+    it("正常动词替换后的通顺句子不误报", () => {
+      // 判据必须保守：宁可漏过也不误报（误报会让整个 check:release 失去可信度）
+      expect(isGrammaticallyBroken("统筹", "我们需要搞定效率与深度的关系。")).toBeNull();
+      expect(isGrammaticallyBroken("优化", "我们需要弄好效率与深度的关系。")).toBeNull();
+    });
+
+    it("崩句出现在句中（非开头）也能检出", () => {
+      expect(isGrammaticallyBroken("统筹", "前面铺垫了一句话，后面一盘棋好起来")).toBe("一盘棋");
+    });
+  });
+
+  describe("scanVocabGrammar —— 真实词表当前是干净的", () => {
+    it("实跑零命中（回归闸门：一旦有人加了崩的替换，这里会红）", () => {
+      expect(scanVocabGrammar()).toEqual([]);
+    });
   });
 });

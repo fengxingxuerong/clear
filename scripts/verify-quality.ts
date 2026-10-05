@@ -71,8 +71,13 @@ function grammarProbe(from: string): string {
 
 /** 跑一个候选替换，判定输出是否仍是通顺中文。
  *  判据刻意保守：只在**替换确实发生**且**产出仍是名词/副词接宾语**时判失败，
- *  宁可漏过也不误伤——门禁误报会让整套 check:release 失去可信度。 */
-function isGrammaticallyBroken(from: string, out: string): string | null {
+ *  宁可漏过也不误伤——门禁误报会让整套 check:release 失去可信度。
+ *
+ *  v0.9.24：改为 export 供测试直接断言。
+ *  之前它只被 scanVocabGrammar 内部调用，而真实词表里**一个崩的组合都没有**
+ *  （scanVocabGrammar 实跑恒返回 []），于是「检出问题」这半边从未被执行过——
+ *  门禁自己失效时没有 vitest 会亮红。导出后可以直接喂已知会崩的串来验证判据。 */
+export function isGrammaticallyBroken(from: string, out: string): string | null {
   if (out === grammarProbe(from)) return null; // 没替换，天然无问题
   for (const bad of UNGRAMMATICAL_AS_VERB) {
     // 替身出现 + 紧跟「好/推进/建设」这类宾语标记 ⇒ 主谓不搭

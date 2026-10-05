@@ -17,6 +17,7 @@ import {
   hasUnescapedBracketInCharClass,
   scanRegexDefects,
   runRegexSelfCheck,
+  formatReport,
 } from "./check-regex-defects.ts";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -164,5 +165,56 @@ describe("scanRegexDefects —— 端到端", () => {
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
+  });
+
+  it("扫描目录不存在时不崩（返回空）", () => {
+    // 门禁在 CI 上跑，cwd 一定对；但本地手滑传个错路径时，
+    // 应该报"没有缺陷"而不是抛异常把 CI 变成无关失败。
+    const tmp = fs.mkdtempSync(path.join(ROOT, ".covtmp-regex-"));
+    try {
+      expect(scanRegexDefects(tmp)).toEqual([]); // tmp 里没有 src/ 与 scripts/
+      expect(runRegexSelfCheck(tmp).ok).toBe(true);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("formatReport —— CLI 输出（门禁自身不留覆盖缺口）", () => {
+  it("零缺陷 → exitCode 0 + 通过文案", () => {
+    const { lines, exitCode } = formatReport([]);
+    expect(exitCode).toBe(0);
+    expect(lines.join("\n")).toContain("正则自检通过");
+  });
+
+  it("有缺陷 → exitCode 1，且每条都带文件:行号、正则原文、修法", () => {
+    const { lines, exitCode } = formatReport([
+      { file: "src/x.ts", line: 42, literal: "/[ab[]]/", reason: "字符类提前闭合" },
+    ]);
+    expect(exitCode).toBe(1);
+    const out = lines.join("\n");
+    expect(out).toContain("src/x.ts:42");
+    expect(out).toContain("/[ab[]]/");
+    expect(out).toContain("修法");
+    expect(out).toContain("字符类提前闭合");
+  });
+
+  it("多条缺陷逐条输出，不合并成一行", () => {
+    const { lines } = formatReport([
+      { file: "a.ts", line: 1, literal: "/[a[]]/", reason: "r1" },
+      { file: "b.ts", line: 2, literal: "/[b[]]/", reason: "r2" },
+    ]);
+    const out = lines.join("\n");
+    expect(out).toContain("a.ts:1");
+    expect(out).toContain("b.ts:2");
+  });
+
+  it("通过与失败两条路径的文案互斥（防有人把成功也报成失败）", () => {
+    const okOut = formatReport([]).lines.join("\n");
+    const badOut = formatReport([
+      { file: "x", line: 1, literal: "/[a[]]/", reason: "r" },
+    ]).lines.join("\n");
+    expect(okOut).not.toContain("自检失败");
+    expect(badOut).not.toContain("自检通过");
   });
 });
