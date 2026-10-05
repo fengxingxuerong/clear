@@ -211,4 +211,60 @@ describe("质量门禁 CLI 入口（verify-quality.ts 顶层）", () => {
       expect(scanVocabGrammar()).toEqual([]);
     });
   });
+
+  // ─────────────────────────────────────────────────────────────────
+  // scanVocabGrammar 的「检出」路径：靠 mock 注入一个崩的替身
+  // ─────────────────────────────────────────────────────────────────
+  // 为什么必须 mock：真实词表里没有崩的组合，所以「发现崩的就记下来并 break」
+  // 这两行（102/103）永远不执行。而这恰恰是门禁最要紧的能力——
+  // 它存在的原因就是「将来有人加了崩的替换时要能发现」。
+  // 只测「现在是干净的」等于只测了门禁的一半。
+  describe("scanVocabGrammar 的检出路径（mock 注入崩的替身）", () => {
+    /**
+     * 动态 import 这个后台脚本会顺带执行它的 **CLI 入口**（模块顶层），
+     * 而注入崩的替身恰好让 CLI 判定失败并 `process.exit(1)`——
+     * vitest 会把「测试里意外退出」直接当错误抛出来（第一版就这么红的）。
+     * 所以先把 process.exit 换成抛错哨兵再 import。
+     */
+    async function scanWithMockedEngine(output: string) {
+      vi.doMock("../src/engine/humanize", () => ({ humanize: () => output }));
+      // ⚠️ 不用「抛错哨兵」：CLI 入口在模块顶层同步执行 process.exit(1)，
+      // 抛出的 Error 会在 import 的瞬间冒出来，压根进不到后面的 try/finally。
+      // 这里让 exit 变成**记录器**——真退出，但把调用截住，import 才能正常返回。
+      let exitCode: number | undefined;
+      const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+        exitCode = code;
+        return undefined as never;
+      }) as never);
+      vi.resetModules();
+      const mod = await import("../scripts/verify-quality");
+      try {
+        const hits = mod.scanVocabGrammar();
+        // 注入崩的替身后，CLI 入口必须判定失败——这正是「门禁会拦人」的证据
+        return { hits, cliExitCode: exitCode };
+      } finally {
+        exitSpy.mockRestore();
+        vi.doUnmock("../src/engine/humanize");
+        vi.resetModules();
+      }
+    }
+
+    it("注入「一盘棋」后被检出，且同一源词只记一次就 break", async () => {
+      const { hits, cliExitCode } =
+        await scanWithMockedEngine("我们需要一盘棋好效率与深度的关系。");
+      expect(hits.length).toBeGreaterThan(0);
+      // 每个源词至多一条（break 的语义：找到一个就够）
+      expect(new Set(hits.map((h) => h.from)).size).toBe(hits.length);
+      expect(hits[0].bad).toBe("一盘棋");
+      // 门禁确实会拦人：CLI 以 1 退出
+      expect(cliExitCode).toBe(1);
+    });
+
+    it("所有源词都被判定为崩时，命中数等于词表源词数（不漏不重）", async () => {
+      const { hits } = await scanWithMockedEngine("我们需要通盘推进效率与深度的关系。");
+      const { VOCAB } = await import("../src/engine/humanize-vocab");
+      expect(hits.length).toBe(new Set(Object.keys(VOCAB)).size);
+      expect(hits.every((h) => h.bad === "通盘")).toBe(true);
+    });
+  });
 });
