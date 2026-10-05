@@ -16,7 +16,7 @@ import {
 import { fragmentFrontCanStand } from "./humanize-primitives.ts";
 import { fragmentCanStand } from "./humanize-vocab.ts";
 import { humanize } from "./humanize.ts";
-import { boostBurstinessIfLow } from "./shuffle/burstiness.ts";
+import { boostBurstinessIfLow, boostBurstiness } from "./shuffle/burstiness.ts";
 
 /** 按句末标点切句，返回去掉空白后的纯字数序列（够用，不引第三方分词） */
 function sentLens(text: string): number[] {
@@ -275,6 +275,62 @@ describe("C 类切分守卫（2026-09-30）", () => {
     // 这条断言钉死"名词内部嵌情态单字时仍须判为无谓语"。
     expect(fragmentFrontCanStand("数据显示，采用智能化系统的企业")).toBe(false);
     expect(fragmentFrontCanStand("统计表明，抓住转型机会的企业")).toBe(false);
+  });
+});
+
+/**
+ * 碎片句的落位约束（burstiness.ts 的 boostBurstiness）
+ *
+ * 碎片（"就这样。""你懂的。"）是把 CV 拉出 AI 均匀带的主力，但落位有硬约束：
+ * **绝不能落在序号句/因果句上或紧邻它们**。源码注释记着理由：
+ * 「塞在序号句/因果句与其承接句之间，会在论证链上切出断口，
+ *   读感像被人中途插了句不相干的话」。
+ *
+ * 实现是**顺延到下一个安全位**，不是直接放弃——因为少插会让节奏
+ * 重新落回 AI 均匀带（scan-bugs v5.3 会报警）。只有全篇都是逻辑句时
+ * 才彻底放弃（slot === -1 → continue）。
+ */
+describe("碎片句落位：避开序号句/因果句", () => {
+  const rng = () => 0.5; // 固定，探针实测结果确定
+  const run = (t: string) => boostBurstiness(t, rng, 1);
+
+  it("全是普通句 → 碎片按候选表顺序插入", () => {
+    // 探针实测：「就这样。」「你懂的。」依次落在第 3、5 句
+    expect(run("甲乙丙丁戊。己庚辛壬癸。子丑寅卯辰。巳午未申酉。戌亥子丑寅。甲乙丙丁。")).toBe(
+      "甲乙丙丁戊。己庚辛壬癸。就这样。子丑寅卯辰。巳午未申酉。你懂的。戌亥子丑寅。甲乙丙丁。",
+    );
+  });
+
+  it("序号句在场时碎片顺延到下一个安全位（不落在逻辑句上或紧邻）", () => {
+    // 探针实测（rng 恒 0.5、p=1）：插入的是**第二个候选「你懂的。」**而不是
+    // 第一个「就这样。」——因为原文里已经有一个「就这样。」，候选去重会跳过它
+    // （见下一条用例）。落点在第 3 句之后：前两句是逻辑句（「首先…」「其次…」），
+    // 碎片既没落在逻辑句上，也没夹在逻辑句与它的承接句之间。
+    const out = run(
+      "首先要做的是甲乙丙。戊己庚辛壬。其次是子丑寅卯辰。巳午未申酉戌。就这样。甲乙丙丁。",
+    );
+    expect(out).toContain("你懂的。");
+    expect(out).toContain("巳午未申酉戌。你懂的。");
+    // 逻辑句本身原样保留
+    expect(out).toContain("首先要做的是甲乙丙。");
+    expect(out).toContain("其次是子丑寅卯辰。");
+  });
+
+  it("全文都是逻辑句时彻底放弃插入（slot === -1）", () => {
+    // 探针实测：原样返回，一个碎片都没加
+    const allLogic = "首先甲乙丙。其次丁戊己。最后庚辛壬子丑寅卯辰。";
+    expect(run(allLogic)).toBe(allLogic);
+  });
+
+  it("原文中已有的碎片不会被重复插入", () => {
+    // 探针实测：原文里的「就这样。」占了第 1 个候选，
+    // 下一个候选「你懂的。」被插到别处，第 3 个「说白了。」也被用到——不重复
+    const out = run("就这样。甲乙丙丁戊。己庚辛壬癸。子丑寅卯辰。巳午未申酉。");
+    expect(out).toBe("就这样。甲乙丙丁戊。你懂的。己庚辛壬癸。子丑寅卯辰。说白了。巳午未申酉。");
+    // 断言每个碎片只出现一次
+    for (const f of ["就这样。", "你懂的。", "说白了。"]) {
+      expect(out.split(f).length - 1, f).toBe(1);
+    }
   });
 });
 
