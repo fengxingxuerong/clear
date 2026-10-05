@@ -8,18 +8,35 @@
  * v0.9.16 编号格式偏差已修复（原「1.」replace 残留标点、「第三：」「①」不匹配），
  * 相关用例已改为断言修复后行为；**修复动了引擎输出字节**，test:calib 的 x 轴漂移
  * 自检如变红属预期信号，需按 README 流程拿新官方点位重拟合四条体裁线。
+ *
+ * 追加扩写：直接钉 shuffle/structure.ts 的结构规则与收口闸门分支行
+ * （行 60/70/98/99/109/279/280/301/303/331/332/338/345/774/781/782/843-845/899/904），
+ * 全部确定性 rng + 表驱动风格，断言结构重排/守卫/门控的具体输出形态。
  */
 import { describe, expect, it } from "vitest";
 import {
+  breakEnumerationStructure,
+  breakSummaryTail,
   boostBurstinessIfLow,
+  capParticleSentenceDensity,
+  deParallelizeStructure,
   enforceParagraphLeadSentVariance,
+  ensureEmDashCountHardCap,
   hardNumberedEnumerationShuffle,
+  injectFirstPersonAnchorPoints,
+  shuffleSentencesSafe,
   structuralShuffleParagraph,
 } from "./humanize-shuffle.ts";
 
 const rngMid = () => 0.5;
 const rngLow = () => 0.4;
 const rngHigh = () => 0.95;
+/** 固定 rng=0.2：fixParallelRun 里 pickIdx=0 且 roll<0.3 → 走「破坏1：前加自问自答」 */
+const rngQA = () => 0.2;
+/** 固定 rng=0.32：pickIdx=0 且 0.3≤roll<0.65 → 走「破坏2：改反问句」 */
+const rngFlip = () => 0.32;
+/** 固定 rng=0.7：pickIdx=2 且 roll≥0.65 → 走「破坏3：前插碎碎念」 */
+const rngMutter = () => 0.7;
 
 /** 独立语气锚判定（与实现同口径）：纯语气短句 */
 const isStandaloneAnchor = (s: string) =>
@@ -199,5 +216,189 @@ describe("boostBurstinessIfLow（P4-B 节奏补药）", () => {
       .some((s) => isStandaloneAnchor(s.trim()));
     expect(hasAnchor).toBe(false);
     expect(out).toContain("【场景：面馆黄昏】");
+  });
+});
+
+/* =========================================================
+   追加：直接钉 structure.ts 的 P0/P1 结构规则与收口闸门分支行
+   （对应未覆盖行 60/70/98/99/109/279/280/301/303/331/332/338/345/
+     774/781/782/843-845/899/904；全部确定性 rng）
+   ========================================================= */
+
+describe("shuffleSentencesSafe（P0-1 段内句序安全重排）", () => {
+  it("强度 < 0.55 不重排，原样返回（门控行 70）", () => {
+    const sents = ["第一句内容。", "第二句内容。", "第三句内容。", "第四句内容。"];
+    expect(shuffleSentencesSafe(sents, rngMid, 0.5)).toEqual(sents);
+  });
+});
+
+describe("breakEnumerationStructure（P0-2 列举结构打散）", () => {
+  it("不足 2 句不构成列举，原样返回（行 98）", () => {
+    expect(breakEnumerationStructure(["只有一句。"], rngMid, 0.9)).toEqual(["只有一句。"]);
+  });
+
+  it("强度 < 0.5 不打散，原样返回（行 99）", () => {
+    const sents = ["首先，甲。", "其次，乙。"];
+    expect(breakEnumerationStructure(sents, rngMid, 0.4)).toEqual(sents);
+  });
+
+  it("成员之间的 <3 字碎句被跳过、继续收编后续成员（行 109 continue）", () => {
+    // 结构规则：「嗯。」不是列举成员，不能截断扫描——否则 members<2，整段放弃打散
+    const out = breakEnumerationStructure(
+      ["首先，成本这一块要单独说。", "嗯。", "其次，良率这一块也要说。", "最后，交付这一块顺带说。"],
+      rngMid,
+      0.9,
+    );
+    // rngMid=0.5 < 0.4+0.3*0.9 → 每个成员承接头换成 casual 池第 5 个「哦对了，」；碎句原样保留
+    expect(out).toEqual([
+      "哦对了，成本这一块要单独说。",
+      "嗯。",
+      "哦对了，良率这一块也要说。",
+      "哦对了，交付这一块顺带说。",
+    ]);
+    expect(out.join("")).not.toContain("首先，");
+  });
+});
+
+describe("breakSummaryTail（P0-3 总分总尾总结句挪位）", () => {
+  it("中间句以「——」开头 → 非自由句（行 60），无空位时尾总结句插到固定中位", () => {
+    const sents = [
+      "开头一句普通内容。",
+      "——补充一句放在中间。",
+      "再一句普通内容。",
+      "综上所述，就这样吧。",
+    ];
+    const res = breakSummaryTail(sents, rngMid, 0.6);
+    expect(res.splitAfter).toBeUndefined(); // 强度 0.6 < 0.75，不触发拆段
+    // 「——补充…」被行 60 判为非自由句 → freeSpots 空 → 走 mid=⌊3×(0.3+0.5×0.3)⌋=1 的兜底插位
+    expect(res.sentences).toEqual([
+      "开头一句普通内容。",
+      "综上所述，就这样吧。",
+      "——补充一句放在中间。",
+      "再一句普通内容。",
+    ]);
+  });
+});
+
+describe("deParallelizeStructure（P1-1 排比/对仗结构破坏）", () => {
+  it("不足 3 句不构成排比，原样返回（行 279）", () => {
+    expect(deParallelizeStructure(["甲。", "乙。"], rngMid, 0.6)).toEqual(["甲。", "乙。"]);
+  });
+
+  it("强度 < 0.55 不破坏，原样返回（行 280）", () => {
+    const sents = ["甲。", "乙。", "丙。"];
+    expect(deParallelizeStructure(sents, rngMid, 0.5)).toEqual(sents);
+  });
+
+  it("无 CJK/ASCII 头签名的句子直通输出、不被排比机吞掉（行 301）", () => {
+    // 「①这一点…」的 headKey 为空（① 不在头签名字符类里）→ 必须原样 push 出去
+    const sents = ["①这一点得先说清楚。", "研究发现的方案其实挺好。", "研究发现的流程其实很顺。"];
+    expect(deParallelizeStructure(sents, rngMid, 0.6)).toEqual(sents);
+  });
+
+  // 末尾 3 连同头句组：循环结束后必须走兜底 flush（行 303），句子一条都不能丢
+  const PARA_RUN = [
+    "先交代一句别的内容。",
+    "研究发现这套方案里，第一方面表现不错。",
+    "研究发现这套方案里，第二方面表现不错。",
+    "研究发现这套方案里，第三方面表现不错。",
+  ];
+
+  it("roll<0.3 且强度≥0.65：句组首句前加自问自答（行 331/332 + 303 兜底 flush）", () => {
+    const out = deParallelizeStructure(PARA_RUN, rngQA, 0.9);
+    // rngQA=0.2 → pickIdx=0、roll=0.2、pick 池第 2 个「真的吗？」；第 2 次挑选撞已改句被丢弃
+    expect(out).toEqual([
+      "先交代一句别的内容。",
+      "真的吗？研究发现这套方案里，第一方面表现不错。",
+      "研究发现这套方案里，第二方面表现不错。",
+      "研究发现这套方案里，第三方面表现不错。",
+    ]);
+  });
+
+  it("0.3≤roll<0.65 且句子能安全改写：句尾句号改反问（行 338）", () => {
+    const CAN_FLIP_RUN = [
+      "另外补一句别的话题。",
+      "应该把这一步先做完再看效果。",
+      "应该把这一步先记在本子上。",
+      "应该把这一步先同步给团队。",
+    ];
+    const out = deParallelizeStructure(CAN_FLIP_RUN, rngFlip, 0.9);
+    // rngFlip=0.32 → pickIdx=0、canFlip 命中「应该…。」、pick 第 1 个「吗？」
+    expect(out).toEqual([
+      "另外补一句别的话题。",
+      "应该把这一步先做完再看效果吗？",
+      "应该把这一步先记在本子上。",
+      "应该把这一步先同步给团队。",
+    ]);
+    expect(out[1]).not.toMatch(/[。]$/);
+  });
+
+  it("roll≥0.65：句组第三句前插碎碎念短语（行 345）", () => {
+    const out = deParallelizeStructure(PARA_RUN, rngMutter, 0.9);
+    // rngMutter=0.7 → pickIdx=2、pick 池第 5 个「哦不对，」
+    expect(out).toEqual([
+      "先交代一句别的内容。",
+      "研究发现这套方案里，第一方面表现不错。",
+      "研究发现这套方案里，第二方面表现不错。",
+      "哦不对，研究发现这套方案里，第三方面表现不错。",
+    ]);
+  });
+});
+
+describe("结构层收口闸门（破折号硬上限 / 语气词密度上限）", () => {
+  it("全部破折号都是自问自答型：逐处占位跳过、need 耗不尽 → lastIndexOf=-1 收口（行 774/781/782）", () => {
+    const t = "你可能会问——这事儿靠谱吗。又问——到底行不行。";
+    const out = ensureEmDashCountHardCap(t, 0);
+    // 前字「问」在 skipChars 里：宁可超 cap 也保住自问自答；\x00 占位符最终还原回原文
+    expect(out).toBe(t);
+    expect(out).not.toContain("\x00");
+  });
+
+  it("超额句尾挂词：只剥语气词本体、句子保留（行 843-845）", () => {
+    // 注意：「吧」不在 PARTICLE_SUFFIX_RE 表里（只有 好吧/对哦/是啊 + 单字表），
+    // 这里必须用「哦」才能真正走进行 841 的剥离分支
+    const out = capParticleSentenceDensity("这款产品续航不错哦。之前用过的一款也挺好哦。", 1);
+    // 首条在 maxPerPara=1 限额内保留「哦」；第二条超额 → 只剥「哦」、句子本体不动
+    expect(out).toBe("这款产品续航不错哦。之前用过的一款也挺好。");
+    expect(out).not.toContain("挺好哦");
+  });
+});
+
+describe("injectFirstPersonAnchorPoints（P3-4 第一人称判断锚点）", () => {
+  /** 复用的长句填充块：无数据标记、无空白，方便按字数断言 */
+  const FILLER =
+    "整个团队为了把这条链路跑通前前后后折腾了好几个星期的时间，中间推翻重来的方案就有三版，最后落地的这版反而是改动最小的一版";
+
+  it("≥200 字但全文无数据标记、仅 3 句：兜底槽位也凑不出 → 原文原样返回（行 899）", () => {
+    const t =
+      "第三方的报告里提到的这套口径，" +
+      FILLER +
+      "。" +
+      FILLER +
+      "。" +
+      "从同行交流的情况看，" +
+      FILLER +
+      "。";
+    // 前置条件：不是走「<200 字早退」，而是槽位兜底也失败（3 句时 step=2、k<2 不成立）
+    expect(t.replace(/\s/g, "").length).toBeGreaterThanOrEqual(200);
+    expect(t.split(/(?<=[。！？])/).filter((s) => s.trim())).toHaveLength(3);
+    expect(injectFirstPersonAnchorPoints(t, rngMid, 0.9)).toBe(t);
+  });
+
+  it("≥600 字 + 两个数据标记槽：useSlots 需排序，注入 2 处判断锚（行 904）", () => {
+    const t =
+      "第三方的数据显示，" + FILLER.repeat(4) + "。" + "上周的调研显示，" + FILLER.repeat(4) + "。" +
+      FILLER.repeat(4) + "。";
+    const chars = t.replace(/\s/g, "").length;
+    // targetCount = ⌊chars/300⌋ ≥ 2 → useSlots 至少 2 个元素 → sort 比较器必须执行
+    expect(chars).toBeGreaterThanOrEqual(600);
+    const out = injectFirstPersonAnchorPoints(t, rngMid, 0.9);
+    expect(out).not.toBe(t);
+    // 两个数据标记各贡献一个槽位 → 恰好注入 2 处主观判断锚
+    expect(out.match(/我个人觉得|要我说，|这点我持保留意见|我的看法是|我觉得口径|在我看来/g)).toHaveLength(2);
+    // 原文内容一字不丢
+    expect(out).toContain("第三方的数据显示");
+    expect(out).toContain("上周的调研显示");
+    expect(out).toContain("最后落地的这版反而是改动最小的一版");
   });
 });

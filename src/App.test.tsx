@@ -8,11 +8,11 @@
  * 两种产出来源的界面文案）/ 空输入守卫 / Ctrl+Enter 热键 / 强度持久化 / 历史落盘。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, fireEvent, cleanup, waitFor } from "@testing-library/react";
+import { render, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
 import App from "./App";
 import { aiScore } from "./engine/humanize";
 import { loadHistory } from "./store-history";
-import { loadIntensity, saveDraft, loadDraft } from "./store";
+import { loadIntensity, saveDraft, loadDraft, loadZhuqueMode, loadDetector } from "./store";
 import { DEFAULT_API } from "./api/llm-config";
 import { DEFAULT_DETECTOR } from "./api/detector";
 
@@ -27,6 +27,8 @@ const {
   ensurePplModelMock,
   pplStatusMock,
   isPplReadyMock,
+  detectSemanticStableMock,
+  semanticAvailableMock,
 } = vi.hoisted(() => ({
   runHumanizeMock: vi.fn(),
   readDocxTextMock: vi.fn(),
@@ -38,6 +40,9 @@ const {
   ensurePplModelMock: vi.fn(),
   pplStatusMock: vi.fn(),
   isPplReadyMock: vi.fn(() => false),
+  // 语义层：默认不可用（与真实 Web 版一致）；个别用例临时打开验证回调链
+  detectSemanticStableMock: vi.fn(),
+  semanticAvailableMock: vi.fn(() => false),
 }));
 
 // 混合 mock：保留真实导出（DEFAULT_API / DEFAULT_DETECTOR / SENSENOVA_PRESET 等
@@ -71,8 +76,8 @@ vi.mock("./ppl/ppl-client", async (importOriginal) => ({
 
 vi.mock("./api/zhuque-semantic", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./api/zhuque-semantic")>()),
-  detectSemanticStable: vi.fn(),
-  semanticAvailable: () => false,
+  detectSemanticStable: detectSemanticStableMock,
+  semanticAvailable: semanticAvailableMock,
 }));
 
 vi.mock("./api/detector", async (importOriginal) => ({
@@ -118,6 +123,9 @@ beforeEach(() => {
   pplStatusMock.mockReset();
   isPplReadyMock.mockReset();
   isPplReadyMock.mockReturnValue(false);
+  detectSemanticStableMock.mockReset();
+  semanticAvailableMock.mockReset();
+  semanticAvailableMock.mockReturnValue(false);
   writeDocxTextMock.mockReset();
   writeDocxTextMock.mockImplementation((t: string) => docxReal.writeDocxText!(t));
   // happy-dom 未实现 URL.createObjectURL/revokeObjectURL——直接赋值 stub（下载路径断言用）
@@ -130,6 +138,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   localStorage.clear();
+  // 加密桥只在个别用例里临时挂上；测完必摘，避免污染后续用例的 hasSecureStore 判定
+  delete (window as unknown as { secureStore?: unknown }).secureStore;
 });
 
 describe("App 渲染冒烟", () => {
@@ -636,5 +646,197 @@ describe("App 集成：评分 / 检测闭环 / 设置 / 历史 / 草稿 / 面板
       { timeout: 1500 },
     );
     expect(loadDraft()?.output ?? "").toBe("");
+  });
+});
+
+/* -------------------------------------------------------------------------
+ * 行覆盖补锁（第六轮）：针对 App.tsx 此前 100% 未触达的守卫/回调行——
+ * 草稿 saveDraft 分支 / 输出面板 onChange / 导入空选择 / 朱雀增强开关 /
+ * 评判与送检守卫 / 加密桥保存分支 / 面板与弹窗回调。
+ * 网络依旧全桩：fetch 不出站，语义层、检测器、LLM 均为 mock。
+ * ---------------------------------------------------------------------- */
+describe("App 守卫分支与面板回调（行覆盖补锁）", () => {
+  const ENABLED_DETECTOR = {
+    ...DEFAULT_DETECTOR,
+    enabled: true,
+    url: "http://detector.local/score",
+  };
+  const SEEDED_DETECTOR_JSON = JSON.stringify({
+    enabled: true,
+    url: "http://detector.local/score",
+    apiKey: "sk-det",
+    scorePath: "score",
+    scale: "0-100",
+  });
+
+  async function humanizeFirst(utils: ReturnType<typeof render>) {
+    runHumanizeMock.mockResolvedValue(makeRunResult(OUTPUT_TEXT, "local"));
+    const { getByText, getByPlaceholderText } = utils;
+    fireEvent.change(getByPlaceholderText(/把 AI 写的文章粘进来/), {
+      target: { value: INPUT_TEXT },
+    });
+    fireEvent.click(getByText("去味"));
+    await waitFor(() => {
+      expect((getByPlaceholderText(/点击「去味」生成/) as HTMLTextAreaElement).value).toBe(
+        OUTPUT_TEXT,
+      );
+    });
+  }
+
+  it("草稿防抖：有内容停手 500ms 后走 saveDraft 落盘（else 分支）", async () => {
+    const { getByPlaceholderText } = await renderApp();
+    fireEvent.change(getByPlaceholderText(/把 AI 写的文章粘进来/), {
+      target: { value: "这次真要落盘的草稿" },
+    });
+    await waitFor(
+      () => {
+        expect(loadDraft()?.input).toBe("这次真要落盘的草稿");
+      },
+      { timeout: 1500 },
+    );
+    expect(loadDraft()?.output ?? "").toBe("");
+  });
+
+  it("输出面板手工润色：键入经 handleOutputChange 落状态并解锁下游按钮", () => {
+    const { getByPlaceholderText, getByText } = render(<App />);
+    const outPane = getByPlaceholderText(/点击「去味」生成/) as HTMLTextAreaElement;
+    expect((getByText("复制") as HTMLButtonElement).disabled).toBe(true);
+    expect((getByText("对比") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(outPane, { target: { value: OUTPUT_TEXT } });
+    expect(outPane.value).toBe(OUTPUT_TEXT);
+    expect((getByText("复制") as HTMLButtonElement).disabled).toBe(false);
+    expect((getByText("对比") as HTMLButtonElement).disabled).toBe(true); // 对比还要有原文
+  });
+
+  it("文件选择器未选中任何文件：立即返回，不读文件不改面板", () => {
+    const { container, getByPlaceholderText, queryByText } = render(<App />);
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(fileInput);
+    expect(readDocxTextMock).not.toHaveBeenCalled();
+    expect(queryByText(/已导入/)).toBeNull();
+    expect(queryByText(/docx 解析失败/)).toBeNull();
+    expect((getByPlaceholderText(/把 AI 写的文章粘进来/) as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("「朱雀增强」开关：勾选写入 store 并点亮 active 标签", () => {
+    const { container, getByText } = render(<App />);
+    const label = getByText("🛡 朱雀增强").closest("label")!;
+    const checkbox = label.querySelector("input") as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+    expect(container.querySelector(".mode-tag.active")).toBeNull();
+    fireEvent.click(checkbox);
+    expect(checkbox.checked).toBe(true);
+    expect(container.querySelector(".mode-tag.active")).toBeTruthy();
+    expect(loadZhuqueMode()).toBe(true);
+  });
+
+  it("「用 LLM 评判」守卫：Key 全是空白时按钮可点但直接返回、不发请求", async () => {
+    const utils = render(<App initialApi={{ ...DEFAULT_API, enabled: true, apiKey: "   " }} />);
+    await humanizeFirst(utils);
+    const btn = utils.getByText("用 LLM 评判") as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
+    fireEvent.click(btn);
+    expect(judgeScoreStableMock).not.toHaveBeenCalled();
+    expect(utils.queryByText(/评判中…/)).toBeNull();
+    expect(utils.queryByText(/LLM 评判失败/)).toBeNull();
+  });
+
+  it("「用外部检测器」手动送检失败：报真实原因（区别于自动送检文案）", async () => {
+    scoreViaDetectorMock.mockRejectedValue(new Error("502 Bad Gateway"));
+    const utils = render(<App initialDetector={ENABLED_DETECTOR} />);
+    await humanizeFirst(utils);
+    // 先等去味内自动送检的失败文案落地，排除异步竞态
+    await waitFor(() => {
+      expect(utils.getByText(/检测器送检失败：502/)).toBeTruthy();
+    });
+    fireEvent.click(utils.getByText("用外部检测器"));
+    await waitFor(() => {
+      expect(utils.getByText(/检测器调用失败：502 Bad Gateway/)).toBeTruthy();
+    });
+    expect(scoreViaDetectorMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("设置保存（挂加密桥·写入成功）：检测器 Key 进 secureStore 后抹掉明文", async () => {
+    localStorage.setItem("aihumanizer.detector", SEEDED_DETECTOR_JSON);
+    const setMock = vi.fn(async (_k: string, _v: string | null) => true);
+    (window as unknown as { secureStore: unknown }).secureStore = {
+      get: async () => null,
+      set: setMock,
+    };
+    const utils = render(<App />);
+    expect(loadDetector().apiKey).toBe("sk-det"); // 前置：明文确实存在
+    fireEvent.click(utils.getByText("⚙ 设置"));
+    fireEvent.click(utils.getByText("保存"));
+    await waitFor(() => {
+      expect(utils.getByText(/设置已保存（仅存本地）/)).toBeTruthy();
+    });
+    expect(setMock).toHaveBeenCalledWith("detectorApiKey", "sk-det");
+    expect(loadDetector().apiKey).toBe(""); // okDet=true → saveDetector 剥掉明文
+  });
+
+  it("设置保存（挂加密桥·写入失败）：明文原样保留，绝不能抹 Key", async () => {
+    localStorage.setItem("aihumanizer.detector", SEEDED_DETECTOR_JSON);
+    const setMock = vi.fn(async (_k: string, _v: string | null) => false);
+    (window as unknown as { secureStore: unknown }).secureStore = {
+      get: async () => null,
+      set: setMock,
+    };
+    const utils = render(<App />);
+    fireEvent.click(utils.getByText("⚙ 设置"));
+    fireEvent.click(utils.getByText("保存"));
+    await waitFor(() => {
+      expect(utils.getByText(/设置已保存（仅存本地）/)).toBeTruthy();
+    });
+    expect(setMock).toHaveBeenCalledWith("detectorApiKey", "sk-det");
+    expect(loadDetector().apiKey).toBe("sk-det"); // okDet=false → 原样落盘
+  });
+
+  it("朱雀面板「看 12 维特征」：onToggleFeatures 开合生效", async () => {
+    const utils = render(<App />);
+    await humanizeFirst(utils);
+    fireEvent.click(utils.getByText("朱雀检测"));
+    expect(utils.getByText("看 12 维特征")).toBeTruthy();
+    fireEvent.click(utils.getByText("看 12 维特征"));
+    expect(utils.getByText("收起特征")).toBeTruthy();
+    expect(utils.getByText(/条越长越像 AI/)).toBeTruthy();
+    fireEvent.click(utils.getByText("收起特征"));
+    expect(utils.getByText("看 12 维特征")).toBeTruthy();
+  });
+
+  it("朱雀面板「用 LLM 补语义层」：onRunSemantic 回调触发，失败文案如实回显", async () => {
+    semanticAvailableMock.mockReturnValue(true);
+    detectSemanticStableMock.mockRejectedValue(new Error("语义超时"));
+    const utils = render(<App />);
+    await humanizeFirst(utils);
+    fireEvent.click(utils.getByText("朱雀检测"));
+    const btn = utils.getByText("用 LLM 补语义层") as HTMLButtonElement;
+    expect(btn.disabled).toBe(false); // canRunSemantic 才放行
+    fireEvent.click(btn);
+    await waitFor(() => {
+      expect(utils.getByText(/语义层评判失败：语义超时/)).toBeTruthy();
+    });
+    expect(detectSemanticStableMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("校准实验室：粘贴真值回填受控输入（onPaste）；「完成」关闭弹窗（onClose）", async () => {
+    const utils = render(<App />);
+    await humanizeFirst(utils);
+    fireEvent.click(utils.getByText("朱雀检测"));
+    fireEvent.click(utils.getByText(/校准实验室（攒真值）/));
+    fireEvent.change(utils.getByPlaceholderText(/贴一篇 AI 写的原文/), {
+      target: { value: INPUT_TEXT },
+    });
+    fireEvent.click(utils.getByText("生成本批样本（4 条）"));
+    // 注意：主朱雀面板也有同 placeholder 的回填框，查询必须圈在弹窗内
+    const modal = utils.container.querySelector(".modal") as HTMLElement;
+    expect(modal).toBeTruthy();
+    const pasteInputs = within(modal).getAllByPlaceholderText(/粘贴官方结果/) as HTMLInputElement[];
+    expect(pasteInputs.length).toBe(4);
+    fireEvent.change(pasteInputs[0], { target: { value: "AI生成 99.99%" } });
+    // 受控输入：值留在输入框 = onPaste 确实把状态更新了（否则 React 会弹回空串）
+    expect(pasteInputs[0].value).toBe("AI生成 99.99%");
+    fireEvent.click(within(modal).getByText("完成"));
+    expect(utils.container.querySelector(".modal")).toBeNull();
+    expect(utils.queryByText(/校准实验室 · 攒真值/)).toBeNull();
   });
 });

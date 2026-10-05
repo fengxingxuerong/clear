@@ -16,6 +16,11 @@ afterEach(() => cleanup());
 const EXPO_TEXT =
   "值得注意的是，随着人工智能技术的快速发展，AI 写作工具应运而生。综上所述，数字化办公不仅极大地提升了工作效率，而且有效地降低了运营成本。然而，技术的变革也带来了一系列值得关注的挑战。与此同时，如何平衡创新与风险，成为至关重要的课题。从长远来看，建立完善的监管体系，推动可持续发展，具有十分重要的意义。";
 
+/** 叙事文样本：自动识别走 rule 3 → narrative，且满足「疑似纯人写原稿」快捷按钮的
+ *  特征门槛（narPastRatio 0.089 ≥ 0.04、expoScore 0.15 < 0.35、dlgColonRatio 0 < 0.03） */
+const NARR_TEXT =
+  "去年春天我去了苏州旅行。到了古镇以后，我们住在一家小旅馆里，老板娘端上了桂花糕。我和朋友沿着河边散步，聊到很晚才回房。第二天我们又去了园林，在假山旁拍了很多照片。回到旅馆时已经下起了小雨，屋檐下的水滴声让人想起从前的日子。";
+
 const after: ScoreBreakdown = {
   score: 20,
   formulaicHits: 2,
@@ -84,6 +89,28 @@ describe("BenchmarkPanel（对标评分面板）", () => {
     expect(getByText(/残留痕迹：口语对仗/)).toBeTruthy();
   });
 
+  it("评判中/检测中状态：按钮换文案且禁用，点击不触发回调", () => {
+    const onJudge = vi.fn();
+    const onDetect = vi.fn();
+    const p = base({
+      api: { ...DEFAULT_API, enabled: true, apiKey: "sk-x" },
+      detector: { ...DEFAULT_DETECTOR, enabled: true, url: "https://d/api" },
+      judging: true,
+      detecting: true,
+      onJudge,
+      onDetect,
+    });
+    const { getByText } = render(<BenchmarkPanel {...p} />);
+    const judge = getByText("评判中…").closest("button") as HTMLButtonElement;
+    const detect = getByText("检测中…").closest("button") as HTMLButtonElement;
+    expect(judge.disabled).toBe(true);
+    expect(detect.disabled).toBe(true);
+    fireEvent.click(judge);
+    fireEvent.click(detect);
+    expect(onJudge).not.toHaveBeenCalled();
+    expect(onDetect).not.toHaveBeenCalled();
+  });
+
   it("深度轮次分渲染（含失败轮显示「失败」与目标分）", () => {
     const { getByText } = render(<BenchmarkPanel {...base({ roundScores: [60, -1, 25] })} />);
     expect(getByText(/60 → 失败 → 25/)).toBeTruthy();
@@ -96,6 +123,38 @@ describe("BenchmarkPanel（对标评分面板）", () => {
     // main 线：2.014 × 20 + 19.06 ≈ 59.3% → 离 40% 过人线还差
     expect(container.textContent).toContain("离过人线还差");
     expect(container.textContent).toContain("💡 建议行动");
+  });
+
+  /* ---- v3 建议行动卡的三档预测分支（pct ≤20 / 20~40 / >80 + 饱和区） ---- */
+
+  it("预测 ≤20% 且非人写线：建议行动给「已稳过」，徽章显示领先边际", () => {
+    // aiScore=0 → main 线 2.014×0+19.06=19.06% ≤20：走 pct≤20 的 recAction（非 humanWarn 那档）
+    const { container } = render(<BenchmarkPanel {...base({ after: { ...after, score: 0 } })} />);
+    expect(container.textContent).toContain("已稳过。如果还想更稳");
+    expect(container.textContent).toContain("✅ 19.1%");
+    expect(container.textContent).toContain("✅ 领先过人线 20.9 pp 边际");
+  });
+
+  it("预测 20~40%：建议行动给「已过但离过线近」，🟢 图标 + 过人线 tip", () => {
+    // aiScore=10 → main 线 2.014×10+19.06≈39.2%：走 20<pct≤40 的 recAction + 🟢 图标档
+    const { container } = render(<BenchmarkPanel {...base({ after: { ...after, score: 10 } })} />);
+    expect(container.textContent).toContain("已过但离过线近");
+    expect(container.textContent).toContain("🟢 39.2%");
+    expect(container.textContent).toContain(
+      "已过 论说过人线 aiScore ≤ 10.4；如需更稳，再跑一轮 0.9 朱雀档",
+    );
+    expect(container.textContent).toContain("✅ 领先过人线 0.8 pp 边际");
+  });
+
+  it("预测进入饱和区（aiScore ≥ satX）：饱和 tip + 接近饱和建议 + 60pp 差距徽章", () => {
+    // aiScore=50 ≥ main 线 satX=40.2 → 预测 clamp 到 100%：saturated tip + pct>80 的 recAction
+    const { container } = render(<BenchmarkPanel {...base({ after: { ...after, score: 50 } })} />);
+    expect(container.textContent).toContain("🔴 100.0%");
+    expect(container.textContent).toContain(
+      "预测已饱和到 98~99% 区（aiScore≥40 进入饱和），官方基本必判 AI",
+    );
+    expect(container.textContent).toContain("接近饱和！先用 humanize-vocab");
+    expect(container.textContent).toContain("⚠️ 离过人线还差 60.0 pp");
   });
 
   it("自动识别徽章显示体裁（论说文）且默认轨道为 main", () => {
@@ -117,6 +176,51 @@ describe("BenchmarkPanel（对标评分面板）", () => {
       b.textContent?.includes("回到自动"),
     ) as HTMLButtonElement;
     expect(reset).toBeTruthy();
+  });
+
+  it("手动切回与自动识别一致的轨道：override 被解除、徽章回到「自动识别」", () => {
+    const onGenreChange = vi.fn();
+    const { container } = render(<BenchmarkPanel {...base({ onGenreChange })} />);
+    const select = container.querySelector("select") as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "dialogue" } });
+    expect(container.textContent).toContain("⚙️ 手动轨道");
+    // 再选回 auto.genre（main）→ next === auto.genre，走 else-if 把 override 清掉
+    fireEvent.change(select, { target: { value: "main" } });
+    expect(onGenreChange).toHaveBeenCalledWith("main");
+    expect(select.value).toBe("main");
+    expect(container.textContent).toContain("🤖 自动识别");
+    expect(container.textContent).not.toContain("⚙️ 手动轨道");
+  });
+
+  it("「回到自动」按钮：清 override、轨道按 auto 重切并上抛 null 给引擎", () => {
+    const onGenreChange = vi.fn();
+    const { container, getByText, queryByText } = render(
+      <BenchmarkPanel {...base({ onGenreChange })} />,
+    );
+    const select = container.querySelector("select") as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "dialogue" } });
+    expect(getByText("回到自动")).toBeTruthy();
+    fireEvent.click(getByText("回到自动"));
+    expect(onGenreChange).toHaveBeenLastCalledWith(null);
+    expect(select.value).toBe("main");
+    expect(container.textContent).toContain("🤖 自动识别");
+    expect(container.textContent).not.toContain("⚙️ 手动轨道");
+    // override 解除后「回到自动」按钮不再渲染
+    expect(queryByText("回到自动")).toBeNull();
+  });
+
+  it("未传可选的 onGenreChange：切轨与「回到自动」照常工作且不抛错", () => {
+    const { container, getByText } = render(
+      <BenchmarkPanel {...base({ onGenreChange: undefined })} />,
+    );
+    const select = container.querySelector("select") as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "dialogue" } });
+    expect(select.value).toBe("dialogue");
+    expect(container.textContent).toContain("⚙️ 手动轨道");
+    // 回到自动走 onGenreChange?.(null) 可选链：缺省时安全跳过
+    fireEvent.click(getByText("回到自动"));
+    expect(select.value).toBe("main");
+    expect(container.textContent).toContain("🤖 自动识别");
   });
 
   it("预测值随体裁轨道切换重算（对话线截距不同）", () => {
@@ -141,6 +245,24 @@ describe("BenchmarkPanel（对标评分面板）", () => {
     expect(onGenreChange).toHaveBeenCalledWith(null);
   });
 
+  it("疑似纯人写原稿快捷按钮：点击切 human 负斜率轨道并显示人写警示横幅", () => {
+    const onGenreChange = vi.fn();
+    const { container, getByText, queryByText } = render(
+      <BenchmarkPanel {...base({ output: NARR_TEXT, onGenreChange })} />,
+    );
+    const select = container.querySelector("select") as HTMLSelectElement;
+    expect(select.value).toBe("narrative"); // 自动识别命中叙事线（rule 3）
+    fireEvent.click(getByText("🚩 疑似纯人写原稿 → 切负斜率轨道(H0 官=15%)"));
+    // 上抛 humanHand + 轨道切到 human：-0.3×20+18 = 12.0%
+    expect(onGenreChange).toHaveBeenLastCalledWith("humanHand");
+    expect(select.value).toBe("human");
+    expect(container.textContent).toContain("⚙️ 手动轨道");
+    expect(container.textContent).toContain("✅ 12.0%");
+    expect(container.textContent).toContain("请不要跑去味"); // humanWarn 警示横幅
+    expect(queryByText(/切负斜率轨道/)).toBeNull(); // 切走后快捷按钮消失
+    expect(getByText(/回到三分自动识别/)).toBeTruthy(); // 换成「回到三分」按钮
+  });
+
   it("朱雀送检行：手动分数上抛；回填 <30 显示 ✅、≥30 显示 ❌", () => {
     const onManualScore = vi.fn();
     const p = base({ onManualScore });
@@ -152,6 +274,28 @@ describe("BenchmarkPanel（对标评分面板）", () => {
     expect(container.textContent).toContain("朱雀：28 ✅");
     rerender(<BenchmarkPanel {...base({ onManualScore, zhuqueManualScore: "65" })} />);
     expect(container.textContent).toContain("朱雀：65 ❌");
+  });
+
+  it("朱雀送检按钮：复制去味文本、打开官方送检页并上抛提示语", () => {
+    const onNote = vi.fn();
+    // 用可断言的桩替换 clipboard 与 window.open，避免真实打开浏览器页
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+    const { getByText } = render(<BenchmarkPanel {...base({ onNote })} />);
+    fireEvent.click(getByText("🔍 朱雀送检（免费网页版）"));
+    expect(writeText).toHaveBeenCalledTimes(1);
+    expect(writeText).toHaveBeenCalledWith(EXPO_TEXT);
+    expect(openSpy).toHaveBeenCalledTimes(1);
+    expect(openSpy).toHaveBeenCalledWith(
+      "https://matrix.tencent.com/ai-detect/ai_gen_txt/",
+      "_blank",
+    );
+    expect(onNote).toHaveBeenCalledTimes(1);
+    expect(onNote).toHaveBeenCalledWith(
+      "已复制去味文本并打开朱雀检测页——粘贴检测后，在下方填入朱雀分",
+    );
+    openSpy.mockRestore();
   });
 
   it("API 与检测器都未启用时显示免费路径提示", () => {
@@ -186,5 +330,18 @@ describe("BenchmarkPanel（对标评分面板）", () => {
     );
     expect(container.textContent).toContain("LLM 评判 85");
     expect(container.textContent).not.toContain("外部检测器 75");
+  });
+
+  it("分歧在人写带之外（本地 40 / 评判 90）：warn 级黄色横幅，文案不扣「人写带」帽子", () => {
+    // local 40 > AI_SCORE_HUMAN_MAX(27)，gap 50 ≥30、外部 90 ≥60 → warn 而非 severe
+    const { container, getByText } = render(
+      <BenchmarkPanel {...base({ after: { ...after, score: 40 }, judgeScore: 90 })} />,
+    );
+    expect(container.textContent).toContain("两把尺分歧 50 分（本地 40 / LLM 评判 90）");
+    expect(container.textContent).not.toContain("（人写带）");
+    // warn 用黄色底（rgba(250,204,21,0.1)），不是 severe 的红色底
+    const row = getByText(/两把尺分歧/).closest(".bench-row") as HTMLElement;
+    const style = (row.getAttribute("style") ?? "").replace(/\s/g, "");
+    expect(style).toContain("rgba(250,204,21,0.1)");
   });
 });
