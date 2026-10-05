@@ -15,6 +15,7 @@ import {
 } from "./humanize-shuffle.ts";
 import { fragmentFrontCanStand } from "./humanize-primitives.ts";
 import { fragmentCanStand } from "./humanize-vocab.ts";
+import { humanize } from "./humanize.ts";
 
 /** 按句末标点切句，返回去掉空白后的纯字数序列（够用，不引第三方分词） */
 function sentLens(text: string): number[] {
@@ -273,5 +274,44 @@ describe("C 类切分守卫（2026-09-30）", () => {
     // 这条断言钉死"名词内部嵌情态单字时仍须判为无谓语"。
     expect(fragmentFrontCanStand("数据显示，采用智能化系统的企业")).toBe(false);
     expect(fragmentFrontCanStand("统计表明，抓住转型机会的企业")).toBe(false);
+  });
+});
+
+/**
+ * 替换层守卫（humanize-guard.ts 的 judgeGuardBlocks）
+ *
+ * 与上面那些「切句守卫」不同，这一层管的是**能不能替换某个词**：
+ * 技术文本里中文动词与英文标识符/数字/路径紧邻时，替换后极易产出
+ * "不帮 CommonJS"、"预搭阶段" 这类语义错误。
+ *
+ * 探针实测的对照（intensity 0.9 + zhuqueMode，seed 固定）：
+ *   「优化 CommonJS」→「调好 CommonJS」  ← 放行
+ *   「优化CommonJS」 → 原样不动        ← before 末尾是 ASCII，守卫拦下
+ */
+describe("混排守卫：中文动词紧贴 ASCII 标识符时不替换", () => {
+  const run = (s: string) => humanize(s, { intensity: 0.9, zhuqueMode: true, seed: 42 });
+
+  it("带空格 → 正常替换", () => {
+    expect(run("优化 CommonJS")).not.toBe("优化 CommonJS");
+    expect(run("优化 CommonJS")).toContain("CommonJS"); // 标识符本身必须完好
+  });
+
+  it("紧贴 ASCII → 整个替换被拦下，原样返回", () => {
+    expect(run("优化CommonJS")).toBe("优化CommonJS");
+  });
+
+  it("守卫不区分 ASCII 的具体种类（字母/点/斜杠/数字/下划线/连字符）", () => {
+    // 判据是单个字符类 /[A-Za-z0-9._\-/]$/，所以这些都该被拦
+    for (const s of ["优化CommonJS", "优化node.js", "优化a/b", "优化v2", "优化a_b", "优化a-b"]) {
+      expect(run(s)).toBe(s);
+    }
+  });
+
+  it("守卫不误伤：不含英文的普通中文照样被改写", () => {
+    // 这条防的是「守卫扩大到所有句子」的退化写法。
+    // 探针实测（seed 42）：「我们要持续优化这项工作」→「我们要始终调好这项工作」。
+    // 另一条对照：「这个方案很不错」实测**不变**——短句里没有可替换的目标，
+    // 不是守卫拦的，所以不能拿它当「会被改写」的样本。
+    expect(run("我们要持续优化这项工作")).toBe("我们要始终调好这项工作");
   });
 });
