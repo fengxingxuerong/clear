@@ -100,6 +100,34 @@ describe("localHardGate（本地指纹+忠实度硬门槛）", () => {
     const clean = localHardGate(original, "数字化转型是必由之路。这条路要走很久。别犹豫。");
     expect(clean.some((s) => s.includes("删减残留"))).toBe(false);
   });
+
+  /**
+   * 「孤词成句」的判定靠两个**边界**：`prevOk`（原文里词前是否连着更多内容）
+   * 与 `nextOk`（词后是否连着）。判据是 `!prevOk || !nextOk`——
+   * 只要有一侧连着更多内容，就算「原本是更长表述的一部分」。
+   *
+   * 之前只从 localHardGate 外层测过 true/false，没单独钉这三个组合。
+   * 探针实测：**五种情形全部报同一个 issue**（含「原文里词前后都没连着」那档），
+   * 所以别指望用它们区分行为——区别只在文案里的词。
+   */
+  it("孤词判定：原文两侧边界的四种组合都报同一句话（边界是「至少一侧」）", () => {
+    const msg = "疑似删减残留：孤词成句「方案」在原文中是更长表述的一部分，主谓残缺";
+    const cases: [string, string, string][] = [
+      ["原文里词前连着内容", "我们最终敲定了方案。", "方案。"],
+      ["原文里词后连着内容", "方案已经确定了。", "方案。"],
+      ["原文里前后都连着", "前面讲了背景，然后方案，最后收尾。", "方案。"],
+      ["原文里词就在开头", "方案很好。", "方案。"],
+    ];
+    for (const [label, orig, rew] of cases) {
+      expect(deletionStubIssues(orig, rew), label).toEqual([msg]);
+    }
+  });
+
+  it("候选稿里没有孤词 → 空数组（stubs 为空直接返回，不编造问题）", () => {
+    // 探针实测：完全相同的文本 → []；有完整句子 → []
+    expect(deletionStubIssues("甲乙丙丁。", "甲乙丙丁。")).toEqual([]);
+    expect(deletionStubIssues("方案很好。", "方案很好。")).toEqual([]);
+  });
 });
 
 describe("buildRevisionPrompt（篇章层定向修法）", () => {
