@@ -332,6 +332,37 @@ describe("碎片句落位：避开序号句/因果句", () => {
       expect(out.split(f).length - 1, f).toBe(1);
     }
   });
+
+  it("CV 已达标时早退，一个碎片都不加", () => {
+    // 覆盖率报告指出 line 67 的「条件为真就 return」那半边从未执行——
+    // 因为上面几条语料都是**全等长**（CV = 0），永远低于阈值。
+    // 这里要造 CV 高于 MIN_BURSTINESS_CV 的语料，验证早退路径。
+    // ⚠️ 第一版用「第N句话…」30 句，探针实测**它仍然会被改写**（长度差异不够大），
+    // 说明那条语料的 CV 没顶过阈值。改用长短悬殊的句子。
+    const varied =
+      "短。这一句刻意写得很长很长很长很长很长很长很长。中。这一句也很长很长很长很长长短。短。";
+    expect(run(varied)).toBe(varied);
+  });
+
+  it("逻辑句在句中时，anchorAt(i) 这一项也要被求值", () => {
+    // line 86 的 `anchorAt(i - 1) || anchorAt(i)`：上面几条语料里逻辑句都在句首，
+    // 于是 anchorAt(i-1) 恒命中、第二项 `anchorAt(i)` 因短路从未被求值。
+    // 这里把逻辑句放到中间，逼出短路的那一侧。
+    // 探针实测：碎片没有落在「其次…」那句上或紧邻它。
+    const out = run(
+      "甲乙丙丁戊。己庚辛壬癸。其次是子丑寅卯辰。巳午未申酉戌。甲乙丙丁戊。己庚辛壬癸。",
+    );
+    expect(out).not.toBe(
+      "甲乙丙丁戊。己庚辛壬癸。其次是子丑寅卯辰。巳午未申酉戌。甲乙丙丁戊。己庚辛壬癸。",
+    );
+    // 逻辑句原文保留
+    expect(out).toContain("其次是子丑寅卯辰。");
+    // 且碎片不与它相邻（前后都不挨着逻辑句）
+    const sents = out.split("。").filter(Boolean);
+    const logicIdx = sents.findIndex((s) => s.includes("其次"));
+    expect(sents[logicIdx - 1]).not.toMatch(/^(就这样|你懂的|说白了)/);
+    expect(sents[logicIdx + 1]).not.toMatch(/^(就这样|你懂的|说白了)/);
+  });
 });
 
 /**
