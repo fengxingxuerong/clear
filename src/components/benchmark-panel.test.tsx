@@ -146,6 +146,14 @@ describe("BenchmarkPanel（对标评分面板）", () => {
     expect(container.textContent).toContain("✅ 领先过人线 0.8 pp 边际");
   });
 
+  it("预测恰好压在 40% 过人线上：徽章显示「刚好过人线」边界文案", () => {
+    // score 取 (40-b)/a 使预测浮点恰为 40 → gapToPass === 0 的边界分支
+    const edge = (40 - CALIB.main.b) / CALIB.main.a;
+    const { container } = render(<BenchmarkPanel {...base({ after: { ...after, score: edge } })} />);
+    expect(container.textContent).toContain("🟢 40.0%");
+    expect(container.textContent).toContain("🤏 刚好过人线");
+  });
+
   it("预测进入饱和区（aiScore ≥ satX）：饱和 tip + 接近饱和建议 + 60pp 差距徽章", () => {
     // aiScore=50 ≥ main 线 satX=40.2 → 预测 clamp 到 100%：saturated tip + pct>80 的 recAction
     const { container } = render(<BenchmarkPanel {...base({ after: { ...after, score: 50 } })} />);
@@ -155,6 +163,24 @@ describe("BenchmarkPanel（对标评分面板）", () => {
     );
     expect(container.textContent).toContain("接近饱和！先用 humanize-vocab");
     expect(container.textContent).toContain("⚠️ 离过人线还差 60.0 pp");
+  });
+
+  it("预测 80~98% 高危区间：越过 🟠 档落入空 else，保持默认红色图标与「严重 AI 味」", () => {
+    // aiScore=35 → main 线 ≈89.5%：既不 ≤80（🟠 档）也未到 98/饱和 → 图标保持初始 🔴
+    const { container } = render(<BenchmarkPanel {...base({ after: { ...after, score: 35 } })} />);
+    expect(container.textContent).not.toContain("🟠");
+    expect(container.textContent).toContain("严重 AI 味（几乎必中官方检测）");
+    expect(container.textContent).toMatch(/🔴 89\.[0-9]%/);
+    expect(container.textContent).toMatch(/离过人线还差 49\.[0-9] pp/);
+  });
+
+  it("副线 concat 低分落在 40~60%：中风险档走 x40<0 的放宽阈值文案", () => {
+    // concat 截距 57.441、x40 为负：score=0 → pct 57.4 ∈ (40,60] → 🟡 档取 x40<0 分支
+    const { container } = render(<BenchmarkPanel {...base({ after: { ...after, score: 0 } })} />);
+    const select = container.querySelector("select") as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "concat" } });
+    expect(container.textContent).toContain("🟡 57.4%");
+    expect(container.textContent).toContain("中风险（对话/叙事体裁放宽阈值）");
   });
 
   it("自动识别徽章显示体裁（论说文）且默认轨道为 main", () => {
