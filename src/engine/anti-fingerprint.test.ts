@@ -10,6 +10,7 @@ import {
   collapseDoubleConnectives,
   fixOrphanConnectiveLeads,
   isSceneMetaSentence,
+  isSceneMetaLine,
 } from "./anti-fingerprint";
 import { humanize } from "./humanize";
 import { SELF_QA_POOLS } from "./shuffle/structure";
@@ -143,6 +144,44 @@ describe("isSceneMetaSentence（场景块行识别）", () => {
     expect(isSceneMetaSentence("【场景：一家创业公司的会议室】")).toBe(true);
     expect(isSceneMetaSentence("【人物：张总、李工】")).toBe(true);
     expect(isSceneMetaSentence("张总（项目经理）：大家早上好。")).toBe(false);
+  });
+
+  /**
+   * isSceneMetaLine 是**死代码**，但先钉住行为再决定要不要删。
+   *
+   * 探针实测：它与 isSceneMetaSentence 的函数体**逐字相同**（都只做
+   * `SCENE_LINE_RE.test(s)`），11 个用例结果逐条一致。
+   * 而全项目**只有 isSceneMetaSentence 被调用**（humanize.ts:1108）。
+   *
+   * 为什么不直接删：本文件的纪律是「不为凑覆盖率改生产源码」，
+   * 而删函数属于行为变更，需要单独决策。留这条测试的作用是——
+   * 如果将来有人真的删掉 isSceneMetaLine，这里会红，提醒他确认
+   * 「确认无人调用」这个前提（而不是以为漏改了）。
+   */
+  it("isSceneMetaLine 与 isSceneMetaSentence 行为一致（前者当前无人调用）", () => {
+    const cases = [
+      "【场景：一家创业公司的会议室】",
+      "【人物：张总、李工】",
+      "【时间：周一上午】",
+      "【背景：2024年的深圳】",
+      "【旁白】",
+      "【简介】",
+      "【场景】",
+      "张总（项目经理）：大家早上好。",
+      "这是一句正常台词。",
+      "",
+      // 超过 {0,80} 的块头不算——探针实测 false，与 Sentence 一致
+      `【场景超长${"x".repeat(200)}】`,
+    ];
+    for (const c of cases) {
+      expect(isSceneMetaLine(c), c).toBe(isSceneMetaSentence(c));
+    }
+  });
+
+  it("块头关键词表边界：超出 80 字上限的块头不算场景行", () => {
+    // 正则是 /【[^】]{0,80}(?:场景|…)…】，所以关键词前后各自最多 80 字
+    expect(isSceneMetaSentence("【场景】")).toBe(true);
+    expect(isSceneMetaSentence(`【场景超长${"x".repeat(200)}】`)).toBe(false);
   });
 });
 
