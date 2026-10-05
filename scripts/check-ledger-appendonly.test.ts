@@ -8,11 +8,12 @@
  * 导入写 `./check-ledger-appendonly`（无 .ts 后缀）：tsconfig 开了 allowImportingTsExtensions，
  * 带后缀会被 tsc 以 TS5097 拒绝。
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { diffLedger, main, parseArgs, LEDGER_REL_DEFAULT } from "./check-ledger-appendonly";
 
 const L = (id: string, pct: number) => JSON.stringify({ id, pct, note: `记录 ${id}` });
@@ -243,5 +244,90 @@ describe("git 取数路径（临时仓库端到端）", () => {
     // 仓库里账本已存在（repo 那份），基准却是"还没有账本"的提交
     expect(main(["--repo", empty, "--head-ref", sha, "--quiet"])).toBe(0);
     fs.rmSync(empty, { recursive: true, force: true });
+  });
+});
+
+/* 2026-10-05 分支补测：此前 6 个语句 / 10 条分支未覆盖——usage 三支、离线侧兜底、
+   **非 quiet 输出两行**（既有用例几乎全带 --quiet，正常提示语从未被执行）、入口行 261。
+   其中「只给 --head-file」那条还挖出一个真缺陷，见下。 */
+describe("参数兜底与非 quiet 输出", () => {
+  let tmp: string;
+  let headFile: string;
+  let stagedFile: string;
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ledger-ao2-"));
+    headFile = path.join(tmp, "head.jsonl");
+    stagedFile = path.join(tmp, "staged.jsonl");
+    fs.writeFileSync(headFile, HEAD);
+    fs.writeFileSync(stagedFile, HEAD + L("O4", 7) + "\n");
+  });
+  afterEach(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it("不带 --quiet 时打印进度与结论两行（行 231-236）", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    expect(main(["--head-file", headFile, "--staged-file", stagedFile])).toBe(0);
+    const out = log.mock.calls.map((c) => String(c[0] ?? "")).join("\n");
+    expect(out).toContain("凭证账本 append-only 检查：HEAD 3 行 → 待提交 4 行");
+    expect(out).toContain("✅ 只追加了 1 行，历史一字未动");
+  });
+
+  it("--head-file / --staged-file 不带值 → 用法错（行 137/138）", () => {
+    expect(parseArgs(["--head-file"]).usageError).toMatch(/--head-file 需要一个文件路径/);
+    expect(parseArgs(["--staged-file"]).usageError).toMatch(/--staged-file 需要一个文件路径/);
+    expect(main(["--head-file"])).toBe(2);
+    expect(main(["--staged-file"])).toBe(2);
+  });
+
+  it("--staged-file 指向读不出来的路径 → 用法错并给出原因（行 154）", () => {
+    const bad = path.join(tmp, "nope.jsonl");
+    expect(parseArgs(["--head-file", headFile, "--staged-file", bad]).usageError).toMatch(
+      /--staged-file 读不出来/,
+    );
+    expect(main(["--head-file", headFile, "--staged-file", bad])).toBe(2);
+  });
+
+  it("【真缺陷回归】只给 --head-file → 必须报用法错，而不是无条件通过", () => {
+    // 修复前：离线分支两侧都兜成 "" → diffLedger("","") 恒 ok → **head 文件里写什么
+    // 都退出 0**。这道门禁的价值就是"历史不可改"，一个半配置输入就把它整个架空，
+    // 是最典型的假绿。现已补上与 --staged-file 对称的校验。
+    expect(parseArgs(["--head-file", headFile]).usageError).toMatch(/--head-file 必须与 --staged-file/);
+
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(main(["--head-file", headFile])).toBe(2);
+    expect(err.mock.calls.map((c) => String(c[0] ?? "")).join("\n")).toMatch(/必须与 --staged-file/);
+  });
+});
+
+describe("入口行 process.exit(main())（行 261）", () => {
+  it("直接执行时把退出码交给 process.exit（进程内跑，不 spawn 子进程）", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ledger-entry-"));
+    const head = path.join(tmp, "h.jsonl");
+    const staged = path.join(tmp, "s.jsonl");
+    fs.writeFileSync(head, HEAD);
+    fs.writeFileSync(staged, HEAD + L("O9", 3) + "\n");
+
+    const scriptPath = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "check-ledger-appendonly.ts",
+    );
+    const realArgv = process.argv;
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: string | number | null) => {
+      throw new Error(`__exit__${code ?? 0}`);
+    });
+    vi.resetModules(); // 让动态 import 重新求值，才会走到模块底部的入口判断
+    try {
+      process.argv = ["node", scriptPath, "--head-file", head, "--staged-file", staged, "--quiet"];
+      await expect(import("./check-ledger-appendonly")).rejects.toThrow("__exit__0");
+      expect(exitSpy).toHaveBeenCalledWith(0);
+    } finally {
+      process.argv = realArgv;
+      exitSpy.mockRestore();
+      vi.resetModules();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });

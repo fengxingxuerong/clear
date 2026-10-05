@@ -141,6 +141,12 @@ export function parseArgs(argv: string[]): Opts {
   o.offline = Boolean(hf || sf);
   if (o.stagedFile && !o.headFile)
     o.usageError = "❌ --staged-file 必须与 --head-file 同时给（否则没有对照基准）";
+  // 2026-10-05 补对称的一半：原来只挡了「有 staged 无 head」，反向没挡——
+  // 只给 --head-file 时下面读文件的块（要求两者都在）根本不会执行，于是
+  // headText/stagedText 双双为 null → 离线分支各兜成 "" → diffLedger("","") 恒 ok
+  // → **无论 head 文件里写什么，退出码都是 0**。门禁最忌讳的假绿，正是这种形态。
+  if (o.headFile && !o.stagedFile)
+    o.usageError = "❌ --head-file 必须与 --staged-file 同时给（否则没有对照基准）";
   if (o.headFile && o.stagedFile && !o.usageError) {
     try {
       o.headText = fs.readFileSync(o.headFile, "utf8");
