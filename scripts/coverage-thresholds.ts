@@ -12,12 +12,20 @@
  *   （v8 provider 默认只统计被测试加载过的文件；这三者是入口/worker/纯类型）。
  *   即真实覆盖略低于上面的数字，差值 <1pt。不为它们去追数字——那是入口层测试的事，
  *   见 docs 里对 desktop-entry-testability 的记录。
+ *
+ * 2026-10-05 上调为棘轮（全面优化验证轮），同日再收一档：
+ *   补测进行中实测 Stmt 94.6 / Branch 87.9 / Func 96.4 / Lines 95.9（先定 90/84/92/91）；
+ *   补测收尾后实测 **Stmt 96.6 / Branch 90.5 / Func 97.4 / Lines 97.6**（68 文件/1271 用例），
+ *   余量涨到 5~6.6pt，超出下面写的「3~5pt」口径 ⇒ 按同一纪律收到 93/87/94/94，
+ *   让余量回到 3.4~3.6pt。**阈值贴着实际值，门禁才有牙齿**；
+ *   覆盖 CI(ubuntu/node20) 与本机(win/node24) 的平台差异，以及后续正常改动的小幅波动；
+ *   低于它即红，只许变好，不许回调。要降阈值请先在提交信息里写清为什么这不是回退。
  */
 export const COVERAGE_THRESHOLDS = {
-  statements: 75,
-  branches: 75,
-  functions: 75,
-  lines: 75,
+  statements: 93,
+  branches: 87,
+  functions: 94,
+  lines: 94,
 } as const;
 
 export type CoverageThresholds = typeof COVERAGE_THRESHOLDS;

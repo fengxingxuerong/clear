@@ -6,7 +6,13 @@
 # （judge-panel.ts），导致「干净 clone 后无法构建」。而 CI 里明明配了
 # `tsc -b`，说明它并没有实际拦住——提交时没验证，是最上游的漏洞。
 #
-# 本 hook 只做一件最低限度的事：提交前确认类型检查通过（实测约 7 秒）。
+# 本 hook 的最低限度职责（按执行顺序）：
+#   ① 类型检查通过（实测约 7 秒）
+#   ② Lint 通过（实测约 10 秒）
+#
+# 2026-10-05 补 ②：v0.9.23 发布时 CI 红在 lint——5 个 error 全在 scripts/coverage-gate.ts，
+# 而这正是该版本「门禁假绿修复」改过的文件。类型检查拦不住 lint（两者检查面不同），
+# 提交时没跑 lint 就等于把红灯留给 CI，与本 hook 当初要堵的「坏 HEAD」是同一个洞。
 #
 # 紧急跳过：git commit --no-verify   （不建议——那正是坏 HEAD 的来源）
 
@@ -82,4 +88,24 @@ if [ $rc -ne 0 ]; then
   exit 0
 fi
 echo "[pre-commit] ✅ 类型检查通过"
+
+# ── Lint（类型检查之后，秒级失败优先于慢的测试）────────────────────────────
+# 与 tsc 同理：直调 eslint 的真实入口，不走 node_modules/.bin 那层 wrapper。
+echo "[pre-commit] Lint 检查中…（约 10 秒）"
+if command -v node >/dev/null 2>&1 && [ -f "./node_modules/eslint/bin/eslint.js" ]; then
+  node ./node_modules/eslint/bin/eslint.js src/ scripts/
+  rc=$?
+  if [ $rc -ne 0 ]; then
+    printf '\n'
+    echo "❌ Lint 未通过，提交已阻止。"
+    echo "   → 修掉上面的报错后重试（本地复现：npm run lint）"
+    echo "   → 确需跳过：git commit --no-verify"
+    exit 1
+  fi
+  echo "[pre-commit] ✅ Lint 通过"
+else
+  printf '\n'
+  echo "⚠️  [pre-commit] 环境缺少 node/eslint，Lint 已跳过（未验证！）"
+  echo "   → 请手动确认：npm run lint"
+fi
 exit 0
