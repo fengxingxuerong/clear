@@ -32,6 +32,8 @@ import {
   adoptSecureApiKeys,
   persistApiConfig,
   DEFAULT_LOCAL,
+  loadDraft,
+  saveDraft,
 } from "./store";
 import { DEFAULT_API, effectiveKeys } from "./api/llm-config";
 import { DEFAULT_DETECTOR } from "./api/detector";
@@ -422,5 +424,149 @@ describe("adoptSecureApiKeys：把老版本留在 localStorage 的明文迁进�
     saveApi(apiWithKeys());
     expect(await adoptSecureApiKeys()).toEqual({});
     expect(loadApi().apiKeys).toBe(`${SECRET_POOL_A}\n${SECRET_POOL_B}`);
+  });
+});
+
+describe("loadApi：persona 白名单的两个分支", () => {
+  beforeEach(() => localStorage.clear());
+
+  it.each(["netgen", "classic"])("persona=%s 被接受并透传", (p) => {
+    localStorage.setItem(K_API, JSON.stringify({ persona: p }));
+    expect(loadApi().persona).toBe(p);
+  });
+
+  it.each(["default", "unknown", "", "NETGEN"])(
+    "persona=%o 不在白名单 → 回落到默认值（大小写敏感）",
+    (p) => {
+      localStorage.setItem(K_API, JSON.stringify({ persona: p }));
+      expect(loadApi().persona).toBe(DEFAULT_API.persona ?? "default");
+    },
+  );
+
+  it("persona 缺失 → 默认值", () => {
+    localStorage.setItem(K_API, JSON.stringify({ model: "gpt-4" }));
+    expect(loadApi().persona).toBe(DEFAULT_API.persona ?? "default");
+  });
+});
+
+describe("secureStore 桥接：写入抛异常时不炸", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("set() 抛异常 → 返回 false 而不是把异常冒给调用方", async () => {
+    const orig = window.secureStore;
+    window.secureStore = {
+      get: async () => null,
+      set: async () => {
+        throw new Error("桥接断了");
+      },
+      del: async () => undefined,
+    } as unknown as typeof window.secureStore;
+    try {
+      // 实测返回的是 false（不是 undefined）——调用方按布尔值判断，
+      // 异常被 secureSet 的 catch 吞掉，不会让设置面板的保存流程崩掉。
+      await expect(saveApiKeySecure("sk-test")).resolves.toBe(false);
+    } finally {
+      window.secureStore = orig;
+    }
+  });
+});
+
+/**
+ * 草稿持久化（loadDraft / saveDraft）
+ *
+ * 这块此前一个用例都没有——而它恰好是全文件里**唯一带配额上限**的写入路径，
+ * 上限判定用 `>` 而不是 `>=`（恰好 100 万字放行，100 万零 1 字丢弃）。
+ * 这种边界最容易被后人「顺手改成 >=」而悄悄改掉语义，所以钉死。
+ */
+describe("loadDraft / saveDraft", () => {
+  const K_DRAFT = "aihumanizer.draft";
+  const put = (v: string) => localStorage.setItem(K_DRAFT, v);
+
+  beforeEach(() => localStorage.clear());
+
+  describe("loadDraft：坏数据一律降级为 null，绝不抛", () => {
+    it.each([
+      ["空串", ""],
+      ["字面量 null", "null"],
+      ["非法 JSON", "not json"],
+      ["数组（不是对象）", "[]"],
+      ["数字", "42"],
+      ["字符串", '"hello"'],
+    ])("%s → null", (_label, raw) => {
+      put(raw);
+      expect(loadDraft()).toBeNull();
+    });
+
+    it("input/output 都是空串 → null（没有内容的草稿不值得留）", () => {
+      put(JSON.stringify({ input: "", output: "" }));
+      expect(loadDraft()).toBeNull();
+    });
+
+    it("字段类型错（input 是数字、output 是对象）→ 按空串处理", () => {
+      put(JSON.stringify({ input: 123, output: {} }));
+      expect(loadDraft()).toBeNull();
+    });
+
+    it("只存了一半也能读出来", () => {
+      put(JSON.stringify({ input: "甲" }));
+      expect(loadDraft()).toEqual({ input: "甲", output: "", ts: 0 });
+      put(JSON.stringify({ output: "乙" }));
+      expect(loadDraft()).toEqual({ input: "", output: "乙", ts: 0 });
+    });
+  });
+
+  describe("loadDraft：ts 的清洗", () => {
+    it("正常数字原样保留", () => {
+      put(JSON.stringify({ input: "甲", output: "乙", ts: 1700000000000 }));
+      expect(loadDraft()?.ts).toBe(1700000000000);
+    });
+
+    it("非数字（字符串）→ 0", () => {
+      put(JSON.stringify({ input: "甲", output: "乙", ts: "abc" }));
+      expect(loadDraft()?.ts).toBe(0);
+    });
+
+    it("缺 ts → 0", () => {
+      put(JSON.stringify({ input: "甲", output: "乙" }));
+      expect(loadDraft()?.ts).toBe(0);
+    });
+
+    it("Infinity / NaN → 0（isFinite 守卫）", () => {
+      // JSON.stringify(Infinity) 本身就会写成 null，所以这里直接构造字符串
+      put('{"input":"甲","output":"乙","ts":1e999}');
+      expect(loadDraft()?.ts).toBe(0);
+      put('{"input":"甲","output":"乙","ts":null}');
+      expect(loadDraft()?.ts).toBe(0);
+    });
+  });
+
+  describe("saveDraft：配额上限是 `>` 不是 `>=`", () => {
+    // DRAFT_MAX_CHARS = 1_000_000。实测：
+    //   999_999 字 → 保存；1_000_000 字 → 保存；1_200_000 字 → 丢弃并删除旧草稿
+    it("正常内容写入成功", () => {
+      saveDraft("甲", "乙");
+      expect(JSON.parse(localStorage.getItem(K_DRAFT) ?? "{}")).toMatchObject({
+        input: "甲",
+        output: "乙",
+      });
+    });
+
+    it("恰好 1_000_000 字仍然写入（边界是 > 而非 >=）", () => {
+      saveDraft("甲".repeat(999_999), "乙");
+      expect(localStorage.getItem(K_DRAFT)).not.toBeNull();
+    });
+
+    it("超过上限则丢弃，并**删掉**已存在的旧草稿（不留半截）", () => {
+      saveDraft("甲", "乙");
+      expect(localStorage.getItem(K_DRAFT)).not.toBeNull();
+      saveDraft("甲".repeat(600_000), "乙".repeat(600_000));
+      expect(localStorage.getItem(K_DRAFT)).toBeNull();
+    });
+
+    it("超限时即使此前没有旧草稿也不报错", () => {
+      localStorage.clear();
+      expect(() => saveDraft("甲".repeat(1_200_000), "")).not.toThrow();
+      expect(localStorage.getItem(K_DRAFT)).toBeNull();
+    });
   });
 });
