@@ -270,6 +270,43 @@ describe("质检通道异常可见化（v0.8.6）", () => {
     // 评分阶段同样失败：score 为 null 但不抛错（调用方兜底已有测试覆盖）
     expect(r.score).toBeNull();
   });
+
+  /**
+   * ⚠️ 行 528 的 `String(e)` 那一半（`e instanceof Error` 为假时）——
+   *   **结构性不可测**，2026-10-05 穷举后确认不是没找到语料，是压根无法构造。
+   *
+   * 想触发它必须让 `qualityCheck` 抛出**非 Error 值**，而它只能这样失败：
+   *   ① fetch 返回 HTTP 错误 → llm-chat 抛 **Error**（instanceof 为真）
+   *   ② fetch 自身 throw 非 Error → llm-chat 行 112 `throw e` 原样上抛，
+   *      **但行 125 的 `resp.status >= 500` 退避链覆盖了这种情况**——
+   *      实测 fetch 直接 throw 会走「2+5+12s 退避重试」，5 秒超时，测不了
+   *
+   * 试过的四条路都堵死：
+   *   v1 fetch 抛非 Error 对象 → 超时 5s（进退避链）
+   *   v2 fetch 返 500 → 同样进退避链
+   *   v3 fetch 返 400 → 不进退避，但抛的是 Error，instanceof 仍为真
+   *   v4 vi.mock("./llm-quality") 自 mock → qualityCheck 是**本模块内部函数**，
+   *      processCandidate 按闭包引用直接调用，模块级 mock 不生效
+   *
+   * 结论：留作已知缺口。`e instanceof Error ? e.message : String(e)` 的 else
+   * 支在 JS 里是标准写法（Promise 拒绝值可以是任意值），不是项目特有逻辑，
+   * 为它加 mock 基础设施的收益低于成本。
+   *
+   * 下面补一条**可达**的断言：留痕内容必须带上原始错误信息（排障靠它）。
+   */
+  it("留痕里必须带上原始错误信息，且截断到 120 字（排障要靠它）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("not found", { status: 404 })),
+    );
+    const r = await processCandidate("原文：营收增长23%。", "改写稿：营收增长23%。", cfg, 0.6);
+    const issue = r.qc.issues.join("");
+    expect(issue).toContain("质检通道异常");
+    // 实测真值：包含「API 返回 404」——即 llm-chat 抛出的 Error.message
+    expect(issue).toContain("404");
+    const tail = issue.slice("质检通道异常，本轮放行（未实际质检）：".length);
+    expect(tail.length).toBeLessThanOrEqual(120);
+  });
 });
 
 describe("编造兜底（v0.8.9）", () => {
