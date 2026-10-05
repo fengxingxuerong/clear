@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { chat } from "./llm-chat";
 import type { ApiConfig } from "./llm-config";
 
@@ -353,5 +353,83 @@ describe("入口前置校验与网络异常退避", () => {
     );
     await vi.advanceTimersByTimeAsync(60_000);
     await assertion;
+  });
+});
+
+/**
+ * 请求体的两处「按条件改写」
+ *
+ * 都在发请求**之前**决定，且都是「不这么做就 400」的硬约束：
+ * ① kimi 系列网关限制 temperature 只能为 1（源码注释记着实测 400）
+ * ② OpenRouter 网关带上 HTTP-Referer / X-Title（不带也能用，但排名会吃亏）
+ */
+describe("请求体改写：kimi 温度锁定 + OpenRouter 头", () => {
+  const bodies: { temperature?: number; headers: Record<string, string> }[] = [];
+
+  beforeEach(() => {
+    bodies.length = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        bodies.push({
+          temperature: (JSON.parse(String(init.body)) as { temperature?: number }).temperature,
+          headers: init.headers as Record<string, string>,
+        });
+        return resp(200, "改写后的文本。");
+      }),
+    );
+  });
+
+  const msgs = [{ role: "user" as const, content: "hi" }];
+  const withModel = (model: string): ApiConfig => ({ ...cfg, model });
+  const opts = { temperature: 0.3, maxTokens: 100 };
+
+  it.each(["kimi-k2", "Kimi-k3", "moonshot/kimi-latest"])(
+    "kimi 系模型 %s → temperature 被强制成 1",
+    async (model) => {
+      await chat(withModel(model), msgs, opts);
+      expect(bodies[0].temperature).toBe(1); // 传进去的 0.3 被忽略
+    },
+  );
+
+  it.each(["gpt-4o", "claude-3"])("非 kimi 模型 %s → temperature 原样透传", async (model) => {
+    await chat(withModel(model), msgs, opts);
+    expect(bodies[0].temperature).toBe(0.3);
+  });
+
+  it("opts.model 覆盖 cfg.model 时，锁定依然生效", async () => {
+    // 这条容易漏：判定用的是 `opts.model || cfg.model` 的**结果**，
+    // 而不是只查 cfg.model。cfg 配的是 gpt-4o、单次请求指定 kimi-k3 → 仍须锁 1。
+    await chat(withModel("gpt-4o"), msgs, { ...opts, model: "kimi-k3" });
+    expect(bodies[0].temperature).toBe(1);
+  });
+
+  it.each([
+    ["https://openrouter.ai/api/v1", true],
+    ["https://OPENROUTER.AI/api/v1", true], // 大小写不敏感
+    ["https://api.example.com/v1", false],
+  ])("baseUrl=%s → OpenRouter 头存在与否 = %s", async (baseUrl, expected) => {
+    await chat({ ...cfg, baseUrl }, msgs, opts);
+    const h = bodies[0].headers;
+    if (expected) {
+      expect(h["HTTP-Referer"]).toBe("https://github.com/quaiwei");
+      expect(h["X-Title"]).toBe("QuAiWei");
+    } else {
+      expect(h["HTTP-Referer"]).toBeUndefined();
+      expect(h["X-Title"]).toBeUndefined();
+    }
+  });
+
+  it("尾部多余斜杠不会拼出双斜杠", async () => {
+    let seen = "";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        seen = url;
+        return resp(200);
+      }),
+    );
+    await chat({ ...cfg, baseUrl: "https://api.example.com/v1///" }, msgs, opts);
+    expect(seen).toBe("https://api.example.com/v1/chat/completions");
   });
 });
