@@ -1,5 +1,107 @@
-﻿# 更新日志 · QuAiWei
+# 更新日志 · QuAiWei
 > 完整版本历史，细节以对应 Git 提交为准。
+
+## v0.9.24 更新（门禁修复 + 死循环缺陷 + 补测 1114→1336 条 + 棘轮三档收紧 + 漏洞清零）
+
+承接 v0.9.23「门禁可信度」的思路：这一版先修**红灯本身**，再把**绿灯的可信度**做实。
+
+### ① 修复：v0.9.23 的 CI 当时就是红的
+
+实测（2026-10-05）：`b330cb1` 的 GitHub Actions 结论是 **failure**，本地 `npm run lint` 同样 exit 1——
+5 个 error 全在 `scripts/coverage-gate.ts`（正是上一版动过的文件）：
+
+- `no-control-regex`：ANSI 剥离正则**必须**含控制字符，改加带理由的定向豁免；
+- `preserve-caught-error`：改为真正挂 `{ cause: e }`，`tsconfig` 的 lib 增补 `ES2022.Error` 以获得类型；
+- 3× `prefer-const`。
+
+修后四次推送（`e211aaf` / `7a6d36c` / `a6535a6` / `65b0589`）CI **全绿**，且跑在 ubuntu/node20
+（本机 win/node24 同绿）——覆盖率阈值的**平台差异**就此实测关闭，不再是推断。
+
+### ② 修复：saveHistory 单条超配额**死循环**（真缺陷，界面会挂死）
+
+裁剪写的是 `keep.slice(0, Math.max(1, keep.length - 1))`，恒保留 1 条；而放弃条件是
+`if (!keep.length) return` —— **永不可达**。于是当单条历史本身超出 localStorage 配额时
+（正是本函数头部注释描述的「长文撑爆配额」场景），同一份 payload 会被无限重试，界面直接卡死。
+
+改为 `if (keep.length <= 1) return` + `keep.slice(0, keep.length - 1)`，回到注释承诺的
+「全丢仍失败则静默放弃」。新文件 `src/store-history-quota.test.ts` 6 条回归锁，其中最关键的一条是
+**永久失败必须有限次返回**（旧实现下该断言会超时挂死，而不是失败）；另含 13 条存量恰 10 次预算、
+只丢最旧一条、`getItem` 抛错与坏 JSON 安全返回 `[]`。
+
+### ③ 提交门槛补两道：Lint + 格式（pre-commit 从「只查类型」变三道）
+
+上一版 lint 红灯能漏到 CI 才发现，根因是提交时没查。现在 pre-commit 依次跑
+类型检查（约 7 秒）→ Lint（约 10 秒）→ **prettier --check（约 2 秒）**，
+三道都直调真实入口（不走 `node_modules/.bin` 那层 wrapper），缺依赖时提示放行不误挡。
+实战验证：新增的格式步骤当场拦下并行会话写入中的 3 个 `no-useless-assignment` 并阻断提交。
+CI 同步新增 `Format check (prettier)`；顺手改掉一处**过期注释**（写着「低于 75% 即红」，
+而实际阈值早已是 93/87/94/94——注释与现实脱节本身就是隐患）。
+
+### ④ 独立 security.yml：漏洞检查既不能缺、也不能挡 push
+
+主流程保持 `npm ci --no-fund --no-audit`——上游随时新增的公告不该打断每一次提交；
+但漏洞不能没人看，故另开**每周一 03:00 UTC + 手动触发**的独立作业：
+生产依赖漏洞 → 该作业硬红（每周通知一次，够排期修复）；
+dev 依赖 → `continue-on-error` 只提示（dev 漏洞硬拦会让作业长期红、最后没人信，门禁一旦没人信就等于没有）。
+
+### ⑤ 棘轮三档收紧（只许变好）
+
+- **覆盖率阈值 `75×4 → 94/89/95/95`**（唯一事实源仍是 `scripts/coverage-thresholds.ts`），同日三档：
+  补测进行中 90/84/92/91 → 收尾 93/87/94/94 → 全部落地后按实测再收一档。
+  最终实测 **Stmt 97.9 / Branch 92.8 / Func 99.2 / Lines 98.6**（68 文件/1336 用例），
+  余量 3.6~4.2pt，落在文件头写的「3~5pt」口径内。75 这条线已连续多轮零压力——
+  **门禁只在贴着实际值时才有牙齿**；方向始终单向收紧，每档都在文件头留档（改了什么、当时实测值）。
+- **`regression-12samples` 棘轮**：工具自报「E/O2 2→1，棘轮还松着」，按它自己给的 `--rebaseline`
+  路径收紧（原因入 rebaseLog），`git diff` 证实**仅此一处**收紧、无夹带放宽。
+
+### ⑥ 补测：1114 → 1336 条，六个文件补到 100%
+
+| 模块 | 行/分支覆盖变化 |
+|---|---|
+| `SettingsModal.tsx` | 67.9% → **100%** |
+| `useZhuqueLab.ts` | 83.5% → **100%** |
+| `check-version-sync.ts` | 57.9% → **100%**（含 CLI 退出码 0/1/2 全路径） |
+| `scripts/verify-quality.ts` | 分支 57.14% → **100%**（真起进程跑门禁 + mock 失败路径） |
+| `scripts/regression-12samples.ts` / `zhuque-evidence.ts` | 行 93.75% / 96.84% → **100%**（含进程内入口行测试） |
+| `src/api/judge-panel.ts` | 分支 75% → **100%**（三席合议混合解析：`score=51/spread=22/validCount=2`） |
+| `llm-humanize.ts` | 82.6% → **97.1%**（16 个目标行全清） |
+| `src/api/llm.ts` | 分支 62.12% → **95.45%**（行/语句/函数 100%，剩 182/227/238 三条已注记不可达） |
+| `App.tsx` | 94.85% → **100%**（剩 6 行经 React `shouldPreventMouseEvent` 恒等式论证不可达） |
+| `structure.ts` | 97.38% → **100%**（剩 2 行数学证明不可达，其一实测求值 2327 次触发 0 次） |
+| `BenchmarkPanel.tsx` | 80.61% → **100%**（复核发现真实基线比记录更差，多出 9 行一并补齐） |
+| `docx-io.ts` | 分支 73.33% → **96.66%**（手工构造 zip 覆盖 EOCD/中央目录/local header/stored/method 12） |
+| `anti-fingerprint.ts` | 分支 74.41% → **90.69%**（前邻标点两侧 + 第三轮封顶 9 短语 + 残句合并两侧） |
+
+写测试时抓到的两个**假绿**，比覆盖率数字更值钱：`copyText` 首版断言漏了
+`navigator.clipboard` 优先路径（根本没走到被测分支）；`varyParagraphs` 长段对拆用例的句子没带句号
+⇒ `splitSentences` 只算 1 句、压根进不了拆分分支。两处均按**真实行为**改造成非永真断言。
+
+### ⑦ 停用体可测化 + 死分支如实注记（不为凑数改源码）
+
+- `shuffle/typos.ts`：实现主体抽成 `injectTyposImpl(text, rng, intensity, enabled)`，
+  导出的 `injectHumanTypos` 仍只看模块常量，**生产路径行为逐字不变**——否则「保留以备回滚」的
+  30 行永远走不到、无人验证。新增 11 条（预算/门限/场景块保真/lookbehind 回退/确定性）。
+- `injectDialect`（同为停用保留体）补 5 条回归锁。
+- **死分支结论写回源码**（读代码的人不用翻测试才知道）：
+  `shuffle/primitives.ts` 的引号守卫永假（`offset` 恒指向冒号 + 前瞻已排除引号）；
+  `humanize.ts` 叙事/人写两档 `expoForceP3: () => false` 永不执行（唯一调用点在
+  `structuralAllowedGenre` 门槛内，而这两档恰被挡在外面）。两处都写明「别为凑覆盖率造假调用」。
+
+### ⑧ 依赖漏洞清零 + 存量格式漂移一次清
+
+- `npm audit --omit=dev` 报 4 个 high：`sharp@0.34.5`（经 optional 依赖 `@huggingface/transformers`
+  传入）的 libvips/libheif CVE。修复落在 semver 范围内 ⇒ **只改锁文件**：
+  transformers 4.2.0→4.3.0、sharp 0.34.5→0.35.5。以 **`npm ci`（CI 同款干净安装）** 复验后再提交，
+  双口径 `npm audit` 均 **0 vulnerabilities**。
+- `prettier --check` 实测 57 处不合规（**存量漂移**：fmt 脚本一直有、但 lint/CI 从未校验格式），
+  一次性格式化 53 文件（+548/−275，纯排版零语义），改后 tsc/lint/1312 用例/check:release/build 全绿。
+
+### ⑨ 发布边界（照旧，未变）
+
+`npm run check:publish` 仍然**必然红**：18 个标定点凭证 **0/18 认证**（无截图/API 响应）。
+这是 README 早已声明的发布阻断项，只有真实官方送检 + `zhuque-evidence.ts seal` 入账才能解，
+**不是本轮能用代码修掉的问题**。已论证不可达、按设计保留的防御性分支清单见各测试文件注释
+（`llm.ts` 3 处、`anti-fingerprint` 4 处、`docx-io:221`、`primitives.ts:42`、`humanize.ts` 2 处）。
 
 ## v0.9.23 更新（门禁可信度 + 低风险输入提示 + 两处 g 标志/性能）
 
