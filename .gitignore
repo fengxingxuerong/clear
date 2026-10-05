@@ -57,6 +57,9 @@ scripts/eval/
 
 # 覆盖率产物
 coverage/
+# 单文件覆盖率复测的私有输出（--coverage.reportsDirectory 指定）：
+# 补测轮多个并行会话各写各的子目录，属临时产物，不入库、可整目录删除
+.covtmp/
 
 # 构建期盖章产物（npm run build 生成），不是源
 electron-app/build-info.json

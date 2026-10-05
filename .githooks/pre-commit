@@ -108,4 +108,25 @@ else
   echo "⚠️  [pre-commit] 环境缺少 node/eslint，Lint 已跳过（未验证！）"
   echo "   → 请手动确认：npm run lint"
 fi
+
+# ── 格式检查（prettier，约 2 秒）──────────────────────────────────────────
+# 2026-10-05：存量 57 处漂移已一次性格式化（edfec2c），这道守卫防复发——
+# 与 ci.yml 的 Format check 步骤同口径，缺了它下次照样漂回去。
+echo "[pre-commit] 格式检查中…（约 2 秒）"
+if command -v node >/dev/null 2>&1 && [ -f "./node_modules/prettier/bin/prettier.cjs" ]; then
+  node ./node_modules/prettier/bin/prettier.cjs --check "src/**/*.{ts,tsx,css}" "*.{ts,tsx,json,mjs}" "vite.config.ts"
+  rc=$?
+  if [ $rc -ne 0 ]; then
+    printf '\n'
+    echo "❌ 格式检查未通过，提交已阻止。"
+    echo "   → 一键修复：npm run fmt"
+    echo "   → 确需跳过：git commit --no-verify"
+    exit 1
+  fi
+  echo "[pre-commit] ✅ 格式检查通过"
+else
+  printf '\n'
+  echo "⚠️  [pre-commit] 环境缺少 prettier，格式检查已跳过（未验证！）"
+  echo "   → 请手动确认：npm run fmt -- --check"
+fi
 exit 0

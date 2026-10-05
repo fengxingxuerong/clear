@@ -33,9 +33,16 @@ jobs:
       - name: Lint (eslint)
         run: npm run lint
 
-      - name: Unit tests (vitest, with 75% coverage gate)
-        # coverage 阈值硬化（v0.9.16）：vite.config.ts test.coverage.thresholds 生效，
-        # 低于 75% 即红——防止某次提交悄悄拉低覆盖率而无人察觉
+      - name: Format check (prettier)
+        # 2026-10-05：fmt 脚本一直存在但 lint/CI 从未校验格式，存量漂移了 57 处
+        # （已一次性格式化，见 commit edfec2c）。这一步是防复发——没有它，
+        # 下次谁跑一次未格式化的编辑器改动就又漂回去了。
+        run: npx prettier --check "src/**/*.{ts,tsx,css}" "*.{ts,tsx,json,mjs}" "vite.config.ts"
+
+      - name: Unit tests (vitest, with coverage gate)
+        # coverage 阈值在 scripts/coverage-thresholds.ts（**唯一事实源**，v0.9.16 起收拢），
+        # 2026-10-05 从 75×4 收紧到 93/87/94/94——阈值贴着实际值（实测 97.4/91.6/98.8/98.2）
+        # 门禁才有牙齿；低于它即红，只许变好。改阈值请先写清为什么不是回退。
         run: npx vitest run --coverage
 
       - name: Engine regression (scan-bugs, fast)

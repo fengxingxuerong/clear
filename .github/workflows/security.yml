@@ -1,0 +1,36 @@
+name: Security audit
+
+# 2026-10-05 独立于 CI 的原因：主流程用 `npm ci --no-fund --no-audit`（ci.yml），
+# 避免上游随时新增的安全公告**无故打断每一次 push/PR**；但漏洞不能没人看。
+# 于是单开这个按周跑的作业——红了只通知、不挡任何提交。
+# 起因：sharp@0.34.5 经 @huggingface/transformers 传入的 4 个 high
+# （libvips/libheif CVE）当时不在任何门禁视野里，是人工 npm audit 才发现的。
+on:
+  schedule:
+    - cron: "0 3 * * 1" # 每周一 03:00 UTC（北京时间 11:00）
+  workflow_dispatch: # 也允许手动触发
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --no-fund --no-audit
+
+      # 生产依赖链有漏洞 → 该作业红（每周通知一次，足够排期修复）
+      - name: Audit production dependencies (hard gate for this job)
+        run: npm audit --omit=dev
+
+      # 开发期依赖（vitest/eslint/tsx 等）只做提示：dev 漏洞通常不影响交付产物，
+      # 硬拦会让作业长期红、最后被人忽略（门禁一旦没人信就等于没有）。
+      - name: Audit all dependencies (informational)
+        run: npm audit
+        continue-on-error: true
