@@ -42,6 +42,7 @@ const REPORTS_DIR = path.join(ROOT, "coverage");
 const VITEST_BIN = path.join(ROOT, "node_modules", "vitest", "vitest.mjs");
 
 /** 全部 CSI 形式，含带 ? 参数的（漏了 \u001b[?25l 这类会留残渣） */
+// eslint-disable-next-line no-control-regex -- 本函数的职责就是识别并剥掉 ANSI 控制序列，正则里必须出现这些控制字符
 const ANSI_RE = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007]*(?:\u0007|\u001b\\)|\u001b[@-Z\\-_]/g;
 const stripAnsi = (s: string): string => s.replace(ANSI_RE, "");
 
@@ -61,7 +62,7 @@ function cleanReportsDir(): void {
     } catch (e) {
       // rd 对"目录不存在"也返回非零，用 existsSync 复核而不是信退出码
       if (fs.existsSync(REPORTS_DIR)) {
-        throw new Error(`清理 ${REPORTS_DIR} 失败：${(e as Error).message}`);
+        throw new Error(`清理 ${REPORTS_DIR} 失败：${(e as Error).message}`, { cause: e });
       }
     }
   } else {
@@ -87,9 +88,9 @@ interface Metrics {
 
 /** 从报告重算四项指标（不看 vitest 打印的表格，避免"打印面 ≠ 校验面"） */
 function metricsFromReport(map: Record<string, IstanbulFileCov>): Metrics {
-  let st: [number, number] = [0, 0];
-  let br: [number, number] = [0, 0];
-  let fn: [number, number] = [0, 0];
+  const st: [number, number] = [0, 0];
+  const br: [number, number] = [0, 0];
+  const fn: [number, number] = [0, 0];
   const lineHit = new Map<string, boolean>();
 
   for (const [file, d] of Object.entries(map)) {
