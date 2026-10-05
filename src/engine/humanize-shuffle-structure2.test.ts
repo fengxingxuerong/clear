@@ -24,9 +24,11 @@ import {
   ensureEmDashCountHardCap,
   hardNumberedEnumerationShuffle,
   injectFirstPersonAnchorPoints,
+  resegmentParagraphsAggressive,
   shuffleSentencesSafe,
   structuralShuffleParagraph,
 } from "./humanize-shuffle.ts";
+import { splitSentences } from "./humanize-text.ts";
 
 const rngMid = () => 0.5;
 const rngLow = () => 0.4;
@@ -171,6 +173,54 @@ describe("enforceParagraphLeadSentVariance（P3-3 段首方差）", () => {
     const b = "这一段的开头句明显要长出很多字数。后续内容继续补充完整一点。";
     const text = `${a}\n\n${b}`;
     expect(enforceParagraphLeadSentVariance(text, rngLow, 0.9)).toBe(text);
+  });
+
+  /* 2026-10-05 分支补测：行 653 的 `if (!sents.length) continue` 是**结构性死分支**——
+     入参 paras 已 filter 掉空白段，而 splitSentences（humanize-text.ts 12）对纯标点段
+     仍会 push（其行 21 的 else 支），返回数组恒非空。这里留一条"钉住成因"的断言：
+     若哪天 splitSentences 改成过滤纯标点，本条会先红，届时应改源码而非庆祝。 */
+  it("行 653 成因：splitSentences 对纯标点段也返回非空数组，故 sents.length 恒 > 0", () => {
+    expect(splitSentences("。！？。")).not.toHaveLength(0);
+    expect(splitSentences("……")).not.toHaveLength(0);
+    // 而空白段在进循环前就被 filter 掉了，两条守卫叠加 ⇒ 653 的 continue 不可达
+    const onlyBlanks = "　\n\n　";
+    expect(onlyBlanks.split(/\n\n+/).filter((p) => p.trim().length > 0)).toHaveLength(0);
+  });
+});
+
+describe("resegmentParagraphsAggressive（段长强制方差，行 200/221）", () => {
+  /** 合并窗口要求 ns.chars ≥ 50，所以测试段必须比"看起来够长"再长一些 */
+  const seg = "这一段用来把长度撑到完全一样的程度。还要再补一句才够字数。";
+
+  it("强度 < 0.55 原样返回", () => {
+    const t = "第一段内容足够长一些。第二句也在这里。\n\n第二段内容同样不短。第二句也在这里。";
+    expect(resegmentParagraphsAggressive(t, rngMid, 0.5)).toBe(t);
+  });
+
+  it("不足 2 段原样返回", () => {
+    const t = "只有一段内容。第二句补足长度。";
+    expect(resegmentParagraphsAggressive(t, rngMid, 0.9)).toBe(t);
+  });
+
+  it("行 200：段长完全均匀时 needForce 置真 → 至少强制合并一刀", () => {
+    // 构造两段**字数完全相同**且都落在合并窗口（50~180 字）内 ⇒ cv = 0 ⇒ needForce 成立
+    const long = `${seg}。再多补一句把这一段拉到中段长度。再补一句让它超过五十字的下限要求。`;
+    const t = `${long}\n\n${long}`;
+    // rng 0.5 < 0.85 ⇒ 强制合并那一刀必然发生；0.8 > 0.85 ⇒ 不强制（对照组）
+    const forced = resegmentParagraphsAggressive(t, rngMid, 0.9);
+    const relaxed = resegmentParagraphsAggressive(t, () => 0.8, 0.9);
+    // 强制时两段被并成一段（可能再插一句碎碎念桥接 ⇒ 段数 ≥1 且不等于原 2 段结构）
+    expect(forced.split(/\n\n+/).length).not.toBe(2);
+    // 对照组：rng 越过 0.85 阈值就不强制，原文逐字保留
+    expect(relaxed).toBe(t);
+  });
+
+  it("行 221：needForce 只兑现一次（forceOneDone 守卫），不会把全文一路合并到一段", () => {
+    const long = `${seg}。再多补一句把这一段拉到中段长度。再补一句让它超过五十字的下限要求。`;
+    const t = `${long}\n\n${long}\n\n${long}`;
+    const out = resegmentParagraphsAggressive(t, rngMid, 0.9);
+    // 4 段均匀 ⇒ 若 forceOneDone 失效会被一路合并到 1~2 段；守卫生效则仍保有两段以上
+    expect(out.split(/\n\n+/).length).toBeGreaterThanOrEqual(2);
   });
 });
 
