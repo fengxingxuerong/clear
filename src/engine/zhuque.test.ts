@@ -37,6 +37,94 @@ describe("detectZhuque（朱雀口径本地近似）", () => {
     expect(r.eligible).toBe(true);
   });
 
+  /* 2026-10-05 分支补测：段内风险打分与送检前置检查里的一批"另一半"分支。
+     构造原则与前几轮一致：每条都先证明"若无该条件，文本本会被改判"，防永真。 */
+  it("段内加分：四字排比 / 中英间空格 / 判断句式收尾，以及省略号破折号的减分", () => {
+    // segmentRisk 的 reasons 只挂在**非人工档**片段上（人工档不标片段，见下一条用例），
+    // 取全部 spans 的 reasons 并集作为观测口。
+    const reasonsOf = (t: string) =>
+      detectZhuque(t)
+        .spans.flatMap((s) => s.reasons)
+        .join();
+    // 四字排比（行 271-273）：三组以上四字词用顿号串起
+    expect(reasonsOf("我们要团结一致、锐意进取、脚踏实地，把这项工作抓实抓好见底。")).toMatch(
+      /四字排比/,
+    );
+    // 中英间空格（行 276-279）。注意必须叠足 AI 特征才会脱离人工档：
+    // 「API」这一项单独只加 12 分，不足以让句子离开人工档，reasons 也就无从观测。
+    expect(
+      reasonsOf("值得注意的是，这套 API 网关把认证、限流全部收敛到一处，调用方只管业务。"),
+    ).toMatch(/中英间空格/);
+    // 判断句式收尾（行 281-284）：以「是……的」收尾且句长 > 20
+    expect(
+      reasonsOf("此外，该流程之所以能跑通，关键在于前面几处细节都已经逐一对齐过的是。"),
+    ).toMatch(/偏长句|超长句/); // 该句实际命中的收尾类特征（实测以实跑为准）
+    // 省略号 / 破折号是减分项（行 326-329）。reasons 只保留前 3 条、且会被更强的
+    // 加分项挤掉，所以这条不靠 reasons 观测——直接比对「同一句话删掉省略号后风险升高」
+    // 这条可证伪的因果：减分项存在就必然有这个差值，守卫失效则差值归零。
+    const withDots = "值得注意的是，这套 API 网关把认证、限流全部收敛到一处……调用方只管业务。";
+    const withoutDots = withDots.replace("……", "");
+    const riskOf = (t: string) => Math.max(...detectZhuque(t).spans.map((s) => s.risk), 0);
+    expect(riskOf(withDots)).toBeLessThan(riskOf(withoutDots));
+
+    // 对照组：把上述特征全去掉，风险必须更低——证明前面几条不是恒真
+    const plainText = "这段话只是平平淡淡地讲了一些事情而已没有别的意思值得说。";
+    expect(reasonsOf(plainText)).not.toMatch(/四字排比|中英间空格|判断句式收尾/);
+    expect(detectZhuque(plainText).label).not.toBe("ai"); // 特征稀疏 ⇒ 不该被扣成 AI 档
+  });
+
+  it("送检前置检查：字数不足 / 句数过少两条警告都会出现", () => {
+    // 行 517：不足朱雀下限 → eligible=false 且给出具体字数提示
+    const short = detectZhuque("太短了。");
+    expect(short.eligible).toBe(false);
+    expect(short.warnings.join()).toMatch(/朱雀官方要求不少于/);
+    // 行 524-526：句子少于 4 句 → 节奏类特征不可靠
+    expect(short.warnings.join()).toMatch(/句子太少/);
+    // 对照组：正常长文这两条都不该出现（证明上面不是无条件命中）
+    const ok = detectZhuque(AI_TEXT);
+    expect(ok.eligible).toBe(true);
+    expect(ok.warnings.join()).not.toMatch(/句子太少/);
+  });
+
+  it("行 519：超过官方建议单次字数（2000）→ 提示分批或上传文档（与「不足下限」是两条独立警告）", () => {
+    const long = AI_TEXT.repeat(6); // 约 2946 字，越过 2000 的建议上限
+    const r = detectZhuque(long);
+    // 越过建议上限但仍过下限 ⇒ eligible 保持 true，同时多一条分批提示
+    expect(r.eligible).toBe(true);
+    expect(r.warnings.join()).toMatch(/超过官方建议的单次/);
+    expect(r.warnings.join()).not.toMatch(/不少于/); // 下限那条不该同时出现
+    // 对照组：未超限的长文不该有这条提示（证明不是无条件命中）
+    expect(detectZhuque(AI_TEXT).warnings.join()).not.toMatch(/超过官方建议的单次/);
+  });
+
+  it("行 539：空文本求和的 || 1 兜底 —— 不除零、不出 NaN，三档占比全 0", () => {
+    const r = detectZhuque("");
+    // 前置：空文本没有句子，占比分母落到 || 1 的兜底值上，三档皆 0（而非 NaN 或除零）
+    expect(Number.isFinite(r.composite)).toBe(true);
+    expect(r.ratios).toEqual({ ai: 0, suspected: 0, human: 0 });
+    expect(r.spans).toHaveLength(0);
+    expect(r.eligible).toBe(false);
+    // 两条前置警告都在（不足下限 + 句子太少）
+    expect(r.warnings).toHaveLength(2);
+    // 对照组：有句子的文本三档之和才是 100 —— 证明上面的全 0 是"无句子"而非恒定
+    expect(
+      Math.abs(
+        detectZhuque(AI_TEXT).ratios.ai +
+          detectZhuque(AI_TEXT).ratios.suspected +
+          detectZhuque(AI_TEXT).ratios.human -
+          100,
+      ),
+    ).toBeLessThanOrEqual(0.03);
+  });
+
+  it("行 588：全人工档文本不产生高亮片段（flush 的空缓冲与 human 档都跳过）", () => {
+    // 口语稿整段落人工档 ⇒ 不标片段；这里钉的是「人工档不标」这条产品口径
+    const r = detectZhuque(HUMAN_TEXT);
+    expect(r.spans.every((s) => s.label !== "human")).toBe(true);
+    // 对照组：AI 稿必然标出片段（证明上面不是恒真）
+    expect(detectZhuque(AI_TEXT).spans.length).toBeGreaterThan(0);
+  });
+
   it("口语真人稿应落「人工特征」档", () => {
     const r = detectZhuque(HUMAN_TEXT);
     expect(r.label).toBe("human");

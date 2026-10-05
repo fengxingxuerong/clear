@@ -10,6 +10,8 @@ import {
   inflationIssues,
   structureIssues,
   addedContentSignals,
+  setJudgeSeats,
+  getJudgeSeats,
 } from "./llm-quality";
 import { fingerprintCheck, humanize } from "../engine/humanize";
 import { restoreMixedSpacing } from "../engine/humanize-shuffle";
@@ -408,6 +410,173 @@ describe("fabricationReview 取值兜底（v0.9.14）", () => {
       vi.fn(async () => resp({ choices: [{ message: { content: "我看没有新增" } }] })),
     );
     await expect(fabricationReview("原文。", "改写。", cfg)).rejects.toThrow(/未返回有效 JSON/);
+  });
+
+  /* 2026-10-05 分支补测：extractJsonObject 的三条失败路径此前从未被执行——
+     解析成功但不是对象（数组/原始值）、JSON 语法坏、以及字符串扫完没遇到闭合括号。
+     全部表现为同一个对外契约：抛「未返回有效 JSON」，绝不返回半个结果。 */
+  it("行 304：花括号内是数组/原始值而非对象 → 同样按「未返回有效 JSON」拒收", async () => {
+    // 注意只取**形状不对但确实是对象字面量**的样本：`{"fabrications":[]}` 是合法对象，
+    // 应当返回空清单（见下一条 337 的对照组），不能混进来当失败样本。
+    for (const body of ["[1,2,3]", "12345", '"一段字符串"', "true"]) {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => resp({ choices: [{ message: { content: body } }] })),
+      );
+      await expect(fabricationReview("原文。", "改写。", cfg), body).rejects.toThrow(
+        /未返回有效 JSON/,
+      );
+    }
+  });
+
+  it("行 305-306：花括号内是坏 JSON → 捕获后拒收，不把异常抛给调用方", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => resp({ choices: [{ message: { content: '{"fabrications": [oops}' } }] })),
+    );
+    await expect(fabricationReview("原文。", "改写。", cfg)).rejects.toThrow(/未返回有效 JSON/);
+  });
+
+  it("行 311：整段扫完没有配平的闭合括号 → 返回 null（不是死循环也不是半个对象）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => resp({ choices: [{ message: { content: '{"fabrications":["没闭合' } }] })),
+    );
+    await expect(fabricationReview("原文。", "改写。", cfg)).rejects.toThrow(/未返回有效 JSON/);
+  });
+
+  it("行 337：fabrications 字段不是数组 → 返回空清单（按「没查到编造」而非编造一堆）", async () => {
+    // 形状不对时的口径必须是「不否决」：把字符串当成编造项会让改写稿凭空多出罪名
+    for (const fabs of ['"单个字符串"', "null", '{"a":1}', "42"]) {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          resp({ choices: [{ message: { content: `{"fabrications":${fabs}}` } }] }),
+        ),
+      );
+      await expect(fabricationReview("原文。", "改写。", cfg), fabs).resolves.toEqual([]);
+    }
+    // 对照组：形状正确时才返回真实编造项（证明上面不是因为恒返回空）
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        resp({ choices: [{ message: { content: '{"fabrications":["真的编造"]}' } }] }),
+      ),
+    );
+    await expect(fabricationReview("原文。", "改写。", cfg)).resolves.toEqual(["真的编造"]);
+  });
+
+  it("行 59/69：质检首行判定的两种边界 —— 空响应与「NOT PASS」不得当成通过", async () => {
+    const cfg = { ...DEFAULT_API, enabled: true, apiKey: "k", judgeModel: "glm-5.2" };
+    const withContent = (content: string) => resp({ choices: [{ message: { content } }] });
+
+    // 行 59 的 `lines[0] || ""`：首行为空（响应里没有任何非空行）时不得崩，且必须判不通过
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => withContent("   ")),
+    );
+    await expect(fabricationReview("原文。", "改写。", cfg)).rejects.toThrow(/未返回有效 JSON/);
+
+    // 行 69 的判定口径：`NOT PASS` 含子串 PASS，用 includes 就会误判成通过——必须仍判失败。
+    // 这里通过 processCandidate 观察：质检说 NOT PASS 时不能进入放行分支。
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => withContent("NOT PASS\n1. 存在可疑改写")),
+    );
+    const r = await processCandidate("原文：营收增长23%。", "改写稿：营收增长23%。", cfg, 0.6);
+    expect(r.qc.pass).toBe(false);
+    expect(r.qc.issues.join()).toMatch(/可疑改写/);
+  });
+});
+
+describe("合议庭路径（v0.9.3：≥2 席走多网关交叉）", () => {
+  const cfg = { ...DEFAULT_API, enabled: true, apiKey: "k", judgeModel: "glm-5.2" };
+  const passResp = () =>
+    new Response(JSON.stringify({ choices: [{ message: { content: "PASS" } }] }), { status: 200 });
+  /** JudgeSeat 必须带 baseUrl/apiKey（judge-panel 按此路由到各自网关），缺一个就退化成挂死 */
+  const seat = (id: string, gw: string) => ({
+    id,
+    baseUrl: `https://${gw}/v1`,
+    apiKey: "k",
+    model: "m",
+  });
+  /** 按请求体里的 system 提示词路由：质检通道（"文本质检员"）要 PASS，其余（合议庭/单裁判）要数字评分 */
+  const router = (judgeBody: unknown) =>
+    vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      const sys: string = body.messages?.[0]?.content ?? "";
+      const isQc = sys.includes("文本质检员");
+      const content = isQc ? "PASS" : JSON.stringify(judgeBody);
+      return new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+  afterEach(() => {
+    setJudgeSeats([]); // 不还原就会漏给下一条（模块级变量）
+    vi.unstubAllGlobals();
+  });
+
+  it("行 539-542：配了 ≥2 席 → 返回 panelSeats，score 取合议庭加权中位分", async () => {
+    setJudgeSeats([seat("a", "gw-a"), seat("b", "gw-b"), seat("c", "gw-c")]);
+    vi.stubGlobal("fetch", router({ score: 42 }));
+    const r = await processCandidate("原文：营收增长23%。", "改写稿：营收增长23%。", cfg, 0.6);
+    expect(r.qc.pass).toBe(true);
+    // 合议庭跑通时必带 panelSeats；单裁判路径不带这个字段
+    expect(Array.isArray(r.panelSeats)).toBe(true);
+    expect(r.panelSeats?.length).toBe(3);
+    expect(r.score).toBe(42);
+  });
+
+  it("行 549-551：合议庭全席失败 → 回退单裁判；单裁判也挂时仍给出完整结构而非抛异常", async () => {
+    setJudgeSeats([seat("a", "gw-a"), seat("b", "gw-b")]);
+    let gwHits = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown, init?: RequestInit) => {
+        const sys: string = JSON.parse(String(init?.body)).messages?.[0]?.content ?? "";
+        // 质检先放行，好让流程走到合议庭那一段
+        if (sys.includes("文本质检员")) {
+          return new Response(JSON.stringify({ choices: [{ message: { content: "PASS" } }] }), {
+            status: 200,
+          });
+        }
+        // 合议庭两席全挂（用 401 而非 5xx：llm-chat.ts 125 行对 ≥500 会走 2+5+12s 的
+        // 真实退避 sleep，测试会超时；401 只触发换 Key，单 Key 池下立即失败、零等待）
+        if (String(url).includes("gw-")) {
+          gwHits++;
+          return new Response("unauthorized", { status: 401 });
+        }
+        // 单裁判也挂 —— 同样是 401，保证不触发退避等待
+        return new Response("unauthorized", { status: 401 });
+      }),
+    );
+    const r = await processCandidate("原文：营收增长23%。", "改写稿：营收增长23%。", cfg, 0.6);
+    // 前置：确实打过合议庭的网关（否则测的不是这条回退路径）
+    expect(gwHits).toBe(2);
+    // 全挂也要给出结构完整的结果（行 555-556 的 catch），不能把异常抛给候选期
+    expect(r.qc.pass).toBe(true);
+    expect(r.score).toBeNull();
+    expect(r.panelSeats).toBeUndefined();
+  });
+
+  it("对照：只有 1 席时不启用合议庭（走单裁判，不带 panelSeats）", async () => {
+    setJudgeSeats([seat("solo", "gw-solo")]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => passResp()),
+    );
+    const r = await processCandidate("原文：营收增长23%。", "改写稿：营收增长23%。", cfg, 0.6);
+    expect(r.panelSeats).toBeUndefined();
+  });
+
+  it("行 566：getJudgeSeats 读回的是刚注入的席位，且清空后立刻回落为空", () => {
+    const s = [seat("a", "gw-a"), seat("b", "gw-b")];
+    setJudgeSeats(s);
+    expect(getJudgeSeats()).toHaveLength(2); // 注入可读
+    setJudgeSeats([]);
+    expect(getJudgeSeats()).toEqual([]); // 清空可回落（决定是否启用合议庭的那把尺）
   });
 });
 
