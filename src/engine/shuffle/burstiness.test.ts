@@ -9,7 +9,12 @@
  *                   → boostBurstinessFragments（句间注入口语碎片，5 道守卫）
  */
 import { describe, it, expect } from "vitest";
-import { boostBurstiness, boostBurstinessSingle, boostBurstinessIfLow } from "./burstiness.ts";
+import {
+  boostBurstiness,
+  boostBurstinessSingle,
+  boostBurstinessIfLow,
+  boostBurstinessByCutting,
+} from "./burstiness.ts";
 import {
   splitSentences,
   countPadHeads,
@@ -186,5 +191,78 @@ describe("boostBurstinessInBlock：尾挂锚的三种收尾（293-296）", () =>
     const lens = splitSentences(src).map((s) => s.replace(/[。！？!?；;\n]/g, "").length);
     expect(lens.every((n) => n < 10)).toBe(true);
     expect(splitSentences(src)).toHaveLength(4);
+  });
+
+  /* ─────────── 注入循环的四条边界（2026-10-05） ───────────
+   *
+   * 这些分支的共同点是「注入器必须**克制**：宁可不动，也不能造病句或复读。
+   * 它们的正确性判据都是"输出不得变坏"，所以断言一律配反向对照：
+   * 既要证明这条守卫被走到，也要证明没走到时输出确实不同。 */
+
+  it("行 67：句长方差已达标时整段不动（CV 守卫早退）", () => {
+    // 长短交替：天然双峰，CV 远超 MIN_BURSTINESS_CV ⇒ 不该再注碎片/锚点
+    const src = EQUAL4 + "对哦。嗯。行。";
+    const out = boostBurstinessIfLow(src, rng);
+    expect(out).toBe(src);
+    // 反向对照：同一段去掉极短句后 CV 下降，注入器就会动手
+    expect(boostBurstinessIfLow(EQUAL4, rng)).not.toBe(EQUAL4);
+  });
+
+  it("行 258：问句前不挂语气锚（「不信嗯？」是语体错位）", () => {
+    // 前置：末句必须是问句，且其前文足够长以触发锚灌注循环
+    const src = EQUAL4 + "这样真的好吗？";
+    const out = boostBurstinessIfLow(src, rng);
+    // 硬不变量：问号前不得出现语气锚（锚以句号结尾，被剥掉句号后紧贴问号）
+    expect(out).not.toMatch(/[嗯嗨吧行啊呵啧呣咳哦对]？/);
+    expect(out).toContain("这样真的好吗？");
+  });
+
+  it("行 235：锚点池耗尽时 break，不重复使用已挂过的锚", () => {
+    // ULTRA_SHORT_ANCHORS 只有 13 条；文本足够长时注入次数会超过池子
+    const long = EQUAL4.repeat(6);
+    const out = boostBurstinessIfLow(long, rngZero);
+    // 逐个统计 13 个锚各出现几次：任何一个出现 ≥2 次即复读（机器指纹）
+    for (const a of ["对哦。", "嗯。", "嗨。", "好吧。", "行。", "是啊。", "诶。", "咳。"]) {
+      const n = out.split(a).length - 1;
+      expect(n, `锚「${a}」复读了 ${n} 次`).toBeLessThanOrEqual(1);
+    }
+    // 输出仍须保住全部原文（注入不得吃掉句子）
+    expect(out).toContain("今天天气不错就出去走了走。");
+    expect(splitSentences(out).length).toBeGreaterThan(splitSentences(long).length);
+  });
+
+  it("行 279：尾挂锚同样不复读（跨调用防复读的块内分支）", () => {
+    // 连续多块调用：每块 usedAnchors 重建，靠文本尾实测防复读
+    const block = EQUAL4 + "。";
+    let acc = block;
+    for (let i = 0; i < 5; i++) acc = boostBurstinessIfLow(acc + "\n\n" + block, rngZero);
+    // 相邻同锚复读由 IfLow 末尾的清扫正则兜底，这里只断言不出现"。对哦。对哦。"
+    expect(acc).not.toMatch(/((?:对哦|嗯|嗨|好吧|行|是啊|诶)[。])(?:\s*)\1/);
+  });
+
+  it("行 316：maxCuts=0 时纯切句兜底整段不动", () => {
+    // 6 句等长（各 25 字、CV=0）、逗号两侧都能独立成句 ⇒ 给足预算时真能切
+    const CUTTABLE = "项目进度需要提前排期，交付质量必须逐项验收确认无遗漏。".repeat(6);
+    // 入口守卫：maxCuts<=0 直接原样返回，一个字都不许动
+    expect(boostBurstinessByCutting(CUTTABLE, 0.9, 0)).toBe(CUTTABLE);
+    // 反向对照：同一段给了切点预算就会真的切（证明上面不是"切不动"造成的巧合）
+    expect(boostBurstinessByCutting(CUTTABLE, 0.9, 5)).not.toBe(CUTTABLE);
+  });
+
+  it("行 351：插入语引导的长句切点必须落在第二个逗号之后，绝不切在插入语前", () => {
+    // 「说起来，X，Y」结构：首个逗号是插入语边界（绝不能当切点），
+    // 切点必须取第二个逗号附近。v0.9.14 修的就是这条路径切出孤句的病句。
+    // 每句逗号两侧都能独立成句 ⇒ findSplitPoint 才可能返回非 -1。
+    const src =
+      "说起来项目进度需要提前排期，交付质量必须逐项验收确认无遗漏，细节还要逐条跟相关同事核对清楚。".repeat(
+        5,
+      );
+    const out = boostBurstinessByCutting(src, 0.9, 4);
+    // 硬不变量：切出的任何句子都不得是「说起来。」这类光杆孤句
+    expect(out).not.toContain("说起来。");
+    expect(out).not.toMatch(/(?:^|[。！？])(?:总的来说|说到底|值得注意的是)[。！？]/);
+    // 且不得丢字：原句核心内容仍在
+    expect(out).toContain("项目进度需要提前排期");
+    expect(out).toContain("细节还要逐条跟相关同事核对清楚");
   });
 });
