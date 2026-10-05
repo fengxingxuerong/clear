@@ -77,7 +77,11 @@ export function importFileToText(f: File): Promise<ImportOutcome> {
         resolve({ text: "", name: f.name, note: "文件内容为空，未导入。" });
         return;
       }
-      resolve({ text: t, name: f.name, note: `已导入 ${f.name}（${t.length} 字），点「去味」开始。` });
+      resolve({
+        text: t,
+        name: f.name,
+        note: `已导入 ${f.name}（${t.length} 字），点「去味」开始。`,
+      });
     };
     r.onerror = () => resolve({ text: "", name: f.name, note: "读取文件失败，请重试或改用粘贴。" });
     r.readAsText(f, "utf-8");

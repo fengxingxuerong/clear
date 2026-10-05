@@ -43,7 +43,11 @@ function stub(name: "setItem" | "getItem", fn: (...a: never[]) => unknown): void
   Object.defineProperty(localStorage, name, { value: fn, configurable: true, writable: true });
 }
 function unstub(name: "setItem" | "getItem"): void {
-  Object.defineProperty(localStorage, name, { value: ORIG[name], configurable: true, writable: true });
+  Object.defineProperty(localStorage, name, {
+    value: ORIG[name],
+    configurable: true,
+    writable: true,
+  });
 }
 
 afterEach(() => {

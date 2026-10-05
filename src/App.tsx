@@ -254,7 +254,15 @@ export default function App({
       const msg = buildHumanizeNote({ r, input, din, dout, zr, detectorNote });
       setNote(msg);
       // 保存到历史记录
-      const entry = makeHistoryEntry(input, r.text, r.before, r.after, intensity, r.usedApi, r.engine);
+      const entry = makeHistoryEntry(
+        input,
+        r.text,
+        r.before,
+        r.after,
+        intensity,
+        r.usedApi,
+        r.engine,
+      );
       saveHistory(entry);
       setHistory(loadHistory());
     } catch (e: unknown) {

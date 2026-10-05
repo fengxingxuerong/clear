@@ -54,7 +54,7 @@ export interface HumanizeOptions {
  * CV 检查是补充判据——0.40 反映新引擎真实能力，仍能抓到 std<4.5 且 CV<0.40 的
  * 真正均匀文本。
  */
-export const MIN_BURSTINESS_CV = 0.40;
+export const MIN_BURSTINESS_CV = 0.4;
 
 /* =========================================================
    v0.9.4 P2 跨轮垫词饱和守卫

@@ -2,7 +2,12 @@
  * 趣AI味 · LLM 去味流程：单轮改写 与 深度多轮闭环（质检+交叉评判+定向修订）
  */
 
-import { ApiConfig, ADAPTIVE_CONTEST_CHARS, DEEP_MAX_ROUNDS, DEEP_TARGET_SCORE } from "./llm-config";
+import {
+  ApiConfig,
+  ADAPTIVE_CONTEST_CHARS,
+  DEEP_MAX_ROUNDS,
+  DEEP_TARGET_SCORE,
+} from "./llm-config";
 import {
   SYSTEM_PROMPT,
   pickExemplarBlock,
@@ -99,11 +104,7 @@ async function mapLimited<T>(
 }
 
 /** 组装改写用的 system 提示词（基础战术 + 按体裁选范例 + 文风预设 + 人味人格 + 强度档位） */
-export function buildSystemPrompt(
-  cfg: ApiConfig,
-  intensity: number,
-  sourceText?: string,
-): string {
+export function buildSystemPrompt(cfg: ApiConfig, intensity: number, sourceText?: string): string {
   return (
     SYSTEM_PROMPT +
     pickExemplarBlock(sourceText ?? "", cfg.style) +
@@ -498,12 +499,12 @@ export async function humanizeViaApiDeep(
           { role: "system", content: buildSystemPrompt(cfg, intensity, text) },
           { role: "user", content: userMsg },
         ],
-      // v0.9.5 能力优化：修订温度递减。旧实现逐轮升温（+0.05）——设计意图是
-      // "打不开局面时加大随机性逃逸"，但实测修订是执行痕迹清单的精准任务，
-      // 升温加剧横跳（90→90、76→88 的部分根因）。改递减：首轮保持采样多样性，
-      // 越往后越收敛，配合"局部修改铁律"把修订稳定在清单执行上。
-      {
-        temperature: Math.max(0.5, cfg.temperature - (round - 1) * 0.15),
+        // v0.9.5 能力优化：修订温度递减。旧实现逐轮升温（+0.05）——设计意图是
+        // "打不开局面时加大随机性逃逸"，但实测修订是执行痕迹清单的精准任务，
+        // 升温加剧横跳（90→90、76→88 的部分根因）。改递减：首轮保持采样多样性，
+        // 越往后越收敛，配合"局部修改铁律"把修订稳定在清单执行上。
+        {
+          temperature: Math.max(0.5, cfg.temperature - (round - 1) * 0.15),
           maxTokens: 8000,
           model: writerModel,
         },

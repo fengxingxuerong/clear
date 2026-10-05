@@ -25,7 +25,10 @@ const SEEDS = 40;
 
 /** 头几条失败样本即可定位，全量会把测试输出撑爆 */
 function summarize(fails: string[], expectKey: string) {
-  expect(fails, `${expectKey}：${fails.length} 处失败，前 5 条：\n${fails.slice(0, 5).join("\n")}`).toHaveLength(0);
+  expect(
+    fails,
+    `${expectKey}：${fails.length} 处失败，前 5 条：\n${fails.slice(0, 5).join("\n")}`,
+  ).toHaveLength(0);
 }
 
 const corpusA = [
@@ -50,7 +53,10 @@ const badSignatures: [string, RegExp][] = [
   ["句号后逗号", /。，/],
   ["逗号后句号", /，。/],
   // 名词位了：只抓"的+动词+了"与名词化宾语后补了，不抓自然输入里本来就通的"效率提高了。"
-  ["名词位了", /的(?:提高|提升|优化|落实|完善|实现|解决|建立|取得|获得|突破|整合|加强|推进|改造|升级|修复|培育|化解|破解|攻克|达成)了[。！？!?]|(?:突破了|收获了|治理了)[。！？!?]/],
+  [
+    "名词位了",
+    /的(?:提高|提升|优化|落实|完善|实现|解决|建立|取得|获得|突破|整合|加强|推进|改造|升级|修复|培育|化解|破解|攻克|达成)了[。！？!?]|(?:突破了|收获了|治理了)[。！？!?]/,
+  ],
   ["裸难接动词", /(者|人|们)难(?!以)/],
   // 不抓 injectSelfQA 故意造的"意味着什么？"——那是自问自答注入，不是切句切出来的无主残句
   ["无主句切断", /[。！？]?(?:成为|使得|导致|意味着)(?!什么)[^。！？]{0,4}(?:了|着)?[。！？]/],
@@ -85,36 +91,40 @@ const badSignatures: [string, RegExp][] = [
   ["最后说一句天", /最后说一句天|最后说一句(?:时间|阶段)/],
   ["多了一个的", /了(?:的)?提升(?:的)?了/],
   ["帮X表明残留", /(?:聊|说|谈)(?:数字|人工|技术|阅读)[^，。]{0,6}(?:表明|指出|显示|发现)/],
-  ["垫词叠罗汉", /(?:说真的|要我说|老实讲|讲真|说实话|客观讲|平心而论|细想下|往实了说|不瞒你说|你别说|话又说回来|说白了|其实|按我的经验)，(?:说真的|要我说|有意思的是|老实讲|讲真|说实话)/],
+  [
+    "垫词叠罗汉",
+    /(?:说真的|要我说|老实讲|讲真|说实话|客观讲|平心而论|细想下|往实了说|不瞒你说|你别说|话又说回来|说白了|其实|按我的经验)，(?:说真的|要我说|有意思的是|老实讲|讲真|说实话)/,
+  ],
   ["破折号堆叠", /—{3,}/],
   ["引号残留", /[“”]/],
 ];
 
 describe("八维元压测闸门", () => {
-  it(
-    "A) 病句签名压测：套话语料 × 全强度 × 40 种子 零命中",
-    () => {
-      const fails: string[] = [];
-      // 口径修正：签名对**输入原文**即命中的（如语料自带"，予以了反馈"），属继承而非引擎制造，
-      // 不计入失败——否则该语料每次运行必失，真缺陷反而被恒定噪声盖住。
-      const inherited = corpusA.map((d) => new Set(badSignatures.filter(([, re]) => re.test(d)).map(([n]) => n)));
-      let runs = 0;
-      for (const intensity of INTENSITIES) {
-        for (let seed = 0; seed < SEEDS; seed++) {
-          corpusA.forEach((doc, di) => {
-            runs++;
-            const out = humanize(doc, { intensity, seed });
-            for (const [name, re] of badSignatures) {
-              if (inherited[di].has(name)) continue;
-              if (re.test(out)) fails.push(`${name} 强度${intensity} seed${seed}: ${out.match(re)?.[0]} → ${out.slice(0, 60)}`);
-            }
-          });
-        }
+  it("A) 病句签名压测：套话语料 × 全强度 × 40 种子 零命中", () => {
+    const fails: string[] = [];
+    // 口径修正：签名对**输入原文**即命中的（如语料自带"，予以了反馈"），属继承而非引擎制造，
+    // 不计入失败——否则该语料每次运行必失，真缺陷反而被恒定噪声盖住。
+    const inherited = corpusA.map(
+      (d) => new Set(badSignatures.filter(([, re]) => re.test(d)).map(([n]) => n)),
+    );
+    let runs = 0;
+    for (const intensity of INTENSITIES) {
+      for (let seed = 0; seed < SEEDS; seed++) {
+        corpusA.forEach((doc, di) => {
+          runs++;
+          const out = humanize(doc, { intensity, seed });
+          for (const [name, re] of badSignatures) {
+            if (inherited[di].has(name)) continue;
+            if (re.test(out))
+              fails.push(
+                `${name} 强度${intensity} seed${seed}: ${out.match(re)?.[0]} → ${out.slice(0, 60)}`,
+              );
+          }
+        });
       }
-      summarize(fails, `A 病句签名（共 ${runs} 次运行）`);
-    },
-    180_000,
-  );
+    }
+    summarize(fails, `A 病句签名（共 ${runs} 次运行）`);
+  }, 180_000);
 
   it("B) 搭配安全探针：量词/时间/百分比/URL/邮箱 不得被替身打散", () => {
     const probes: [string, string][] = [
@@ -141,7 +151,10 @@ describe("八维元压测闸门", () => {
       for (const intensity of [0.2, 0.6, 1.0]) {
         for (let seed = 0; seed < 10; seed++) {
           both(input, { intensity, seed }).forEach((out, fnIdx) => {
-            if (!out.includes(keep)) fails.push(`${fnIdx ? "shuffle" : "humanize"} 丢失[${keep}] 强度${intensity} seed${seed}: ${out}`);
+            if (!out.includes(keep))
+              fails.push(
+                `${fnIdx ? "shuffle" : "humanize"} 丢失[${keep}] 强度${intensity} seed${seed}: ${out}`,
+              );
           });
         }
       }
@@ -161,7 +174,10 @@ describe("八维元压测闸门", () => {
       for (const intensity of INTENSITIES) {
         for (let seed = 0; seed < 20; seed++) {
           both(doc, { intensity, seed }).forEach((out, fnIdx) => {
-            if (/，。|。，|，，|、，|，、|。;|;。/.test(out)) fails.push(`${fnIdx ? "shuffle" : "humanize"} 强度${intensity} seed${seed}: ${out.slice(0, 60)}`);
+            if (/，。|。，|，，|、，|，、|。;|;。/.test(out))
+              fails.push(
+                `${fnIdx ? "shuffle" : "humanize"} 强度${intensity} seed${seed}: ${out.slice(0, 60)}`,
+              );
           });
         }
       }
@@ -182,19 +198,24 @@ describe("八维元压测闸门", () => {
       if (out.split("……").length - 1 > 1) fails.push(`省略号超标 seed${seed}`);
       const full = (out.match(/，/g) || []).length;
       const half = (out.match(/,/g) || []).length;
-      if (full + half > 0 && half / (full + half) > 0.15) fails.push(`半角混入过高 seed${seed} ${half}/${full + half}`);
+      if (full + half > 0 && half / (full + half) > 0.15)
+        fails.push(`半角混入过高 seed${seed} ${half}/${full + half}`);
     }
     summarize(fails, "D 反指纹限额");
   });
 
   it("E) 忠实度硬约束：数字与英文专名不得增删改", () => {
-    const fidText = "公司2025年营收增长23%，海外占40%。新产品明年3月发布，支持GPT和Claude模型，准确率92.5%。";
+    const fidText =
+      "公司2025年营收增长23%，海外占40%。新产品明年3月发布，支持GPT和Claude模型，准确率92.5%。";
     const fails: string[] = [];
     for (const intensity of INTENSITIES) {
       for (let seed = 0; seed < 20; seed++) {
         both(fidText, { intensity, seed }).forEach((out, fnIdx) => {
           const rep = checkFidelityLocal(fidText, out);
-          if (!rep.pass) fails.push(`${fnIdx ? "shuffle" : "humanize"} 强度${intensity} seed${seed}: ${rep.problems[0]} → ${out.slice(0, 60)}`);
+          if (!rep.pass)
+            fails.push(
+              `${fnIdx ? "shuffle" : "humanize"} 强度${intensity} seed${seed}: ${rep.problems[0]} → ${out.slice(0, 60)}`,
+            );
         });
       }
     }
@@ -207,16 +228,20 @@ describe("八维元压测闸门", () => {
     const fails: string[] = [];
     for (const intensity of INTENSITIES) {
       for (let seed = 0; seed < 10; seed++) {
-        if (!humanize(paraText, { intensity, seed }).includes("\n\n")) fails.push(`段落丢失 强度${intensity} seed${seed}`);
+        if (!humanize(paraText, { intensity, seed }).includes("\n\n"))
+          fails.push(`段落丢失 强度${intensity} seed${seed}`);
       }
     }
     summarize(fails, "F 段落结构");
   });
 
   it("G) aiScore 合理性：人写 < 干净 < 套话，且 AI 文本高分", () => {
-    const humanLike = "我昨天试了下那个新软件，界面还行，就是启动有点慢。用了一下午，感觉比之前那个顺手。朋友说下个月要出更新版，到时候再看吧。反正现在够用了。";
-    const aiLike = "值得注意的是，随着技术的不断发展，其在各领域的应用日益广泛。毋庸置疑，这一趋势具有深远的意义。综上所述，我们需要持续努力，实现更大的突破。";
-    const clean = "今天天气不错，出门走了走。路上买了个煎饼，挺好吃。下午在家看了会书，晚上打算早点睡。";
+    const humanLike =
+      "我昨天试了下那个新软件，界面还行，就是启动有点慢。用了一下午，感觉比之前那个顺手。朋友说下个月要出更新版，到时候再看吧。反正现在够用了。";
+    const aiLike =
+      "值得注意的是，随着技术的不断发展，其在各领域的应用日益广泛。毋庸置疑，这一趋势具有深远的意义。综上所述，我们需要持续努力，实现更大的突破。";
+    const clean =
+      "今天天气不错，出门走了走。路上买了个煎饼，挺好吃。下午在家看了会书，晚上打算早点睡。";
     const g1 = aiScore(humanLike).score;
     const g2 = aiScore(aiLike).score;
     const gc = aiScore(clean).score;
@@ -256,7 +281,10 @@ describe("八维元压测闸门", () => {
       for (const intensity of INTENSITIES) {
         for (let seed = 0; seed < SEEDS; seed++) {
           const out = humanize(doc, { intensity, seed });
-          if (PREDICATE_LOSS_RE.test(out)) fails.push(`强度${intensity} seed${seed}: ${out.match(PREDICATE_LOSS_RE)![0]} → ${out.slice(0, 50)}`);
+          if (PREDICATE_LOSS_RE.test(out))
+            fails.push(
+              `强度${intensity} seed${seed}: ${out.match(PREDICATE_LOSS_RE)![0]} → ${out.slice(0, 50)}`,
+            );
         }
       }
     }
@@ -266,7 +294,20 @@ describe("八维元压测闸门", () => {
   // J) 谓语类套话在谓语位不得被删成光杆主语（stripAICliches 边界判据的直接回归）
   it("J) 谓语位套话保留：塌句零命中", () => {
     const SUBJ = "人工智能技术";
-    const predicateCliches = ["应运而生", "至关重要", "具有十分重要的意义", "按下了快进键", "迈上了新的台阶", "交出了一份满意的答卷", "具有里程碑意义", "展望未来", "在一定程度上", "综上所述", "在当今社会", "发挥着不可替代的作用"];
+    const predicateCliches = [
+      "应运而生",
+      "至关重要",
+      "具有十分重要的意义",
+      "按下了快进键",
+      "迈上了新的台阶",
+      "交出了一份满意的答卷",
+      "具有里程碑意义",
+      "展望未来",
+      "在一定程度上",
+      "综上所述",
+      "在当今社会",
+      "发挥着不可替代的作用",
+    ];
     const fails: string[] = [];
     for (const p of predicateCliches) {
       let collapsed = 0;

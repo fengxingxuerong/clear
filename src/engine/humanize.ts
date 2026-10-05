@@ -726,8 +726,7 @@ export function humanize(text: string, opts: HumanizeOptions = {}): string {
   //
   // 代价评估：跳过结构层会少一个"骨架打散"手段，但叙事/人写本来就不靠这个——
   //   实测叙事全档位 aiScore 已是 0~17（低于判定线 29），去掉后不产生新缺口。
-  const structuralAllowedGenre =
-    effectiveGenre !== "narrative" && effectiveGenre !== "humanHand";
+  const structuralAllowedGenre = effectiveGenre !== "narrative" && effectiveGenre !== "humanHand";
   if (intensity >= 0.55 && structuralAllowedGenre) {
     const structRng = makeRng(opts.seed, 5555);
     // P7-B：论说文 + 强度≥0.75 → 强制开启 P3 结构增强（覆盖 expoScore 略低于 0.55 的边缘论说文）
@@ -817,10 +816,7 @@ export function humanize(text: string, opts: HumanizeOptions = {}): string {
   //  （第二个字符非语气词时不匹配）。
   result = result
     .replace(/([哦呵啧呣诶呀嘛呢吧啊嗯])\1+/g, "$1")
-    .replace(
-      /([哦呵啧呣诶呀嘛呢吧啊嗯])[哦呵啧呣诶呀嘛呢吧啊嗯]+(?=[。，！？；、\n]|$)/g,
-      "$1",
-    );
+    .replace(/([哦呵啧呣诶呀嘛呢吧啊嗯])[哦呵啧呣诶呀嘛呢吧啊嗯]+(?=[。，！？；、\n]|$)/g, "$1");
   //  C) 残句开头守卫：句首独词连接词（并/而/且/但/亦/另）修复
   if (intensity >= 0.55) {
     result = fixOrphanConnectiveLeads(result);
@@ -1091,8 +1087,7 @@ function humanizeSingle(text: string, opts: HumanizeOptions = {}): string {
   // v0.9.8 P0 收敛：humanHand / narrative 体裁禁句首垫词（语体错位）。
   // narrative 的文风是「把事讲清楚」，humanHand 的原稿本来就是人写的——
   // 两者塞「说真的，」都是机器味而非人味。显式 genre 与自动识别都覆盖。
-  const padForbiddenGenre =
-    opts.genre === "humanHand" || opts.genre === "narrative";
+  const padForbiddenGenre = opts.genre === "humanHand" || opts.genre === "narrative";
 
   for (let i = 0; i < sentences.length; i++) {
     let s = sentences[i];
@@ -1131,10 +1126,7 @@ function humanizeSingle(text: string, opts: HumanizeOptions = {}): string {
     // 挪到 `&&` 链**末端**后：默认风格是 plain（isCasual=false），这三条先短路，
     // 昂贵调用根本不会执行。countPadHeads 是纯函数、无副作用，短路掉它行为完全等价。
     const padInjectAllowed =
-      !isAcademic &&
-      isCasual &&
-      !padForbiddenGenre &&
-      countPadHeads(out.join("")) < PAD_INJECT_CAP;
+      !isAcademic && isCasual && !padForbiddenGenre && countPadHeads(out.join("")) < PAD_INJECT_CAP;
     if (
       padInjectAllowed &&
       rng() < INTERJECTION_RATE * intensity &&
@@ -1186,8 +1178,7 @@ function humanizeSingle(text: string, opts: HumanizeOptions = {}): string {
     //   不是重写作者的句子边界。
     //   注意用 opts.genre 而非 effectiveGenre：humanizeSingle 作用域内只有 opts，
     //   调用方 humanize 已把 effectiveGenre 注入 opts.genre（见 humanize 内两处调用）。
-    const mergeForbiddenGenre =
-      opts.genre === "narrative" || opts.genre === "humanHand";
+    const mergeForbiddenGenre = opts.genre === "narrative" || opts.genre === "humanHand";
     if (
       !mergeForbiddenGenre &&
       out.length > 0 &&
@@ -1228,8 +1219,7 @@ function humanizeSingle(text: string, opts: HumanizeOptions = {}): string {
       // 为什么此前保留单字尾：注释（见下）说「A/B 显示不贡献污染分」，
       //   但那是在 humanizeSingle 单层测的；全文级（含朱雀层）复测推翻了该结论。
       //   对 casual 的论说/对话体裁仍保留——那里「嘛」「吧」是有效的人味信号。
-      const tailForbiddenGenre =
-        opts.genre === "humanHand" || opts.genre === "narrative";
+      const tailForbiddenGenre = opts.genre === "humanHand" || opts.genre === "narrative";
       if (!formalityGuard && !tailForbiddenGenre) {
         // v0.9.8 P0 收敛（五）：废除 SOFT_TAIL_VARIANTS 句尾收束分支。
         //
@@ -1445,7 +1435,9 @@ function injectOpinionBlock(text: string, rng: () => number, p: number): string 
       let lastOpinion = false;
       for (let i = 0; i < sentences.length; i++) {
         let s = sentences[i];
-        const hasOpinion = /^(我觉得|我认为|在我看来|以我的经验|我个人的看法|我寻思着|要我说)/.test(s);
+        const hasOpinion = /^(我觉得|我认为|在我看来|以我的经验|我个人的看法|我寻思着|要我说)/.test(
+          s,
+        );
         const hasInterjection = /^(说真的|说实话|老实讲|讲真|说白了|你别说|不瞒你说)/.test(s);
         if (s.length > 10 && rng() < p && !lastOpinion && !hasOpinion && !hasInterjection) {
           let op = pick(rng, OPINION_PHRASES);

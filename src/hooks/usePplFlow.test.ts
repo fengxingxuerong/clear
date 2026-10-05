@@ -117,9 +117,7 @@ describe("usePplFlow：ensurePpl 下载链", () => {
     });
     computePplFeatureMock.mockResolvedValue(FEATURE);
     ready();
-    const { result } = renderHook(() =>
-      usePplFlow({ getAnalysisTarget: () => "目标文本" }),
-    );
+    const { result } = renderHook(() => usePplFlow({ getAnalysisTarget: () => "目标文本" }));
     await act(async () => {
       await result.current.ensurePpl();
     });

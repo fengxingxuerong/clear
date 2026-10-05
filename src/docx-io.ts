@@ -156,7 +156,10 @@ export function docxXmlToText(xml: string): string {
 
 /** 解析 .docx（Blob/File/ArrayBuffer）为纯文本；不是 docx 或缺 document.xml 时抛错 */
 export async function readDocxText(source: Blob | ArrayBuffer): Promise<string> {
-  const buf = source instanceof ArrayBuffer ? new Uint8Array(source) : new Uint8Array(await source.arrayBuffer());
+  const buf =
+    source instanceof ArrayBuffer
+      ? new Uint8Array(source)
+      : new Uint8Array(await source.arrayBuffer());
   const entries = readZipDirectory(buf);
   const entry = entries.get("word/document.xml");
   if (!entry) {

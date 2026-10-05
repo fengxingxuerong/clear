@@ -180,7 +180,10 @@ describe("boostBurstinessByCutting（不得切出光杆连接词）", () => {
   const cases: Array<[string, string]> = [
     ["值得注意的是", "值得注意的是，远程办公不仅提高了工作效率，还显著提升了员工的工作生活平衡。"],
     ["总的来看", "总的来看，数字化办公不仅极大地提升了工作效率，而且有效地降低了运营成本。"],
-    ["归结起来", "归结起来，人工智能正在深刻改变教育行业，首先可以实现个性化学习，其次能减轻教师负担。"],
+    [
+      "归结起来",
+      "归结起来，人工智能正在深刻改变教育行业，首先可以实现个性化学习，其次能减轻教师负担。",
+    ],
   ];
   for (const [name, s] of cases) {
     for (const target of [0.3, 0.55, 0.8]) {
@@ -193,7 +196,8 @@ describe("boostBurstinessByCutting（不得切出光杆连接词）", () => {
   }
 
   it("没有把分支一关了之：普通长句该切还是要切（否则上面那组断言是永真式）", () => {
-    const s = "远程办公在过去三年里普及得非常快，员工的时间安排随之变了，企业也开始重新评估固定工位的必要性。";
+    const s =
+      "远程办公在过去三年里普及得非常快，员工的时间安排随之变了，企业也开始重新评估固定工位的必要性。";
     const before = s.split("。").filter((x) => x.trim()).length;
     const out = boostBurstinessByCutting(s, 0.8, 8);
     const after = out.split("。").filter((x) => x.trim()).length;

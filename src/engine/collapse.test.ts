@@ -12,7 +12,9 @@ import { collapseIssues, humanize } from "./humanize.ts";
 describe("collapseIssues（真塌句必须抓到）", () => {
   it("谓语被删成光杆主语", () => {
     expect(collapseIssues("人工智能技术展望未来。", "人工智能技术。").length).toBeGreaterThan(0);
-    expect(collapseIssues("这种技术被广泛使用于医疗诊断。", "这种技术。").length).toBeGreaterThan(0);
+    expect(collapseIssues("这种技术被广泛使用于医疗诊断。", "这种技术。").length).toBeGreaterThan(
+      0,
+    );
   });
 
   it("塌句被垫词补了语气词也要认（'人工智能技术吧。'）", () => {
@@ -21,12 +23,16 @@ describe("collapseIssues（真塌句必须抓到）", () => {
   });
 
   it("含'在/被'等字的塌句不许漏——deletionStubIssues 正是含这些字就放行的", () => {
-    expect(collapseIssues("这种技术被广泛应用于医疗诊断。", "这种技术被广泛。").length).toBeGreaterThan(0);
+    expect(
+      collapseIssues("这种技术被广泛应用于医疗诊断。", "这种技术被广泛。").length,
+    ).toBeGreaterThan(0);
   });
 
   it("多句里只塌一句也要报", () => {
     const o = "第一句正常表达完整意思。人工智能技术。第三句也是完整的句子。";
-    expect(collapseIssues("第一句正常表达完整意思。人工智能技术展望未来。第三句也是完整的句子。", o)).toHaveLength(1);
+    expect(
+      collapseIssues("第一句正常表达完整意思。人工智能技术展望未来。第三句也是完整的句子。", o),
+    ).toHaveLength(1);
   });
 });
 
@@ -44,7 +50,10 @@ describe("collapseIssues（正常改写不得误杀）", () => {
 
   it("冒号引导的列举结构两侧口径一致，不得整批误报（历史 bug）", () => {
     expect(
-      collapseIssues("这个方案有三个方面需要考量：第一是成本，第二是效率。", "这个方案有三个方面需要考量：第一是成本。"),
+      collapseIssues(
+        "这个方案有三个方面需要考量：第一是成本，第二是效率。",
+        "这个方案有三个方面需要考量：第一是成本。",
+      ),
     ).toEqual([]);
   });
 

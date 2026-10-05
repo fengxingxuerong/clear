@@ -17,7 +17,8 @@ import { PAD_HEADS } from "../humanize-primitives.ts";
 const rng = (): number => 0.5;
 
 /** 4 句等长、无逗号、句长<25 的单段：Single 找不到切点保持原样，Fragments 必注入 */
-const EQUAL4 = "今天天气不错就出去走了走。路上碰到老朋友聊了一会儿天。回家以后简单做了点晚饭吃。晚上躺在床上刷了会儿手机。";
+const EQUAL4 =
+  "今天天气不错就出去走了走。路上碰到老朋友聊了一会儿天。回家以后简单做了点晚饭吃。晚上躺在床上刷了会儿手机。";
 
 describe("boostBurstinessFragments 主链路（注入口语碎片）", () => {
   it("4 句等长单段 → 注入 3 枚碎片，句数 4→7（v8 类探针靠它拉高句长方差）", () => {
@@ -41,7 +42,8 @@ describe("boostBurstinessFragments 主链路（注入口语碎片）", () => {
   });
 
   it("句数 <4 守卫：3 句不注入", () => {
-    const three = "今天天气不错就出去走了走。路上碰到老朋友聊了一会儿天。回家以后简单做了点晚饭吃。";
+    const three =
+      "今天天气不错就出去走了走。路上碰到老朋友聊了一会儿天。回家以后简单做了点晚饭吃。";
     expect(splitSentences(three).length).toBe(3); // 前置条件
     expect(boostBurstiness(three, rng, 0.9)).toBe(three);
   });
@@ -52,7 +54,8 @@ describe("boostBurstinessFragments 主链路（注入口语碎片）", () => {
     expect(out).toBe(jagged);
 
     // 阳性对照：同样三句但改成等长（拉平 CV）就会被注入 → 证明上面的断言不是永真
-    const flat = "今天天气不错就出去走了走。路上碰到老朋友聊了一会儿天。回家以后简单做了点晚饭吃。今天晚上就刷了会儿手机。";
+    const flat =
+      "今天天气不错就出去走了走。路上碰到老朋友聊了一会儿天。回家以后简单做了点晚饭吃。今天晚上就刷了会儿手机。";
     expect(boostBurstiness(flat, rng, 0.9)).not.toBe(flat);
   });
 

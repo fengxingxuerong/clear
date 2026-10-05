@@ -341,7 +341,12 @@ export function boostBurstinessByCutting(text: string, targetCv: number, maxCuts
     // （UI 示例文本实测 102/280 次运行 = 36.4%，强度 0.55 起）。
     // 现在切点一律落在插入语**之后**，把插入语并入前半句，且走 findGuardedCutNear 的全套守卫。
     let mid = findSplitPoint(t.s, 22);
-    if (mid === -1 && /^(?:说起来|归结起来|一句话概括|总的来说|总的来看|说到底|有意思的是|值得注意的是|要我说|说白了|按我的经验)/.test(t.s.trim())) {
+    if (
+      mid === -1 &&
+      /^(?:说起来|归结起来|一句话概括|总的来说|总的来看|说到底|有意思的是|值得注意的是|要我说|说白了|按我的经验)/.test(
+        t.s.trim(),
+      )
+    ) {
       const fc = t.s.indexOf("，"); // 插入语边界，绝不允许当切点
       const sc = fc === -1 ? -1 : fc + 1 + t.s.slice(fc + 1).indexOf("，");
       if (sc > fc) {

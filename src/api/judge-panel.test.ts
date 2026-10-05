@@ -15,7 +15,9 @@ const SEATS: JudgeSeat[] = [
 ];
 
 /** mock 响应工厂：按调用 URL（含网关域名）路由到不同席 */
-function mockFetchBySeat(responses: Record<string, { content?: string; reasoning?: string; status?: number }>) {
+function mockFetchBySeat(
+  responses: Record<string, { content?: string; reasoning?: string; status?: number }>,
+) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) => {

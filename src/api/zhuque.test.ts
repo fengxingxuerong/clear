@@ -175,9 +175,11 @@ describe("copyText（剪贴板回退路径）", () => {
     try {
       await expect(copyText("要复制的官方送检文本")).resolves.toBe(false);
     } finally {
-      if (origExec) Object.defineProperty(d, "execCommand", { configurable: true, value: origExec });
+      if (origExec)
+        Object.defineProperty(d, "execCommand", { configurable: true, value: origExec });
       else Reflect.deleteProperty(d, "execCommand");
-      if (origClip) Object.defineProperty(nav, "clipboard", { configurable: true, value: origClip });
+      if (origClip)
+        Object.defineProperty(nav, "clipboard", { configurable: true, value: origClip });
       else Reflect.deleteProperty(nav, "clipboard");
     }
   });
@@ -264,7 +266,13 @@ describe("校准点存储", () => {
   });
 
   it("脏数据（非数字）被过滤而不是污染拟合", () => {
-    localStorage.setItem(LEGACY_KEY, JSON.stringify([{ local: "x", official: null }, { local: 40, official: 55, ts: 1 }]));
+    localStorage.setItem(
+      LEGACY_KEY,
+      JSON.stringify([
+        { local: "x", official: null },
+        { local: 40, official: 55, ts: 1 },
+      ]),
+    );
     expect(loadCalibPoints()).toHaveLength(1);
   });
 
@@ -294,10 +302,15 @@ describe("校准点存储", () => {
     // 旧写法把 {local:null} 读成 local=0，等于往库里永久塞一条 (0, 99) 的假点
     localStorage.setItem(
       LEGACY_KEY,
-      JSON.stringify([{ local: null, official: 99, ts: 1 }, { local: 40, official: 55, ts: 2 }]),
+      JSON.stringify([
+        { local: null, official: 99, ts: 1 },
+        { local: 40, official: 55, ts: 2 },
+      ]),
     );
     const cal = addCalibPoint(70, 80);
-    const stored = JSON.parse(localStorage.getItem(LEGACY_KEY) as string) as Array<{ local: number }>;
+    const stored = JSON.parse(localStorage.getItem(LEGACY_KEY) as string) as Array<{
+      local: number;
+    }>;
     expect(stored.map((p) => p.local).sort((a, b) => a - b)).toEqual([40, 70]);
     expect(cal.n).toBe(2);
   });

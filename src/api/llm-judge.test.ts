@@ -3,7 +3,13 @@
  * mock fetch 按 chat 请求体中的 system 提示词特征返回对应内容。
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { judgeWithCritique, judgeScoreStable, judgeAiScore, errMsg, parseJudgeVerdict } from "./llm-judge";
+import {
+  judgeWithCritique,
+  judgeScoreStable,
+  judgeAiScore,
+  errMsg,
+  parseJudgeVerdict,
+} from "./llm-judge";
 import { DEFAULT_API } from "./llm-config";
 
 afterEach(() => {

@@ -336,8 +336,8 @@ describe("ZhuquePanel（朱雀检测本地近似）", () => {
       const spans = [...row.querySelectorAll("span")];
       return {
         color:
-          spans.find((s) => ["#ff5d6c", "#ffb454", "#3ddc97"].includes(s.style.background))
-            ?.style.background ?? "",
+          spans.find((s) => ["#ff5d6c", "#ffb454", "#3ddc97"].includes(s.style.background))?.style
+            .background ?? "",
         width: spans.find((s) => s.style.width.endsWith("%"))?.style.width ?? "",
       };
     };
@@ -397,7 +397,9 @@ describe("ZhuquePanel（朱雀检测本地近似）", () => {
     // 粘贴解析成功：提示 + 保存按钮可用；清空按钮随 n>0 可用
     expect(getByText(/解析成功：AI生成\/AI特征 99\.99%/)).toBeTruthy();
     expect((getByText("记为校准点").closest("button") as HTMLButtonElement).disabled).toBe(false);
-    expect((getByText("清空校准（7）").closest("button") as HTMLButtonElement).disabled).toBe(false);
+    expect((getByText("清空校准（7）").closest("button") as HTMLButtonElement).disabled).toBe(
+      false,
+    );
     // msg 提示行
     expect(getByText("已记入校准库")).toBeTruthy();
     // 三个操作回调接通
@@ -419,7 +421,9 @@ describe("ZhuquePanel（朱雀检测本地近似）", () => {
     );
     expect(getByText(/没解析出百分比或档位/)).toBeTruthy();
     expect((getByText("记为校准点").closest("button") as HTMLButtonElement).disabled).toBe(true);
-    expect((getByText("清空校准（3）").closest("button") as HTMLButtonElement).disabled).toBe(false);
+    expect((getByText("清空校准（3）").closest("button") as HTMLButtonElement).disabled).toBe(
+      false,
+    );
   });
 
   it("困惑度层已融合时展示权重与说明；检测警告逐条渲染", () => {

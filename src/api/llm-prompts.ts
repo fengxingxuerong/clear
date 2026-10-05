@@ -145,7 +145,8 @@ export function pickExemplarBlock(text: string, style: RewriteStyle): string {
   try {
     const g = classifyGenre(text).genre;
     if (g === "narrative" || g === "dialogue") block = EXEMPLAR_NARRATIVE;
-    else if (/(是指|指的是|的工作原理|的架构|的核心技术|的工作机制)/.test(text.slice(0, 500))) block = EXEMPLAR_EXPLAINER;
+    else if (/(是指|指的是|的工作原理|的架构|的核心技术|的工作机制)/.test(text.slice(0, 500)))
+      block = EXEMPLAR_EXPLAINER;
   } catch {
     // 判体异常回退议论组
   }
@@ -183,7 +184,8 @@ export function personaDirective(persona?: "default" | "netgen" | "classic"): st
 }
 
 /** 强度指令：滑块对 LLM 模式同样生效（竞品标配） */
-export function intensityDirective(intensity: number): string {  if (intensity < 0.35) {
+export function intensityDirective(intensity: number): string {
+  if (intensity < 0.35) {
     return `\n\n本次为轻度模式：保持原句顺序与段落结构，只处理最刺眼的痕迹（连接词、AI套话、标点规整、垫词复读），不做大幅重构。中英数字间空格跟随原文，不要增删。`;
   }
   if (intensity >= 0.75) {

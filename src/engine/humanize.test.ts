@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { humanize, aiScore, humanizeWithScore, crossChunkCleanup, injectDialect } from "./humanize.ts";
+import {
+  humanize,
+  aiScore,
+  humanizeWithScore,
+  crossChunkCleanup,
+  injectDialect,
+} from "./humanize.ts";
 import { VOCAB, DIALECT_VOCAB } from "./humanize-data.ts";
 import { countPadHeads, PAD_INJECT_CAP } from "./humanize-primitives.ts";
 import { restoreMixedSpacing } from "./humanize-shuffle.ts";
@@ -40,9 +46,7 @@ describe("humanize 引擎", () => {
     expect(countPadHeads(r2)).toBeLessThanOrEqual(countPadHeads(r1) + 2);
     expect(countPadHeads(r3)).toBeLessThanOrEqual(countPadHeads(r2) + 2);
     // 字数不随迭代注水（旧实现 3 轮 +40%+）
-    expect(r3.replace(/\s/g, "").length).toBeLessThanOrEqual(
-      r1.replace(/\s/g, "").length * 1.2,
-    );
+    expect(r3.replace(/\s/g, "").length).toBeLessThanOrEqual(r1.replace(/\s/g, "").length * 1.2);
   });
 
   it("countPadHeads 基础口径", () => {
@@ -258,7 +262,11 @@ describe("softenPassive（被动软化白名单）", () => {
 
   it("每条白名单搭配都能被软化（跨种子覆盖全部 5 条）", () => {
     const softened = cases.map(([, cliche]) => {
-      for (let seed = 0; seed < 40; seed++) if (!humanize(cases.find((x) => x[1] === cliche)![0], { intensity: 1, seed }).includes(cliche)) return true;
+      for (let seed = 0; seed < 40; seed++)
+        if (
+          !humanize(cases.find((x) => x[1] === cliche)![0], { intensity: 1, seed }).includes(cliche)
+        )
+          return true;
       return false;
     });
     expect(softened.every(Boolean)).toBe(true);
@@ -271,7 +279,8 @@ describe("softenPassive（被动软化白名单）", () => {
         expect(/受到广泛留意|得到广泛盯着/.test(o), `搭配病句: ${o}`).toBe(false);
         expect(/它大家|这大家普遍|管它叫/.test(o), `主语重复/回退替身: ${o}`).toBe(false);
         // 整块替换必须带介词"在"；"用得很广"后面跟语气词是合法的，所以正向验前置
-        if (o.includes("用得很广")) expect(/在[^，。！？\s]{2,14}用得很广/.test(o), `缺介词: ${o}`).toBe(true);
+        if (o.includes("用得很广"))
+          expect(/在[^，。！？\s]{2,14}用得很广/.test(o), `缺介词: ${o}`).toBe(true);
       }
     }
   });

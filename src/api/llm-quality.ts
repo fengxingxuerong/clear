@@ -244,8 +244,7 @@ export function structureIssues(original: string, rewritten: string): string[] {
   // 场景块：原文有几个，交付稿就得至少有几个。少一个就是整段元数据没了。
   const so = countOf(SCENE_HEAD_RE, original);
   const sr = countOf(SCENE_HEAD_RE, rewritten);
-  if (so > 0 && sr < so)
-    issues.push(`结构丢失：场景块/块头 ${so} → ${sr} 行（剧本元数据被删）`);
+  if (so > 0 && sr < so) issues.push(`结构丢失：场景块/块头 ${so} → ${sr} 行（剧本元数据被删）`);
   // Markdown 标题同理：没有任何一个 pass 以"删标题"为目的。
   const ho = countOf(MD_HEADING_RE, original);
   const hr = countOf(MD_HEADING_RE, rewritten);
@@ -345,7 +344,10 @@ export async function fabricationReview(
  *  判定（刻意收窄防误伤）：2~6 字、无谓语动词/语气词/指示代词的纯名词性孤句，
  *  且该词在原文中紧邻非句读字符（证明是被截断的残片而非原文的独立短句）。 */
 export function deletionStubIssues(original: string, rewritten: string): string[] {
-  const sents = rewritten.split(/[。！？!?；;\n]+/).map((s) => s.trim()).filter(Boolean);
+  const sents = rewritten
+    .split(/[。！？!?；;\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
   const stubs = sents.filter((s) => {
     if (s.length < 2 || s.length > 6) return false;
     if (/[是有着在能会要得让把被和或与及的出现发生变得成为觉得知道]/.test(s)) return false;

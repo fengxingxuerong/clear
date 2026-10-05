@@ -9,12 +9,7 @@
  * 第 42 行是**死分支**，任何测试都覆盖不到，原因写在 relaxColon 的用例注释里。
  */
 import { describe, it, expect } from "vitest";
-import {
-  relaxColon,
-  relaxQuotes,
-  splitOnConnectors,
-  varyParagraphs,
-} from "./primitives.ts";
+import { relaxColon, relaxQuotes, splitOnConnectors, varyParagraphs } from "./primitives.ts";
 
 /** 全 0：门限必过、下标必取 0 */
 const rng0 = (): number => 0;
@@ -62,9 +57,7 @@ describe("splitOnConnectors（连接词断句）", () => {
   });
 
   it("p=0 → 连接词原样", () => {
-    expect(splitOnConnectors("这套方案使得效率提升明显", rng0, 0)).toBe(
-      "这套方案使得效率提升明显",
-    );
+    expect(splitOnConnectors("这套方案使得效率提升明显", rng0, 0)).toBe("这套方案使得效率提升明显");
   });
 
   // 未覆盖行 75：「这样一来/在此基础上/与此同时/正因如此」→ 「。」+ 原词保留
@@ -90,7 +83,9 @@ describe("varyParagraphs（段落节奏变化）", () => {
 
   // 未覆盖行 208-211：双短段合并（<25 字），句末有标点则直接相接
   it("两个短段且首段以句号收尾 → 直接合并、不插连接符", () => {
-    expect(varyParagraphs("短句甲乙丙。\n\n短句丁戊己。", rng0, 1)).toBe("短句甲乙丙。短句丁戊己。");
+    expect(varyParagraphs("短句甲乙丙。\n\n短句丁戊己。", rng0, 1)).toBe(
+      "短句甲乙丙。短句丁戊己。",
+    );
   });
 
   it("两个短段且首段无句末标点 → 用「，」缝合", () => {
@@ -122,7 +117,9 @@ describe("varyParagraphs（段落节奏变化）", () => {
   it("长段但句子不足 4 句 → 不拆，原样保留", () => {
     // 3 句、合计 >180 字：进得了 213 行的长度判断，却过不了 215 行的句子数守卫
     const three =
-      "这一句话虽然远远超过了一百八十个字的长度限制，但是全段的句子总数只有三句而已，因此并不满足对拆分支所需要的最低句子数要求。".repeat(3);
+      "这一句话虽然远远超过了一百八十个字的长度限制，但是全段的句子总数只有三句而已，因此并不满足对拆分支所需要的最低句子数要求。".repeat(
+        3,
+      );
     expect(three.length).toBeGreaterThan(180);
     const src = `${three}\n\n收尾短段。`;
     const out = varyParagraphs(src, rng0, 1);

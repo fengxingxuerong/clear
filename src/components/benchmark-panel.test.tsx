@@ -149,7 +149,9 @@ describe("BenchmarkPanel（对标评分面板）", () => {
   it("预测恰好压在 40% 过人线上：徽章显示「刚好过人线」边界文案", () => {
     // score 取 (40-b)/a 使预测浮点恰为 40 → gapToPass === 0 的边界分支
     const edge = (40 - CALIB.main.b) / CALIB.main.a;
-    const { container } = render(<BenchmarkPanel {...base({ after: { ...after, score: edge } })} />);
+    const { container } = render(
+      <BenchmarkPanel {...base({ after: { ...after, score: edge } })} />,
+    );
     expect(container.textContent).toContain("🟢 40.0%");
     expect(container.textContent).toContain("🤏 刚好过人线");
   });

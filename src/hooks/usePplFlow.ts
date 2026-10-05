@@ -20,13 +20,7 @@ import type { PplIssueLite } from "../components/FingerprintPanel";
 import { loadPplEnabled } from "../store";
 
 export type PplUiState =
-  | "idle"
-  | "need-download"
-  | "downloading"
-  | "loading"
-  | "done"
-  | "error"
-  | "unsupported";
+  "idle" | "need-download" | "downloading" | "loading" | "done" | "error" | "unsupported";
 
 export interface UsePplFlowOptions {
   /** 特征就绪后让朱雀检测面板带上第 13 维重算综合分（面板未打开时 no-op） */

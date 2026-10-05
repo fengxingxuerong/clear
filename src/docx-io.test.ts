@@ -6,12 +6,7 @@
  * （手工构造 stored 条目 + 非文本部件）验证 reader 的通用性，不只是自产自销。
  */
 import { describe, expect, it } from "vitest";
-import {
-  readDocxText,
-  writeDocxText,
-  docxXmlToText,
-  textToDocxXml,
-} from "./docx-io";
+import { readDocxText, writeDocxText, docxXmlToText, textToDocxXml } from "./docx-io";
 
 describe("textToDocxXml（OOXML 生成）", () => {
   it("段落转 <w:p>，\\n\\n 分段", () => {
@@ -62,7 +57,8 @@ describe("docxXmlToText（OOXML 提取）", () => {
 
 describe("writeDocxText / readDocxText（zip 层 round-trip）", () => {
   it("round-trip：写出的 docx 读回与原文一致", async () => {
-    const text = "第一段：中文与 English 混排，标点「引号」与（括号）。\n\n第二段\t带制表符。\n\n第三段带换行\n行二。";
+    const text =
+      "第一段：中文与 English 混排，标点「引号」与（括号）。\n\n第二段\t带制表符。\n\n第三段带换行\n行二。";
     const blob = await writeDocxText(text);
     expect(blob.size).toBeGreaterThan(200);
     const back = await readDocxText(blob);
@@ -93,7 +89,11 @@ describe("writeDocxText / readDocxText（zip 层 round-trip）", () => {
 
   it("非 docx 输入给出可读错误（缺 word/document.xml 时列出实际部件）", async () => {
     // 手工构造一个不含 document.xml 的 zip：直接用 writer 写三个无关文件再读
-    const notDocx = new Blob([new Uint8Array([0x50, 0x4b, 0x05, 0x06, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])]);
+    const notDocx = new Blob([
+      new Uint8Array([
+        0x50, 0x4b, 0x05, 0x06, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      ]),
+    ]);
     await expect(readDocxText(notDocx)).rejects.toThrow(/word\/document\.xml/);
   });
 });

@@ -457,7 +457,9 @@ describe("useZhuqueLab：语义层调用细节（补盲）", () => {
 
   it("handleZqSemantic：API 可用但无检测文本时早退不调用", async () => {
     const { result } = renderHook(() =>
-      useZhuqueLab(opts({ input: "", output: "", api: { ...DEFAULT_API, enabled: true, apiKey: "sk-test" } })),
+      useZhuqueLab(
+        opts({ input: "", output: "", api: { ...DEFAULT_API, enabled: true, apiKey: "sk-test" } }),
+      ),
     );
     await act(async () => {
       await result.current.handleZqSemantic();
@@ -549,8 +551,8 @@ describe("useZhuqueLab：检测选项与体裁预测（补盲）", () => {
   });
 
   it("zqGenreEstimate：zqText 为空时取去味稿 output 兜底（而非空 input）", () => {
-    const { result } = renderHook(
-      () => useZhuqueLab(opts({ input: "", output: "去味稿内容，用来验证体裁预测的兜底取文分支。" })),
+    const { result } = renderHook(() =>
+      useZhuqueLab(opts({ input: "", output: "去味稿内容，用来验证体裁预测的兜底取文分支。" })),
     );
     act(() => {
       result.current.setZq(detectZhuque("占位文本"));

@@ -175,9 +175,7 @@ export function toNumberList(x: unknown): number[] | null {
   const obj = x as { tolist?: () => unknown; data?: ArrayLike<number> };
   if (typeof obj.tolist === "function") {
     const v = obj.tolist();
-    return Array.isArray(v)
-      ? (v.flat(Number.POSITIVE_INFINITY) as unknown[]).map(Number)
-      : null;
+    return Array.isArray(v) ? (v.flat(Number.POSITIVE_INFINITY) as unknown[]).map(Number) : null;
   }
   if (obj.data != null) return Array.from(obj.data, (n) => Number(n));
   return Array.isArray(x)

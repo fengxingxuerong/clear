@@ -212,7 +212,12 @@ function judgeGuardBlocks(from: string, context: string, before: string): boolea
   // ⚠️ 为什么不用 GUARD_AFTER 判后接词：试过，拦不住——「层面」词条排在「落地」之前，
   //    先被替成"这块/那一摊"，落地后面的判据串就没了。前置的使役动词不会被同批换掉，稳。
   //    这是"守卫判据要挑不会被前置步骤改掉的那一侧"这条经验的一个实例。
-  if (from === "落地" && !/(?:让|使|把|推动|加快|加速|推进|开始|已|未|难以|能否|尽快|早日|顺利|成功|得以|能够|得以)/.test(before)) {
+  if (
+    from === "落地" &&
+    !/(?:让|使|把|推动|加快|加速|推进|开始|已|未|难以|能否|尽快|早日|顺利|成功|得以|能够|得以)/.test(
+      before,
+    )
+  ) {
     return true;
   }
 
@@ -222,7 +227,9 @@ function judgeGuardBlocks(from: string, context: string, before: string): boolea
   // 与上面「关注」的隔字判据同一形态。
   if (
     from === "价值" &&
-    /(?:创造|产生|带来|长期|战略|核心|社会|商业|实际|真正|最大|更高)[^，。！？；]{0,4}$/.test(before)
+    /(?:创造|产生|带来|长期|战略|核心|社会|商业|实际|真正|最大|更高)[^，。！？；]{0,4}$/.test(
+      before,
+    )
   ) {
     return true;
   }

@@ -33,7 +33,8 @@ describe("capLongTemplateRepetition（模板复读封顶）", () => {
     //
     //   留着它的理由：它是"结果不得随调用历史漂移"的通用守卫，能抓**其他**形态的状态泄漏。
     //   本缺陷的主力断言是下面那条**源码级**守卫。
-    const input = "A。例子呢？我随便举一个你就懂了。B。例子呢？我随便举一个你就懂了。C。例子呢？我随便举一个你就懂了。";
+    const input =
+      "A。例子呢？我随便举一个你就懂了。B。例子呢？我随便举一个你就懂了。C。例子呢？我随便举一个你就懂了。";
     const first = capLongTemplateRepetition(input);
     for (let i = 2; i <= 6; i++) {
       expect(

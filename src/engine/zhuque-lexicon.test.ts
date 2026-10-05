@@ -71,7 +71,8 @@ describe("zhuque-lexicon 特征正则：单一事实源守卫", () => {
 
   it("[守卫3-自检] 比对逻辑本身有效：故意改坏一份副本必须被检出", () => {
     // 用旧版 detector MODAL（zhuque 口径）冒充 detector 版，应被判为差异不符
-    const fakeDetector = /(应该|应当|必须|需要|有助于|意味着|表明|说明|能够|可以|我们要|既要|也要|不仅|而且)/g;
+    const fakeDetector =
+      /(应该|应当|必须|需要|有助于|意味着|表明|说明|能够|可以|我们要|既要|也要|不仅|而且)/g;
     const det = new Set(branchesOf(fakeDetector));
     const zq = new Set(branchesOf(reModalZhuque()));
     const onlyDet = [...det].filter((b) => !zq.has(b)).sort();

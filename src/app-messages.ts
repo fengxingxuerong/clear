@@ -54,9 +54,7 @@ export function buildHumanizeNote({
   } else if (r.engine === "passthrough") {
     msg = "文本过短，未做去味处理";
   } else {
-    msg = r.usedApi
-      ? "⚠️ 调用过 API 但最终仍由本地引擎产出"
-      : "使用本地引擎去味（未走 LLM）";
+    msg = r.usedApi ? "⚠️ 调用过 API 但最终仍由本地引擎产出" : "使用本地引擎去味（未走 LLM）";
   }
   if (r.note) msg += " · " + r.note;
   if (r.bestOf) {

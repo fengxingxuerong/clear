@@ -705,9 +705,9 @@ describe("降级链的预算掐断（目标行 163）", () => {
       }),
     );
     const budgetCfg = { ...DEFAULT_API, enabled: true, apiKey: "test-key", maxApiCalls: 1 };
-    await expect(
-      humanizeViaApiDeep(TEXT, budgetCfg, undefined, 10, 4, 0.6),
-    ).rejects.toThrow(/空内容/);
+    await expect(humanizeViaApiDeep(TEXT, budgetCfg, undefined, 10, 4, 0.6)).rejects.toThrow(
+      /空内容/,
+    );
     expect(writes).toBe(1); // 第 2 档在行 163 被 isOverBudget 掐掉，不再发请求
   });
 });
@@ -790,7 +790,8 @@ describe("质检全程打回：单轮内直接回退本地（目标行 559）", 
           // 首行 FAIL + 明细 → 修复重试后仍 FAIL，本候选整轮打回
           return okJson({ choices: [{ message: { content: "FAIL\n句长过于均匀" } }] });
         }
-        if (sys.includes("改写专家")) return okJson({ choices: [{ message: { content: GOOD_REWRITE } }] });
+        if (sys.includes("改写专家"))
+          return okJson({ choices: [{ message: { content: GOOD_REWRITE } }] });
         return okJson({ choices: [{ message: { content: "句长过于均匀\n50" } }] });
       }),
     );
@@ -848,7 +849,8 @@ describe("L1 痕迹收敛守卫：同两条定罪痕迹不消除即停（目标�
         };
         const sys = body.messages?.[0]?.content ?? "";
         if (sys.includes("质检员")) return okJson({ choices: [{ message: { content: "PASS" } }] });
-        if (sys.includes("改写专家")) return okJson({ choices: [{ message: { content: GOOD_REWRITE } }] });
+        if (sys.includes("改写专家"))
+          return okJson({ choices: [{ message: { content: GOOD_REWRITE } }] });
         // 两条痕迹 + 独立分数行（第 2 轮与上轮重合 2 项 → 触发 L1）
         return okJson({ choices: [{ message: { content: "句长过于均匀\n对仗工整\n50" } }] });
       }),
@@ -873,7 +875,8 @@ describe("评判全失败：评分记 -1 且兜底保留过检稿（目标行 27
         };
         const sys = body.messages?.[0]?.content ?? "";
         if (sys.includes("质检员")) return okJson({ choices: [{ message: { content: "PASS" } }] });
-        if (sys.includes("改写专家")) return okJson({ choices: [{ message: { content: GOOD_REWRITE } }] });
+        if (sys.includes("改写专家"))
+          return okJson({ choices: [{ message: { content: GOOD_REWRITE } }] });
         // 无数字 → parseJudgeVerdict/reasoning 双双落空 → 评判抛错 → score=null
         return okJson({ choices: [{ message: { content: "评判通道异常，暂无分数" } }] });
       }),
@@ -903,11 +906,18 @@ describe("竞争段预算跳过（目标行 396-397/436-437）", () => {
         };
         const sys = body.messages?.[0]?.content ?? "";
         if (sys.includes("质检员")) return okJson({ choices: [{ message: { content: "PASS" } }] });
-        if (sys.includes("改写专家")) return okJson({ choices: [{ message: { content: GOOD_REWRITE } }] });
+        if (sys.includes("改写专家"))
+          return okJson({ choices: [{ message: { content: GOOD_REWRITE } }] });
         return okJson({ choices: [{ message: { content: "句长过于均匀\n15" } }] });
       }),
     );
-    const cfg = { ...DEFAULT_API, enabled: true, apiKey: "test-key", altModel: ALT, maxApiCalls: 2 };
+    const cfg = {
+      ...DEFAULT_API,
+      enabled: true,
+      apiKey: "test-key",
+      altModel: ALT,
+      maxApiCalls: 2,
+    };
     // 块 1：预算从零起跑（双候选并发，每候选 1 改写 + 1 质检 + 3 评判），烧穿 maxApiCalls=2
     const first = await humanizeViaApiDeep(TEXT, cfg, undefined, 10, 2, 0.6);
     expect(first.roundScores.length).toBeGreaterThan(0);
@@ -915,9 +925,9 @@ describe("竞争段预算跳过（目标行 396-397/436-437）", () => {
     // 块 2：budgetShared=true 继承计数 → 竞争段每个候选在开跑前被预算跳过（396-397），
     // 聚合照常记录跳过原因（436-437），主循环收场按"调用上限"措辞拒绝
     const before = calls;
-    await expect(
-      humanizeViaApiDeep(TEXT, cfg, undefined, 10, 2, 0.6, true),
-    ).rejects.toThrow(/已达调用上限/);
+    await expect(humanizeViaApiDeep(TEXT, cfg, undefined, 10, 2, 0.6, true)).rejects.toThrow(
+      /已达调用上限/,
+    );
     expect(calls).toBe(before); // 零请求增长
   });
 });
@@ -934,7 +944,8 @@ describe("零可见字符的压缩率口径（目标行 192）", () => {
         };
         const sys = body.messages?.[0]?.content ?? "";
         if (sys.includes("质检员")) return okJson({ choices: [{ message: { content: "PASS" } }] });
-        if (sys.includes("改写专家")) return okJson({ choices: [{ message: { content: GOOD_REWRITE } }] });
+        if (sys.includes("改写专家"))
+          return okJson({ choices: [{ message: { content: GOOD_REWRITE } }] });
         return okJson({ choices: [{ message: { content: "句长过于均匀\n15" } }] });
       }),
     );

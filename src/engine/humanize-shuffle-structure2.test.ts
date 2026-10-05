@@ -211,9 +211,7 @@ describe("boostBurstinessIfLow（P4-B 节奏补药）", () => {
     const scene =
       "【场景：面馆黄昏】\n张三说了一句很长很长的台词来撑起这一段的长度和内容。李四也回了一句很长很长的台词来保持均匀的节奏感。";
     const out = boostBurstinessIfLow(scene, rngMid, 0.99, 12);
-    const hasAnchor = out
-      .split(/(?<=[。！？])/)
-      .some((s) => isStandaloneAnchor(s.trim()));
+    const hasAnchor = out.split(/(?<=[。！？])/).some((s) => isStandaloneAnchor(s.trim()));
     expect(hasAnchor).toBe(false);
     expect(out).toContain("【场景：面馆黄昏】");
   });
@@ -245,7 +243,12 @@ describe("breakEnumerationStructure（P0-2 列举结构打散）", () => {
   it("成员之间的 <3 字碎句被跳过、继续收编后续成员（行 109 continue）", () => {
     // 结构规则：「嗯。」不是列举成员，不能截断扫描——否则 members<2，整段放弃打散
     const out = breakEnumerationStructure(
-      ["首先，成本这一块要单独说。", "嗯。", "其次，良率这一块也要说。", "最后，交付这一块顺带说。"],
+      [
+        "首先，成本这一块要单独说。",
+        "嗯。",
+        "其次，良率这一块也要说。",
+        "最后，交付这一块顺带说。",
+      ],
       rngMid,
       0.9,
     );
@@ -387,15 +390,23 @@ describe("injectFirstPersonAnchorPoints（P3-4 第一人称判断锚点）", () 
 
   it("≥600 字 + 两个数据标记槽：useSlots 需排序，注入 2 处判断锚（行 904）", () => {
     const t =
-      "第三方的数据显示，" + FILLER.repeat(4) + "。" + "上周的调研显示，" + FILLER.repeat(4) + "。" +
-      FILLER.repeat(4) + "。";
+      "第三方的数据显示，" +
+      FILLER.repeat(4) +
+      "。" +
+      "上周的调研显示，" +
+      FILLER.repeat(4) +
+      "。" +
+      FILLER.repeat(4) +
+      "。";
     const chars = t.replace(/\s/g, "").length;
     // targetCount = ⌊chars/300⌋ ≥ 2 → useSlots 至少 2 个元素 → sort 比较器必须执行
     expect(chars).toBeGreaterThanOrEqual(600);
     const out = injectFirstPersonAnchorPoints(t, rngMid, 0.9);
     expect(out).not.toBe(t);
     // 两个数据标记各贡献一个槽位 → 恰好注入 2 处主观判断锚
-    expect(out.match(/我个人觉得|要我说，|这点我持保留意见|我的看法是|我觉得口径|在我看来/g)).toHaveLength(2);
+    expect(
+      out.match(/我个人觉得|要我说，|这点我持保留意见|我的看法是|我觉得口径|在我看来/g),
+    ).toHaveLength(2);
     // 原文内容一字不丢
     expect(out).toContain("第三方的数据显示");
     expect(out).toContain("上周的调研显示");

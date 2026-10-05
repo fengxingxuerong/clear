@@ -18,7 +18,14 @@ import {
 import { aiScore } from "./engine/humanize";
 
 function entry(n: number): HistoryEntry {
-  return makeHistoryEntry(`原文${n}`, `产出${n}`, aiScore(`原文${n}`), aiScore(`产出${n}`), 0.6, false);
+  return makeHistoryEntry(
+    `原文${n}`,
+    `产出${n}`,
+    aiScore(`原文${n}`),
+    aiScore(`产出${n}`),
+    0.6,
+    false,
+  );
 }
 
 /** 替换 localStorage 的方法并返回还原函数。
@@ -35,7 +42,11 @@ function mockStorageMethod(
     writable: true,
   });
   return () => {
-    Object.defineProperty(localStorage, name, { value: original, configurable: true, writable: true });
+    Object.defineProperty(localStorage, name, {
+      value: original,
+      configurable: true,
+      writable: true,
+    });
   };
 }
 

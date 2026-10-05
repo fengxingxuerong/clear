@@ -56,7 +56,12 @@ describe("detectSemanticStable（编排与缓存）", () => {
     const text = "一段用来检测的文本。";
     const r = await detectSemanticStable(text, cfg());
     expect(judgeScoreStableMock).toHaveBeenCalledTimes(1);
-    expect(judgeScoreStableMock).toHaveBeenCalledWith(text, expect.anything(), 3, ZHUQUE_DETECT_SYSTEM);
+    expect(judgeScoreStableMock).toHaveBeenCalledWith(
+      text,
+      expect.anything(),
+      3,
+      ZHUQUE_DETECT_SYSTEM,
+    );
     expect(r.score).toBe(42);
     expect(r.critique).toEqual(["痕迹一", "痕迹二"]);
     expect(r.source).toContain("3 次取中位数");

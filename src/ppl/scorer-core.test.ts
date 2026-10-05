@@ -179,7 +179,14 @@ describe("toNumberList（张量归一）", () => {
   });
 
   it("Tensor 对象：tolist() 返回二维嵌套需展平", () => {
-    expect(toNumberList({ tolist: () => [[101, 22], [33, 102]] })).toEqual([101, 22, 33, 102]);
+    expect(
+      toNumberList({
+        tolist: () => [
+          [101, 22],
+          [33, 102],
+        ],
+      }),
+    ).toEqual([101, 22, 33, 102]);
   });
 
   it("Tensor 对象：tolist() 返回三维嵌套也展平", () => {
@@ -263,15 +270,10 @@ describe("maskedMeanNll（log-softmax 均值负对数似然）", () => {
     // 目标 1：pos=0 行 [2,1,0]，原词 id=1 → ≈1.4076
     // 目标 2：pos=1 行 [0,1,2]，原词 id=2 → max=2，同 logSumExp≈0.4076 → -(2-2.4076)=0.4076
     // 均值 ≈ 0.9076
-    const nll = maskedMeanNll(
-      [2, 1, 0, 0, 1, 2],
-      2,
-      3,
-      [
-        { pos: 0, origId: 1 },
-        { pos: 1, origId: 2 },
-      ],
-    );
+    const nll = maskedMeanNll([2, 1, 0, 0, 1, 2], 2, 3, [
+      { pos: 0, origId: 1 },
+      { pos: 1, origId: 2 },
+    ]);
     expect(nll).toBeCloseTo(0.9076, 3);
   });
 
@@ -280,12 +282,7 @@ describe("maskedMeanNll（log-softmax 均值负对数似然）", () => {
   });
 
   it("数值稳定：logits 全 1000 时结果为 ln(vocabSize)，不产生 Infinity/NaN", () => {
-    const nll = maskedMeanNll(
-      [1000, 1000, 1000, 1000, 1000],
-      1,
-      5,
-      [{ pos: 0, origId: 0 }],
-    );
+    const nll = maskedMeanNll([1000, 1000, 1000, 1000, 1000], 1, 5, [{ pos: 0, origId: 0 }]);
     expect(nll).toBeCloseTo(Math.log(5), 6);
   });
 

@@ -86,7 +86,10 @@ export function getPath(obj: unknown, path: string): unknown {
  * 这样审计（scripts/zhuque-evidence.ts）从入库的 .api.json 重算时和当场送检完全一致——
  * 改路径只改一处，否则审计会和历史入账用两套刻度。
  */
-export function extractScore(raw: Record<string, unknown>, cfg: DetectorConfig = ZHUQUE_OFFICIAL_DETECTOR): number {
+export function extractScore(
+  raw: Record<string, unknown>,
+  cfg: DetectorConfig = ZHUQUE_OFFICIAL_DETECTOR,
+): number {
   let n = Number(getPath(raw, cfg.scorePath));
   if (!isFinite(n)) throw new Error(`无法从响应解析分数（路径 ${cfg.scorePath}）`);
   if (cfg.scale === "0-1") n = n * 100;

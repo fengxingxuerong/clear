@@ -227,8 +227,7 @@ export function classifyGenre(text: string): GenreResult {
   const OFFICIAL_RE =
     /(现将|根据[《\w]|按照|为了|关于|特此|各单位|各部门|上级部门|认真贯彻|工作目标|工作总结|总结如下|汇报如下|报告如下|主责主业|狠抓|筑牢|下一步|工作总基调|在肯定成绩的同时|清醒地认识到)/g;
   const officialRatio = (text.match(OFFICIAL_RE) ?? []).length / Math.max(1, pure);
-  const fallNarrative =
-    f.expoScore < 0.35 && f.narPastRatio >= 0.012 && officialRatio < 0.006;
+  const fallNarrative = f.expoScore < 0.35 && f.narPastRatio >= 0.012 && officialRatio < 0.006;
   const genre: AutoGenre = fallNarrative ? "narrative" : "main";
   const confBase =
     genre === "main"

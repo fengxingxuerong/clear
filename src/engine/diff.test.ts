@@ -140,7 +140,8 @@ describe("trimCommon（前后缀裁切）", () => {
 });
 
 describe("diffInline（字符粒度）", () => {
-  const flat = (parts: { type: string; text: string }[]) => parts.map((p) => `${p.type}:${p.text}`).join("|");
+  const flat = (parts: { type: string; text: string }[]) =>
+    parts.map((p) => `${p.type}:${p.text}`).join("|");
 
   it("句内小改动：只把变的那个词标成 del/ins，其余保持 same", () => {
     const { left, right } = diffInline("值得注意的是，这道菜非常好吃。", "说白了，这道菜挺好吃。");
@@ -161,8 +162,18 @@ describe("diffInline（字符粒度）", () => {
     const before = "我们进行了优化，予以了反馈。效率提升了，成本降低了。";
     const after = "我们优化了一遍，给了反馈。效率上来了，成本降了，风险也可控。";
     const { left, right } = diffInline(before, after);
-    expect(left.filter((p) => p.type !== "ins").map((p) => p.text).join("")).toBe(before);
-    expect(right.filter((p) => p.type !== "del").map((p) => p.text).join("")).toBe(after);
+    expect(
+      left
+        .filter((p) => p.type !== "ins")
+        .map((p) => p.text)
+        .join(""),
+    ).toBe(before);
+    expect(
+      right
+        .filter((p) => p.type !== "del")
+        .map((p) => p.text)
+        .join(""),
+    ).toBe(after);
   });
 
   it("纯增句 / 纯删句：单侧成块，另一侧不产生幻影块", () => {
@@ -210,7 +221,12 @@ describe("diffInline（字符粒度的两个硬要求）", () => {
     const dels = left.filter((p) => p.type === "del");
     expect(dels.length).toBeGreaterThanOrEqual(2);
     expect(dels.map((p) => p.text)).toContain("非常");
-    expect(left.filter((p) => p.type === "same").map((p) => p.text).join("")).toContain("这道菜");
+    expect(
+      left
+        .filter((p) => p.type === "same")
+        .map((p) => p.text)
+        .join(""),
+    ).toContain("这道菜");
   });
 
   it("超单边上限时退回前后缀裁切，仍完整还原两侧", () => {
@@ -218,7 +234,17 @@ describe("diffInline（字符粒度的两个硬要求）", () => {
     const before = `${long}。`;
     const after = `${long}改。`;
     const { left, right } = diffInline(before, after);
-    expect(left.filter((p) => p.type !== "ins").map((p) => p.text).join("")).toBe(before);
-    expect(right.filter((p) => p.type !== "del").map((p) => p.text).join("")).toBe(after);
+    expect(
+      left
+        .filter((p) => p.type !== "ins")
+        .map((p) => p.text)
+        .join(""),
+    ).toBe(before);
+    expect(
+      right
+        .filter((p) => p.type !== "del")
+        .map((p) => p.text)
+        .join(""),
+    ).toBe(after);
   });
 });

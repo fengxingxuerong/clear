@@ -91,7 +91,11 @@ function crossVoteCritiques(
   const out: string[] = [];
   for (const [, { votes, example }] of buckets) {
     if (votes.size >= minVotes) {
-      out.push(votes.size === seatCritiques.length ? example : `${example}（${votes.size}/${seatCritiques.length} 席指出）`);
+      out.push(
+        votes.size === seatCritiques.length
+          ? example
+          : `${example}（${votes.size}/${seatCritiques.length} 席指出）`,
+      );
     }
   }
   return out.slice(0, 5);
@@ -149,7 +153,10 @@ export async function judgeByPanel(
       );
       // 复用 judgeWithCritique 的解析器（需要喂完整响应体——直接内联解析避免重复请求）
       const body = (r.content || r.reasoning || "").trim();
-      const lines = body.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      const lines = body
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter(Boolean);
       let score: number | null = null;
       for (let i = lines.length - 1; i >= 0; i--) {
         const m = lines[i].match(/^(?:\D*?)(\d{1,3})(?:\D*)$/);

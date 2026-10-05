@@ -163,7 +163,9 @@ describe("App 渲染冒烟", () => {
   it("「清空」按钮：清空输入并丢弃草稿", () => {
     const { getByText, getByPlaceholderText } = render(<App />);
     fireEvent.click(getByText("示例"));
-    expect((getByPlaceholderText(/把 AI 写的文章粘进来/) as HTMLTextAreaElement).value.length).toBeGreaterThan(0);
+    expect(
+      (getByPlaceholderText(/把 AI 写的文章粘进来/) as HTMLTextAreaElement).value.length,
+    ).toBeGreaterThan(0);
     fireEvent.click(getByText("清空"));
     expect((getByPlaceholderText(/把 AI 写的文章粘进来/) as HTMLTextAreaElement).value).toBe("");
   });
@@ -448,7 +450,12 @@ describe("App 集成：评分 / 检测闭环 / 设置 / 历史 / 草稿 / 面板
 
   it("深度模式轮次回调：评分中与评分失败两种播报都不崩（最终文案以结果为准）", async () => {
     runHumanizeMock.mockImplementation(
-      async (_input: string, _i: number, _a: unknown, onRound?: (r: number, s: number | null, st?: string) => void) => {
+      async (
+        _input: string,
+        _i: number,
+        _a: unknown,
+        onRound?: (r: number, s: number | null, st?: string) => void,
+      ) => {
         onRound?.(1, 88);
         onRound?.(2, null);
         return makeRunResult(OUTPUT_TEXT, "llm", true, [88, 0]);

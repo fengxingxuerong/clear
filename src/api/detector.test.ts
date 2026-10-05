@@ -190,7 +190,9 @@ describe("非 2xx 的现场材料（2026-09-22 补）", () => {
   it("网关回显凭证时，消息里必须是隐去后的占位符（错误会被贴进日志）", async () => {
     const fake = "本条仅为单元测试用凭证";
     stubFetch({ ok: false, status: 403, text: `rejected bearer ${fake} for this zone` });
-    const msg = await scoreViaDetector("文本", cfg({ apiKey: fake })).catch((e: Error) => e.message);
+    const msg = await scoreViaDetector("文本", cfg({ apiKey: fake })).catch(
+      (e: Error) => e.message,
+    );
     expect(msg).not.toContain(fake);
     expect(msg).toContain("⟨凭证已隐去⟩");
     expect(msg).toContain("403");

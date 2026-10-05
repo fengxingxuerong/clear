@@ -298,9 +298,7 @@ export function aiScore(text: string): ScoreBreakdown {
   const W_PAD_SENTENCE = 12; // 垫词独立成句
 
   // 3a) 句尾语气词硬插：陈述句末尾紧跟单字语气词（"达到了 41.8%嗯。"）
-  const tailParticle = (
-    text.match(/[\d%．.、，]?[嗯啊哦嗨咳呣啧诶哈]{1,2}[。！？]/g) ?? []
-  ).length;
+  const tailParticle = (text.match(/[\d%．.、，]?[嗯啊哦嗨咳呣啧诶哈]{1,2}[。！？]/g) ?? []).length;
   if (tailParticle > 0) structure += Math.min(2, tailParticle) * W_TAIL_PARTICLE;
   // 3b) 连接词后直接跟句号（"说到底。/具体来说。"—— 连接词被孤立成句）
   // v0.9.7：词表从 6 个扩到 20 个。旧表漏了"换句话说"这类，
@@ -319,13 +317,7 @@ export function aiScore(text: string): ScoreBreakdown {
   // 每项都必须写「引擎真实造出的错字形态」本身，不能用可选量词放宽：
   // 旧式 /大这?家/ 把正常词「大家」也判成错字（每处 +30、两处 +60），
   // 全仓语料 30 处命中全是真人写法、真错字 0 处——纯粹的假阳性发生器。
-  const TYPO_PATTERNS: RegExp[] = [
-    /再去年/g,
-    /再上个/g,
-    /是实上/g,
-    /大这家/g,
-    /时候候/g,
-  ];
+  const TYPO_PATTERNS: RegExp[] = [/再去年/g, /再上个/g, /是实上/g, /大这家/g, /时候候/g];
   let typoCount = 0;
   for (const re of TYPO_PATTERNS) typoCount += (text.match(re) ?? []).length;
   // 3d) 垫词独句：口语垫词被机械插成独立短句。
@@ -334,7 +326,7 @@ export function aiScore(text: string): ScoreBreakdown {
   for (const w of PAD_SENTENCE_WORDS) {
     const re = new RegExp(
       `(?:^|[。！？!?\\n]\\s*)${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[。！？]`,
-      "g"
+      "g",
     );
     const c = (text.match(re) ?? []).length;
     if (c > 0) structure += Math.min(3, c) * W_PAD_SENTENCE;
@@ -641,8 +633,14 @@ const CLAUSE_SPLIT_RE = /[，、；;：:。！？!?\n]+/;
  */
 export function collapseIssues(original: string, rewritten: string): string[] {
   // 两侧必须用同一套分隔符切句，否则切分口径不一致会整批误报（全角冒号就是这么漏的）
-  const srcClauses = original.split(CLAUSE_SPLIT_RE).map((s) => s.trim()).filter((s) => s.length >= 4);
-  const outClauses = rewritten.split(CLAUSE_SPLIT_RE).map((s) => s.trim()).filter(Boolean);
+  const srcClauses = original
+    .split(CLAUSE_SPLIT_RE)
+    .map((s) => s.trim())
+    .filter((s) => s.length >= 4);
+  const outClauses = rewritten
+    .split(CLAUSE_SPLIT_RE)
+    .map((s) => s.trim())
+    .filter(Boolean);
   if (!srcClauses.length) return [];
   const outSet = new Set(outClauses);
   const issues: string[] = [];
@@ -654,7 +652,8 @@ export function collapseIssues(original: string, rewritten: string): string[] {
     const victim = srcClauses.find(
       (s) => s.length - frag.length >= 2 && s.startsWith(frag) && !outSet.has(s),
     );
-    if (victim) issues.push(`「${frag}」是原文「${victim.slice(0, 24)}」被截断后的残留，谓语已丢失`);
+    if (victim)
+      issues.push(`「${frag}」是原文「${victim.slice(0, 24)}」被截断后的残留，谓语已丢失`);
   }
   return issues;
 }

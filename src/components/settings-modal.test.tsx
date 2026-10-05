@@ -192,9 +192,7 @@ describe("SettingsModal（设置弹窗）", () => {
 
 describe("SettingsModal 条件分支（v0.9.16 补盲追加）", () => {
   it("baseUrl 以 / 开头显示部署警告横幅，改回 https 消失", () => {
-    const { getByText, queryByText, container } = render(
-      <SettingsModal {...base()} />,
-    );
+    const { getByText, queryByText, container } = render(<SettingsModal {...base()} />);
     // 找到 Base URL 输入（placeholder 为默认值）
     const baseUrlInput = container.querySelector(
       'input[placeholder="https://api.openai.com/v1"]',
@@ -207,9 +205,7 @@ describe("SettingsModal 条件分支（v0.9.16 补盲追加）", () => {
 
   it("写作风格切换进入草稿，保存后经 onSave 上抛", () => {
     const onSave = vi.fn();
-    const { getByText, getByLabelText } = render(
-      <SettingsModal {...base({ onSave })} />,
-    );
+    const { getByText, getByLabelText } = render(<SettingsModal {...base({ onSave })} />);
     const styleSelect = getByLabelText("文风") as HTMLSelectElement;
     expect(styleSelect.value).toBe("plain");
     fireEvent.change(styleSelect, { target: { value: "academic" } });
@@ -220,9 +216,7 @@ describe("SettingsModal 条件分支（v0.9.16 补盲追加）", () => {
 
   it("保存时启用勾选与 Key 一并上抛（草稿态不落盘到 localStorage）", () => {
     const onSave = vi.fn();
-    const { getByText, container } = render(
-      <SettingsModal {...base({ onSave })} />,
-    );
+    const { getByText, container } = render(<SettingsModal {...base({ onSave })} />);
     const keyInput = container.querySelector('input[placeholder="sk-..."]') as HTMLInputElement;
     fireEvent.change(keyInput, { target: { value: "sk-draft-key" } });
     // 未点保存：localStorage 不应有 Key

@@ -72,17 +72,16 @@ const RE_COLLOQUIAL_ABSTRACT =
 const PROBES: [string, RegExp, string][] = [
   ["三连叠字", RE_TRIPLE, "从治理与合规看看看，这一块确实被反复提到"],
   ["骨架词独立成句", RE_BARE_SKELETON, "再说。在产业方面，我们已经有了初步的积累"],
-  [
-    "口语结果动词+抽象宾语",
-    RE_COLLOQUIAL_ABSTRACT,
-    "他们想搞出健全的监管框架，以此来降低风险",
-  ],
+  ["口语结果动词+抽象宾语", RE_COLLOQUIAL_ABSTRACT, "他们想搞出健全的监管框架，以此来降低风险"],
 ];
 
 describe("v0.9.22 类别级语言质量守卫", () => {
   it("②自检：三条探针都能命中人工构造的坏串（探针本身没失效）", () => {
     for (const [name, re, bad] of PROBES) {
-      expect(bad.match(re), `探针「${name}」对自己该抓的坏串都不命中 → 正向断言全是假绿`).not.toBeNull();
+      expect(
+        bad.match(re),
+        `探针「${name}」对自己该抓的坏串都不命中 → 正向断言全是假绿`,
+      ).not.toBeNull();
     }
   });
 
@@ -105,7 +104,10 @@ describe("v0.9.22 类别级语言质量守卫", () => {
           for (let seed = 0; seed < 10; seed++) {
             const out = humanize(input, { intensity: it, seed });
             const m = out.match(re);
-            expect(m, `探针「${name}」命中｜${corpusName} 强度${it} seed${seed}：${m?.[0]}`).toBeNull();
+            expect(
+              m,
+              `探针「${name}」命中｜${corpusName} 强度${it} seed${seed}：${m?.[0]}`,
+            ).toBeNull();
           }
         }
       }
@@ -119,7 +121,9 @@ describe("v0.9.22 类别级语言质量守卫", () => {
       expect(wouldCascade(rep), `「${rep}」本身是源词，应被判为级联`).toBe(true);
     }
     for (const rep of ["一门心思", "就盯着", "方面", "调好"]) {
-      expect(wouldCascade(rep), `「${rep}」不是源词，不该被判为级联（误判＝误伤正常替换）`).toBe(false);
+      expect(wouldCascade(rep), `「${rep}」不是源词，不该被判为级联（误判＝误伤正常替换）`).toBe(
+        false,
+      );
     }
   });
 
@@ -148,10 +152,9 @@ describe("v0.9.22 类别级语言质量守卫", () => {
     ];
     for (const [from, words] of banned) {
       for (const w of words) {
-        expect(
-          VOCAB[from] ?? [],
-          `VOCAB.${from} 仍含被判定为语义漂移的替身「${w}」`,
-        ).not.toContain(w);
+        expect(VOCAB[from] ?? [], `VOCAB.${from} 仍含被判定为语义漂移的替身「${w}」`).not.toContain(
+          w,
+        );
       }
     }
   });
@@ -163,7 +166,10 @@ describe("v0.9.22 类别级语言质量守卫", () => {
       const out = humanize(src, { intensity: 0.9, seed });
       if (out.includes("真正做出来") || out.includes("真做出来")) replaced++;
     }
-    expect(replaced, "整批种子一次都没替换「落地」→ 前置守卫过严，等于把这条替换废掉了").toBeGreaterThan(0);
+    expect(
+      replaced,
+      "整批种子一次都没替换「落地」→ 前置守卫过严，等于把这条替换废掉了",
+    ).toBeGreaterThan(0);
   });
 
   it("定语位「在产业落地层面」不再产出「真正做出来那一摊」", () => {
@@ -183,7 +189,10 @@ describe("v0.9.22 类别级语言质量守卫", () => {
       expect(out, `seed=${seed}：${out}`).not.toContain("长期好处");
       if (out.includes("一门心思") || out.includes("就盯着")) replaced++;
     }
-    expect(replaced, "整批种子一次都没替换「致力于」→ 该词条可能已失效（替换零发生 = 断言空转）").toBeGreaterThan(0);
+    expect(
+      replaced,
+      "整批种子一次都没替换「致力于」→ 该词条可能已失效（替换零发生 = 断言空转）",
+    ).toBeGreaterThan(0);
   });
 
   it("GUARD_BEFORE.关注 仍登记着书面搭配状语（共同/密切/高度…）", () => {

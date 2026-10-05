@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { pickExemplarBlock, personaDirective, styleDirective, intensityDirective } from "./llm-prompts";
+import {
+  pickExemplarBlock,
+  personaDirective,
+  styleDirective,
+  intensityDirective,
+} from "./llm-prompts";
 
 /** v0.9.5 P3 范例条件注入：按体裁选范例组（议论默认 / 叙事判体 / 科普启发式 / academic 跳过） */
 describe("pickExemplarBlock（范例条件注入）", () => {

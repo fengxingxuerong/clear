@@ -101,18 +101,27 @@ describe("loadSamples 脏数据容错", () => {
     // 变成 (local=0, official=99) 的观测点把拟合线往下拽
     for (const bad of [null, "", undefined]) {
       store.clear();
-      store.set(K_SAMPLES, JSON.stringify([mkSample({ id: "a", surface: bad as unknown as number, official: 99 })]));
+      store.set(
+        K_SAMPLES,
+        JSON.stringify([mkSample({ id: "a", surface: bad as unknown as number, official: 99 })]),
+      );
       expect(loadSamples()).toHaveLength(0);
     }
   });
 
   it("surface 为非数字字符串同样被拒绝", () => {
-    store.set(K_SAMPLES, JSON.stringify([mkSample({ id: "a", surface: "abc" as unknown as number })]));
+    store.set(
+      K_SAMPLES,
+      JSON.stringify([mkSample({ id: "a", surface: "abc" as unknown as number })]),
+    );
     expect(loadSamples()).toHaveLength(0);
   });
 
   it("official 为空串时保持 null，不得读成「官方 0 分」", () => {
-    store.set(K_SAMPLES, JSON.stringify([mkSample({ id: "a", surface: 80, official: "" as unknown as number })]));
+    store.set(
+      K_SAMPLES,
+      JSON.stringify([mkSample({ id: "a", surface: 80, official: "" as unknown as number })]),
+    );
     const s = loadSamples();
     expect(s).toHaveLength(1);
     expect(s[0].official).toBeNull();
@@ -156,7 +165,10 @@ describe("readLegacyPoints（全局唯一实现）", () => {
   it("读取旧版校准点并剔除空值脏点", () => {
     store.set(
       K_LEGACY,
-      JSON.stringify([{ local: null, official: 99, ts: 1 }, { local: 40, official: 55, ts: 2 }]),
+      JSON.stringify([
+        { local: null, official: 99, ts: 1 },
+        { local: 40, official: 55, ts: 2 },
+      ]),
     );
     expect(readLegacyPoints()).toEqual([{ local: 40, official: 55, ts: 2 }]);
   });
@@ -176,13 +188,25 @@ describe("readLegacyPoints（全局唯一实现）", () => {
 
 describe("collectPoints（旧版 key 兼容）", () => {
   it("legacy 里 local 为空值的脏点被过滤，不塌缩成 0", () => {
-    store.set(K_LEGACY, JSON.stringify([{ local: null, official: 99, ts: 1 }, { local: 40, official: 55, ts: 2 }]));
+    store.set(
+      K_LEGACY,
+      JSON.stringify([
+        { local: null, official: 99, ts: 1 },
+        { local: 40, official: 55, ts: 2 },
+      ]),
+    );
     expect(collectPoints()).toEqual([{ local: 40, official: 55, ts: 2 }]);
   });
 
   it("样本库派生点与 legacy 点合并，并按 local|official 去重", () => {
     store.set(K_SAMPLES, JSON.stringify([mkSample({ id: "a", surface: 40, official: 55 })]));
-    store.set(K_LEGACY, JSON.stringify([{ local: 40, official: 55, ts: 9 }, { local: 70, official: 80, ts: 3 }]));
+    store.set(
+      K_LEGACY,
+      JSON.stringify([
+        { local: 40, official: 55, ts: 9 },
+        { local: 70, official: 80, ts: 3 },
+      ]),
+    );
     const pts = collectPoints();
     expect(pts).toHaveLength(2);
     expect(pts.map((p) => p.local).sort((a, b) => a - b)).toEqual([40, 70]);
@@ -198,14 +222,18 @@ describe("generateBatch", () => {
   });
 
   it("一篇原文产出 4 条样本（原文 + 三档强度）并入库", () => {
-    const out = generateBatch("这是一段足够长的测试原文，用于验证批量样本生成的行为。它需要包含若干句子。");
+    const out = generateBatch(
+      "这是一段足够长的测试原文，用于验证批量样本生成的行为。它需要包含若干句子。",
+    );
     expect(out).toHaveLength(4);
     expect(out.map((s) => s.source)).toEqual(["original", "local-0.3", "local-0.6", "local-0.9"]);
     expect(loadSamples()).toHaveLength(4);
   });
 
   it("每条都预计算 surface，且尚未回填官方分", () => {
-    const out = generateBatch("这是一段足够长的测试原文，用于验证批量样本生成的行为。它需要包含若干句子。");
+    const out = generateBatch(
+      "这是一段足够长的测试原文，用于验证批量样本生成的行为。它需要包含若干句子。",
+    );
     for (const s of out) {
       expect(s.surface).toBeGreaterThanOrEqual(0);
       expect(s.surface).toBeLessThanOrEqual(100);
@@ -214,7 +242,9 @@ describe("generateBatch", () => {
   });
 
   it("样本 id 互不重复（同毫秒生成也不能撞）", () => {
-    const out = generateBatch("这是一段足够长的测试原文，用于验证批量样本生成的行为。它需要包含若干句子。");
+    const out = generateBatch(
+      "这是一段足够长的测试原文，用于验证批量样本生成的行为。它需要包含若干句子。",
+    );
     expect(new Set(out.map((s) => s.id)).size).toBe(4);
   });
 });
@@ -311,7 +341,9 @@ describe("labStats", () => {
   });
 
   it("4~7 条时提示可拟合、建议攒到 8 条", () => {
-    const pts = Array.from({ length: 5 }, (_, i) => mkSample({ id: `s${i}`, surface: 10 * (i + 1), official: 12 * (i + 1) }));
+    const pts = Array.from({ length: 5 }, (_, i) =>
+      mkSample({ id: `s${i}`, surface: 10 * (i + 1), official: 12 * (i + 1) }),
+    );
     store.set(K_SAMPLES, JSON.stringify(pts));
     const st = labStats();
     expect(st.filled).toBe(5);
@@ -320,7 +352,9 @@ describe("labStats", () => {
   });
 
   it("≥8 条时启用留出验证，完全线性数据 MAE 应为 0", () => {
-    const pts = Array.from({ length: 8 }, (_, i) => mkSample({ id: `s${i}`, surface: 10 * (i + 1), official: 20 * (i + 1) }));
+    const pts = Array.from({ length: 8 }, (_, i) =>
+      mkSample({ id: `s${i}`, surface: 10 * (i + 1), official: 20 * (i + 1) }),
+    );
     store.set(K_SAMPLES, JSON.stringify(pts));
     const st = labStats();
     expect(st.progress).toContain("留出验证已启用");
@@ -329,7 +363,9 @@ describe("labStats", () => {
   });
 
   it("留出划分可复现（同数据两次调用结果一致）", () => {
-    const pts = Array.from({ length: 9 }, (_, i) => mkSample({ id: `s${i}`, surface: 10 * (i + 1), official: 10 * (i + 1) + (i % 3) }));
+    const pts = Array.from({ length: 9 }, (_, i) =>
+      mkSample({ id: `s${i}`, surface: 10 * (i + 1), official: 10 * (i + 1) + (i % 3) }),
+    );
     store.set(K_SAMPLES, JSON.stringify(pts));
     expect(labStats().holdoutMAE).toBe(labStats().holdoutMAE);
   });
@@ -346,13 +382,17 @@ describe("labStats", () => {
   });
 
   it("官方分贴近表层分时，w* 收敛到 0（纯表层最好）", () => {
-    const pts = [0, 1, 2].map((i) => mkSample({ id: `s${i}`, surface: 30 + i * 20, official: 30 + i * 20, semantic: 90 }));
+    const pts = [0, 1, 2].map((i) =>
+      mkSample({ id: `s${i}`, surface: 30 + i * 20, official: 30 + i * 20, semantic: 90 }),
+    );
     store.set(K_SAMPLES, JSON.stringify(pts));
     expect(labStats().bestWeight).toBe(0);
   });
 
   it("官方分贴近语义分时，w* 收敛到 1（纯语义最好）", () => {
-    const pts = [0, 1, 2].map((i) => mkSample({ id: `s${i}`, surface: 30, official: 85 + i, semantic: 85 + i }));
+    const pts = [0, 1, 2].map((i) =>
+      mkSample({ id: `s${i}`, surface: 30, official: 85 + i, semantic: 85 + i }),
+    );
     store.set(K_SAMPLES, JSON.stringify(pts));
     expect(labStats().bestWeight).toBe(1);
   });

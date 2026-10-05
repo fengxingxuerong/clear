@@ -2,12 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import {
-  adoptSecureApiKeys,
-  loadApi,
-  loadDetector,
-  loadDetectorKeySecure,
-} from "./store";
+import { adoptSecureApiKeys, loadApi, loadDetector, loadDetectorKeySecure } from "./store";
 import type { ApiConfig } from "./api/llm";
 import type { DetectorConfig } from "./api/detector";
 import "./styles.css";

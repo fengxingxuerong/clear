@@ -70,9 +70,17 @@ describe("injectFirstPersonAnchorPoints（P3-4 第一人称锚点）", () => {
     const out = injectFirstPersonAnchorPoints(t, rngMid, 0.95);
     const sents = out.split(/(?<=[。！？])/).filter((s) => s.trim());
     // 每个锚的前一句都应含数据触发词（goodSlots 来自 DATA_MARK 命中句的下一槽）
-    const DATA_MARK = /(报告显示|数据显示|白皮书显示|调研显示|研究表明|数据表明|占比|同比|达到了|高达|根据[《\w].*?显示)/;
+    const DATA_MARK =
+      /(报告显示|数据显示|白皮书显示|调研显示|研究表明|数据表明|占比|同比|达到了|高达|根据[《\w].*?显示)/;
     for (let i = 1; i < sents.length; i++) {
-      if (sents[i].startsWith("我个人觉得") || sents[i].startsWith("要我说") || sents[i].startsWith("在我看来") || sents[i].startsWith("我的看法是") || sents[i].startsWith("我觉得") || sents[i].startsWith("这点我持保留意见")) {
+      if (
+        sents[i].startsWith("我个人觉得") ||
+        sents[i].startsWith("要我说") ||
+        sents[i].startsWith("在我看来") ||
+        sents[i].startsWith("我的看法是") ||
+        sents[i].startsWith("我觉得") ||
+        sents[i].startsWith("这点我持保留意见")
+      ) {
         expect(DATA_MARK.test(sents[i - 1])).toBe(true);
       }
     }
@@ -87,9 +95,7 @@ describe("injectFirstPersonAnchorPoints（P3-4 第一人称锚点）", () => {
     expect(t.replace(/\s/g, "").length).toBeGreaterThanOrEqual(200);
     const out = injectFirstPersonAnchorPoints(t, rngMid, 0.95);
     expect(out).not.toBe(t);
-    expect(out.split(/(?<=[。！？])/).length).toBeGreaterThan(
-      t.split(/(?<=[。！？])/).length,
-    );
+    expect(out.split(/(?<=[。！？])/).length).toBeGreaterThan(t.split(/(?<=[。！？])/).length);
   });
 
   it("确定性：同 rng 同输入输出一致", () => {

@@ -801,7 +801,11 @@ const PARTICLE_SENT_RE = /^(?:对哦|是啊|好吧|[嗯嗨诶咳呵啧呣哦啊�
 /** 句尾挂语气词（"好评哦。""韧性好吧。"）：锚点注入器惯用手法——插在句末标点前 */
 const PARTICLE_SUFFIX_RE = /(?:对哦|是啊|好吧|[嗯嗨诶咳呵啧呣哦啊行])$/;
 
-export function capParticleSentenceDensity(text: string, maxPerPara = 1, stripSuffix = true): string {
+export function capParticleSentenceDensity(
+  text: string,
+  maxPerPara = 1,
+  stripSuffix = true,
+): string {
   // v0.9 专家修复 P3：每段独立极短语气句上限 2 → 1。实测 0.9 档输出段尾
   // 「呵。啧。」「行。好吧。呵。」成串——每段 2 条在 3 段短文里就是 6 条，
   // 堆积密度远超真人（真人每段至多 1 条口头语，且不是每段都有）。

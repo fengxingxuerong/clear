@@ -94,7 +94,12 @@ export function dedupePadWords(text: string): string {
   return text;
 }
 
-export function limitPunctuation(text: string, mark: string, limit: number, replacement: string): string {
+export function limitPunctuation(
+  text: string,
+  mark: string,
+  limit: number,
+  replacement: string,
+): string {
   let count = 0;
   let idx = 0;
   while ((idx = text.indexOf(mark, idx)) !== -1) {

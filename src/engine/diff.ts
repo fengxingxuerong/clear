@@ -129,7 +129,9 @@ function charParts(a: string, b: string): { left: DiffPart[]; right: DiffPart[] 
   for (let i = 1; i <= m; i++) {
     for (let j = 1; j <= n; j++) {
       dp[i * w + j] =
-        a[i - 1] === b[j - 1] ? dp[(i - 1) * w + j - 1] + 1 : Math.max(dp[(i - 1) * w + j], dp[i * w + j - 1]);
+        a[i - 1] === b[j - 1]
+          ? dp[(i - 1) * w + j - 1] + 1
+          : Math.max(dp[(i - 1) * w + j], dp[i * w + j - 1]);
     }
   }
   const revL: DiffPart[] = [];
@@ -187,8 +189,12 @@ export function diffInline(before: string, after: string): { left: DiffPart[]; r
     while (di < L.length && L[di].type === "del") di++;
     let ij = j;
     while (ij < R.length && R[ij].type === "ins") ij++;
-    const delText = L.slice(i, di).map((p) => p.text).join("");
-    const insText = R.slice(j, ij).map((p) => p.text).join("");
+    const delText = L.slice(i, di)
+      .map((p) => p.text)
+      .join("");
+    const insText = R.slice(j, ij)
+      .map((p) => p.text)
+      .join("");
     if (delText && insText) {
       if (delText.length <= CHAR_DIFF_MAX && insText.length <= CHAR_DIFF_MAX) {
         const cp = charParts(delText, insText);
@@ -241,5 +247,11 @@ export function diffStats(before: string, after: string): DiffStats {
   const removed = sum(left, "del");
   const added = sum(right, "ins");
   const total = kept + removed;
-  return { kept, removed, added, total, ratio: total ? Math.round(((removed + added) / total) * 100) : 0 };
+  return {
+    kept,
+    removed,
+    added,
+    total,
+    ratio: total ? Math.round(((removed + added) / total) * 100) : 0,
+  };
 }
