@@ -149,6 +149,62 @@ describe("loadSamples 脏数据容错", () => {
     store.set(K_SAMPLES, JSON.stringify([{ id: "x", surface: 50 }]));
     expect(loadSamples()).toHaveLength(0);
   });
+
+  /**
+   * 旧版数据的**字段级兜底**（行 73/74/76/81）。
+   *
+   * 此前所有用例都经mkSample 构造，它总是带齐 id/name/source/ts ——
+   * 于是这四个 `??` 的兜底半边一次都没走过。而它们正是**版本迁移**要靠的东西：
+   * 早期版本存进 localStorage 的样本没有 officialLabel，字段更少。
+   *
+   * 关键：`surface` 缺失的条目会被 filter 拒绝（不是兜底成 0），
+   * 所以构造时必须留着 surface，只删其余字段。
+   */
+  it("字段缺失时按 ?? 兜底，且不崩（行 73/74/76/81）", () => {
+    // 只有 text + surface，其余全缺——模拟早期版本存的数据
+    store.set(K_SAMPLES, JSON.stringify([{ text: "早期版本存的样本文本内容。", surface: 42 }]));
+    const s = loadSamples();
+    expect(s).toHaveLength(1);
+    // 行 73：id 缺 → 自动生成（探针实测为非空字符串）
+    expect(typeof s[0].id).toBe("string");
+    expect(s[0].id.length).toBeGreaterThan(0);
+    // 行 74：name 缺 → 「未命名样本」
+    expect(s[0].name).toBe("未命名样本");
+    // 行 76：source 缺 → "manual"
+    expect(s[0].source).toBe("manual");
+    // 行 81：ts 缺 → Date.now()（近似当下）
+    expect(s[0].ts).toBeGreaterThan(1600000000000);
+    // 行 80：officialLabel 缺 → null
+    expect(s[0].officialLabel).toBeNull();
+    // official 缺 → null，且**不产出校准点**（行 131 已钉：official 为 null 不算观测点）
+    expect(s[0].official).toBeNull();
+    expect(collectPoints()).toHaveLength(0);
+  });
+
+  it("字段为 null（不是缺失）也走同一套兜底", () => {
+    // JSON 里显式写 null 与「键不存在」对 ?? 而言等价，但值得单独钉住
+    store.set(
+      K_SAMPLES,
+      JSON.stringify([
+        { id: null, name: null, source: null, ts: null, text: "显式 null 的样本。", surface: 7 },
+      ]),
+    );
+    const s = loadSamples();
+    expect(s).toHaveLength(1);
+    expect(s[0].name).toBe("未命名样本");
+    expect(s[0].source).toBe("manual");
+    expect(s[0].ts).toBeGreaterThan(1600000000000);
+  });
+
+  it("ts 为 0 时不被兜底成 Date.now()——`||` 会吃掉 0，这里钉住实测口径", () => {
+    // 行 81 写的是 `Number(s.ts) || Date.now()`，0 是 falsy → 会被兜底成当前时间。
+    // 这不是「bug」（ts=0 只可能来自 1970 年，无实际意义），但**行为要明确**，
+    // 免得后人误以为 ts=0 会被保留。
+    store.set(K_SAMPLES, JSON.stringify([mkSample({ id: "z", surface: 9, ts: 0 })]));
+    const s = loadSamples();
+    expect(s).toHaveLength(1);
+    expect(s[0].ts).toBeGreaterThan(1600000000000);
+  });
 });
 
 describe("saveSamples", () => {
