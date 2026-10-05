@@ -5,15 +5,23 @@ on:
     branches: [main, master]
   pull_request:
 
-# 同一分支只保留最新一次 CI。
-# 没有这段时，网络不稳期间积压的多个推送会各自排一个 run，而 GitHub
-# 在 runner 紧张时会让排队中的 job **恰好 15 分钟后**被判 cancelled
-# （2026-10-05 实测 run #74/#75 均 created→updated 15分03秒/15分02秒，
-#  job 从未 started；本地 check:release 全绿）。
-# cancel-in-progress 保证新推送一来就把旧的取消掉，不会互相排队。
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+# ⚠️ 这里**故意不加 concurrency**。两次尝试的实测结论（2026-10-05）：
+#
+#   现象：run #74/#75 均为 created→updated 恰好 15分03秒/15分02秒，
+#        job 从未 started，conclusion=cancelled，而本地 check:release 全绿。
+#        对照 run #73（单跑）从创建到完成 81 秒，runner 秒接。
+#        ⇒ GitHub 侧 runner 排队超过 15 分钟上限，job 被判 cancelled。
+#        积压原因是网络不稳期间多个推送一次性进来。
+#
+#   试过 cancel-in-progress: true（run #76/#77）：**反而更糟**。
+#        run #76 的 job started 与 created 同一秒就被取消（20:30:12→20:45:14），
+#        新推送会杀掉正在验证上一个提交的 run，得不到任何有效结论。
+#
+#   结论：这是 GitHub 基础设施的排队问题，不是本仓库配置能根治的。
+#        正确处置是**别让多个推送堆在一起**（本地先跑 check:release 再推、
+#        网络断时退避重试），而不是在 workflow 里加开关。
+#        若将来 CI 真的需要「只跑最新」，应当用 cancel-in-progress: false
+#        （排队不取消），而不是 true。
 
 jobs:
   test:

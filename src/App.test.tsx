@@ -1013,3 +1013,53 @@ describe("指纹体检的空输入守卫（行 191-192）", () => {
     expect(target).toBe(INPUT_TEXT);
   });
 });
+
+/**
+ * LLM 模式标签的两副面孔（App.tsx 行 509-518）。
+ *
+ * 标签只在 `api.enabled && effectiveKeys(api).length > 0` 时渲染，
+ * 内容由 `api.deepMode` 二选一。此前所有用例都没配过 API，
+ * 于是这个 span 从来没出现过——三处缺口（513 的 true 支、515 的 false 支、518）。
+ *
+ * ⚠️ 选择器必须限定 span：App.tsx 行 522 还有另一个 `className="mode-tag"`
+ *   （朱雀模式的 **label**，带 active 类）。第一版用 `querySelector(".mode-tag")`
+ *   的第三条用例就是这么错的——拿到的是行 522 那个 label，不是行 510 的 span。
+ */
+describe("LLM 模式标签（行 509-518）", () => {
+  const KEY = "aihumanizer.api";
+  const LLM_TAG = "span.mode-tag"; // 行 510 是 span；行 522 是 label，两者 className 相同
+
+  function renderWith(cfg: Record<string, unknown>) {
+    localStorage.clear();
+    localStorage.setItem(
+      KEY,
+      JSON.stringify({ baseUrl: "https://api.example.com", apiKey: "k1", ...cfg }),
+    );
+    return render(<App />);
+  }
+
+  it("deepMode 开 → 「⚡ 深度模式」，title 说明会多轮改写", () => {
+    const utils = renderWith({ enabled: true, deepMode: true });
+    const tag = utils.container.querySelector(LLM_TAG) as HTMLElement;
+    expect(tag).toBeTruthy();
+    expect(tag.textContent).toBe("⚡ 深度模式");
+    // title 说的是「最多 N 轮」，N 取自常量，这里只断言形状不写死数字
+    expect(tag.title).toMatch(/改写 → LLM评分 → 未达标自动再改写，最多 \d+ 轮/);
+  });
+
+  it("deepMode 关 → 「LLM 单轮」，title 指向设置里开启", () => {
+    const utils = renderWith({ enabled: true, deepMode: false });
+    const tag = utils.container.querySelector(LLM_TAG) as HTMLElement;
+    expect(tag).toBeTruthy();
+    expect(tag.textContent).toBe("LLM 单轮");
+    expect(tag.title).toBe("单次 LLM 改写（设置里可开深度模式）");
+  });
+
+  it("enabled 但 Key 为空 → 这个 span 不渲染（effectiveKeys 返回空数组）", () => {
+    // 探针实测：effectiveKeys({apiKey:"", apiKeys:""}) === []（splitKeys 会滤掉空串）
+    const utils = renderWith({ enabled: true, deepMode: true, apiKey: "", apiKeys: "" });
+    expect(utils.container.querySelector(LLM_TAG)).toBeNull();
+    // 对照：行 522 那个 label 仍在——证明是「这个 span 不渲染」而非整页崩了
+    expect(utils.container.querySelector(".mode-tag")).toBeTruthy();
+  });
+});
