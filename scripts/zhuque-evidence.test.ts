@@ -14,6 +14,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
+import { fileURLToPath } from "node:url";
 import {
   CALIB_IDS,
   audit,
@@ -37,6 +38,7 @@ import { ZHUQUE_MIN_CHARS } from "../src/engine/zhuque";
 /** 数据集里真实存在的标定点：O1 的官方分 y=85（覆盖率与 y 互证都必须绑死真数据） */
 const PID = "O1";
 const Y = 85;
+const SCRIPTS_DIR = path.dirname(fileURLToPath(import.meta.url));
 /** 够长的"送检原文"，且含「大家」——历史上标尺会把它当错字罚 60 分 */
 const LONG = "这是一段用于凭证自测的中文文本，大家一起看看，字数需要超过朱雀的下限才有意义。".repeat(12);
 const SHORT = "太短了，不可能通过朱雀。";
@@ -59,6 +61,7 @@ beforeEach(() => {
 
 afterEach(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
+  vi.restoreAllMocks(); // 用例中途失败也不把 console/process.exit 的桩泄漏给下一条
 });
 
 const input = (over: Partial<SealInput> = {}): SealInput => ({
@@ -364,6 +367,39 @@ describe("audit 造假检测", () => {
     expect(kinds("hash-mismatch", "file-missing")).toEqual([]);
     expect(hard()).toEqual([]);
   });
+
+  it("有截图却把 proof 标成 api-response → 分级矛盾 proof-mismatch（477）", () => {
+    seal(input(), store);
+    tamper({ proof: "api-response" });
+    const msgs = kinds("proof-mismatch").map((p) => p.msg).join("\n");
+    expect(msgs).toContain("有截图却把 proof 标成 api-response（分级被写低了？）");
+    expect(msgs).toContain("proof=api-response 但 apiResponse 为空"); // 载体确实缺，两条各报各的
+  });
+
+  it("有截图却把 proof 标成低强度级 → 分级写低 + 无出处，两条都报（479/482）", () => {
+    seal(input(), store);
+    tamper({ proof: "text+transcript" });
+    const msgs = kinds("proof-mismatch").map((p) => p.msg).join("\n");
+    expect(msgs).toContain("有截图却把 proof 标成 text+transcript（分级被写低了？）");
+    expect(msgs).toContain("text+transcript 级凭证必须写 proofSource（文件:行号），否则数字无出处");
+  });
+
+  it("transcript-only 且没截图 → 只报「必须写 proofSource」，不再报「有截图」（482 独立成因）", () => {
+    seal(input(), store);
+    tamper({ proof: "transcript-only", screenshot: "", screenshotSha256: "" });
+    const msgs = kinds("proof-mismatch").map((p) => p.msg).join("\n");
+    expect(msgs).toContain("transcript-only 级凭证必须写 proofSource（文件:行号），否则数字无出处");
+    expect(msgs).not.toContain("有截图却把");
+  });
+
+  it("凭证路径逃出 base → outside-store 并直接 continue（不再往下查文件）（486-487）", () => {
+    seal(input(), store);
+    tamper({ submitFile: "../outside-O1.txt" });
+    const hit = kinds("outside-store");
+    expect(hit).toHaveLength(1);
+    expect(hit[0]?.msg).toContain("送检文本路径逃出了仓库：../outside-O1.txt");
+    expect(kinds("file-missing", "hash-mismatch")).toEqual([]); // continue 生效：压根没走到文件检查
+  });
 });
 
 /* ----------------------------- CLI ----------------------------- */
@@ -455,6 +491,18 @@ describe("main 走真 CLI", () => {
     expect(c.stop()).toMatch(/账本 1 条/);
     expect(readLedger(store)).toHaveLength(1);
   });
+
+  it("list 遇到坏行：逐条打印坏数据、汇总行数，返回 1", () => {
+    seal(input(), store);
+    fs.appendFileSync(store.ledgerFile, "{ not json\n");
+    const before = fs.readFileSync(store.ledgerFile, "utf8");
+    const c = capture();
+    expect(main(["list", "--base", tmp])).toBe(1);
+    const out = c.stop();
+    expect(out).toMatch(/❌ \[bad-line\] #2：账本第 2 行解析失败/);
+    expect(out).toMatch(/账本 1 条 \+ 1 行坏数据/);
+    expect(fs.readFileSync(store.ledgerFile, "utf8")).toBe(before); // list 全程只读
+  });
 });
 
 /* ----------------------------- sealRetro：历史点低强度回填 ----------------------------- */
@@ -511,6 +559,19 @@ describe("sealRetro（回填不是认证）", () => {
     sealRetro({ id: PID, text: LONG, pct: Y, proofSource: SRC }, store);
     expect(() => sealRetro({ id: PID, text: LONG, pct: Y, proofSource: SRC }, store)).not.toThrow();
     expect(() => sealRetro({ id: PID, text: LONG + "多了一段", pct: Y, proofSource: SRC }, store)).toThrow(/不可覆盖/);
+  });
+
+  it("三参校验：id 非法 / 官分越界 / id 不在标定点里 → 当场拒收", () => {
+    expect(() => sealRetro({ id: "../x", text: LONG, pct: Y, proofSource: SRC }, store)).toThrow(/--id/);
+    expect(() => sealRetro({ id: PID, text: LONG, pct: -1, proofSource: SRC }, store)).toThrow(/官分需在 0~100/);
+    expect(() => sealRetro({ id: "Z9", text: LONG, pct: Y, proofSource: SRC }, store)).toThrow(/不在标定数据源 points/);
+    expect(fs.existsSync(store.ledgerFile)).toBe(false);
+  });
+
+  it("回填文本落点逃出 base → 当场拒绝（否则仓库外的文件会被当凭证引用）", () => {
+    const esc = storeFromOpts({ base: tmp, "evidence-dir": "../escape" });
+    expect(() => sealRetro({ id: PID, text: LONG, pct: Y, proofSource: SRC }, esc)).toThrow(/回填文本落点逃出了仓库/);
+    expect(fs.existsSync(path.join(path.dirname(tmp), "escape"))).toBe(false); // 拒绝发生在建目录之前
   });
 });
 
@@ -614,6 +675,42 @@ describe("sealApi（官方 API 原始 JSON 入账，与 screenshot 同算认证�
     const strictHard = audit(store, true).filter((p) => isHard(p, true) && p.id === PID);
     expect(strictHard).toEqual([]);
   });
+
+  it("三参校验与 seal 同一道闸：id 非法 / pct 越界 / label 自造 → 当场拒收", () => {
+    expect(() => sealApi(apiInput({ id: "../x" }), store)).toThrow(/--id/);
+    expect(() => sealApi(apiInput({ id: "" }), store)).toThrow(/--id/);
+    expect(() => sealApi(apiInput({ pct: -1 }), store)).toThrow(/--pct/);
+    expect(() => sealApi(apiInput({ pct: 101 }), store)).toThrow(/--pct/);
+    expect(() => sealApi(apiInput({ label: "suspect" as SealApiInput["label"] }), store)).toThrow(/--label/);
+    expect(fs.existsSync(store.ledgerFile)).toBe(false); // 校验阶段全拒，一条都没落账
+  });
+
+  it("API 响应不是 JSON 对象（null / 数字）→ 拒收，不进复算", () => {
+    fs.writeFileSync(path.join(tmp, "in", "null.json"), "null", "utf8");
+    fs.writeFileSync(path.join(tmp, "in", "num.json"), "123", "utf8");
+    expect(() => sealApi(apiInput({ apiResponse: "in/null.json" }), store)).toThrow(/不是 JSON 对象/);
+    expect(() => sealApi(apiInput({ apiResponse: "in/num.json" }), store)).toThrow(/不是 JSON 对象/);
+    expect(fs.existsSync(store.ledgerFile)).toBe(false);
+  });
+
+  it("孤儿 id 与不足下限字数都是警告不阻断，记录照常入账", () => {
+    fs.writeFileSync(path.join(tmp, "in", "tiny.txt"), SHORT);
+    const { warnings } = sealApi(apiInput({ id: "Z9", submitFile: "in/tiny.txt" }), store);
+    const out = warnings.join("\n");
+    expect(out).toMatch(/Z9 不在标定数据源里，audit 会算它一条"孤儿凭证"/);
+    expect(out).toMatch(new RegExp(`送检文本不足 ${ZHUQUE_MIN_CHARS} 字（朱雀下限）`));
+    expect(readLedger(store)).toHaveLength(1);
+  });
+
+  it("归档的 API JSON 被改成坏 JSON → 复算失败按 verdict-conflict 报出，不炸审计", () => {
+    sealApi(apiInput(), store);
+    fs.writeFileSync(archived(`${PID}.api.json`), "{ not json", "utf8");
+    expect(() => audit(store)).not.toThrow();
+    const hit = kinds("verdict-conflict");
+    expect(hit).toHaveLength(1);
+    expect(hit[0]?.msg).toMatch(/API 响应解析\/复算失败/);
+    expect(kinds("hash-mismatch")).toHaveLength(1); // 字节也被改了，两条各报各的
+  });
 });
 
 describe("main sealApi 走真 CLI", () => {
@@ -656,5 +753,55 @@ describe("main sealApi 走真 CLI", () => {
     expect(main(["sealApi", "--base", tmp, "--id", PID])).toBe(2);
     expect(c.lines.join("\n")).toMatch(/缺少参数：--submit-file --pct --label --api-response/);
     c.stop();
+  });
+
+  it("API 与历史 y 不符 → 只警告不拦：CLI 把 ⚠️ 打出来，审计照常返回 0", () => {
+    const c = capture();
+    const argv = ["sealApi", "--base", tmp, "--id", PID, "--submit-file", `in/${PID}.txt`,
+      "--pct", "80", "--label", "ai", "--api-response", writeApi(80)];
+    expect(main(argv)).toBe(0);
+    const out = c.stop();
+    expect(out).toMatch(/⚠️\s+API 官分 80% 与标定数据源 y=85% 不符/);
+    expect(out).toMatch(/凭证分级：认证（截图\/API）1\/18｜/);
+  });
+});
+
+/* ----------------------------- 入口：argv[1] 指向脚本自身 ----------------------------- */
+
+describe("zhuque-evidence：入口 process.exit(main())", () => {
+  /** 进程内跑入口：exit 桩改成抛信封，从错误消息里把退出码取回来 */
+  const runEntry = async (tail: string[]): Promise<number> => {
+    const realArgv = process.argv;
+    const exit = vi.spyOn(process, "exit").mockImplementation((code?: string | number | null): never => {
+      throw new Error(`__exit__${code}`);
+    });
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    process.argv = [realArgv[0], path.join(SCRIPTS_DIR, "zhuque-evidence.ts"), ...tail];
+    vi.resetModules(); // 让动态 import 重新求值，才会走到入口判断
+    try {
+      await import("./zhuque-evidence");
+      throw new Error("入口没有调用 process.exit"); // 下面的 catch 会把它原样抛回去
+    } catch (e) {
+      const msg = (e as Error).message;
+      const at = msg.indexOf("__exit__");
+      if (at < 0) throw e; // 不是我们抛的退出信封 → 原样失败，不吞真实报错
+      return Number(msg.slice(at + "__exit__".length));
+    } finally {
+      process.argv = realArgv;
+      exit.mockRestore();
+      log.mockRestore();
+      err.mockRestore();
+    }
+  };
+
+  it("干净 store（空账本审计通过）→ 入口把 0 交给 process.exit", async () => {
+    expect(await runEntry(["audit", "--base", tmp])).toBe(0);
+  });
+
+  it("账本带硬伤（坏行）→ 入口把 1 交给 process.exit", async () => {
+    fs.mkdirSync(store.evidenceDir, { recursive: true });
+    fs.writeFileSync(store.ledgerFile, "{ not json\n");
+    expect(await runEntry(["audit", "--base", tmp])).toBe(1);
   });
 });

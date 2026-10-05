@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { humanize, aiScore, humanizeWithScore, crossChunkCleanup } from "./humanize.ts";
+import { humanize, aiScore, humanizeWithScore, crossChunkCleanup, injectDialect } from "./humanize.ts";
 import { VOCAB, DIALECT_VOCAB } from "./humanize-data.ts";
 import { countPadHeads, PAD_INJECT_CAP } from "./humanize-primitives.ts";
 import { restoreMixedSpacing } from "./humanize-shuffle.ts";
@@ -332,5 +332,81 @@ describe("标点相撞与搭配病句（UI 实测发现，v0.9.14）", () => {
       const o = run(0.6, false, seed);
       expect(o).not.toMatch(/(?:非常|特别)[^，。！？\n]{0,4}了/);
     }
+  });
+});
+
+describe("injectDialect（方言注入，主路径已停用、保留以备回滚）", () => {
+  // 源码注释写明「函数本体保留以备回滚，**不要重新接回主路径**」——但它是导出符号，
+  // 任何一次回滚都会直接踩上它，所以这里把它当活代码钉住四件事：
+  //   ① p<=0 必须短路在任何 rng 消费之前（回滚开关的语义）；
+  //   ② 【场景…】块头行必须逐字保留（P8 护栏，方言表里的「从/说/看」会污染块头）；
+  //   ③ 每词预算 cap = max(1, min(3, ceil(total*0.25 + p))) 必须真的生效；
+  //   ④ 同 rng 同输出（确定性是所有回归基线的前提）。
+  // 此前三项行为无任何测试覆盖（humanize.ts 1330-1357 行全红）。
+
+  /** 队列 rng：按序出数并记录每次消费，用于断言「早退零消费」与消费次数 */
+  function queueRng(values: number[]) {
+    let i = 0;
+    const calls: number[] = [];
+    const rng = () => {
+      const v = values[Math.min(i, values.length - 1)];
+      calls.push(v);
+      i++;
+      return v;
+    };
+    return { rng, calls };
+  }
+
+  const forbidden = (): number => {
+    throw new Error("此路径不应消费 rng");
+  };
+
+  it("p<=0 原样返回，且一次 rng 都不消费", () => {
+    const src = "我从家里出发。";
+    expect(injectDialect(src, forbidden, 0)).toBe(src);
+    expect(injectDialect(src, forbidden, -0.5)).toBe(src);
+    expect(injectDialect("", forbidden, 0)).toBe("");
+  });
+
+  it("场景块头行逐字保留，行外正常替换", () => {
+    const src = "【场景：从早上八点】\n我从家里出发";
+    const { rng, calls } = queueRng([0]);
+    const out = injectDialect(src, rng, 1);
+    expect(out).toBe("【场景：从早上八点】\n我打家里出发"); // 从 → pick 首项「打」
+    expect(calls).toHaveLength(2); // 门限 + pick，场景行零消费
+  });
+
+  it("每词预算生效：4 处命中在 p=1 下只改前 2 处（cap = ceil(4*0.25+1) = 2）", () => {
+    const src = "从早从晚从左从右";
+    const { rng, calls } = queueRng([0]);
+    const out = injectDialect(src, rng, 1);
+    expect(out).toBe("打早打晚从左从右");
+    expect(calls).toHaveLength(4); // 两次替换各消耗 门限+pick
+    expect(out.match(/从/g)).toHaveLength(2); // 剩余 2 处按 cap 原样保留
+  });
+
+  it("候选按表序取首项，且同 rng 两次运行结果一致", () => {
+    const src = "也许会下雨";
+    const a = queueRng([0]);
+    const b = queueRng([0]);
+    const outA = injectDialect(src, a.rng, 1);
+    const outB = injectDialect(src, b.rng, 1);
+    expect(outA).toBe("或许会下雨"); // 也许 → 候选首项「或许」
+    expect(outA).toBe(outB);
+    expect(a.calls).toHaveLength(2);
+  });
+
+  it("rng 概率门限：不过门限只花 1 次消费且原样跳过，过门限才走 pick", () => {
+    const src = "从早从晚从左从右";
+
+    // 全 0.9、p=0.5 → 四处全部跳过：每处恰好 1 次门限消费，pick 零消费
+    const skip = queueRng([0.9]);
+    expect(injectDialect(src, skip.rng, 0.5)).toBe(src);
+    expect(skip.calls).toHaveLength(4);
+
+    // 首处 0 < 0.5 过门限 → pick(0.9) 取下标 2 =「自从」；其余三处 0.9 跳过
+    const mixed = queueRng([0, 0.9]);
+    expect(injectDialect(src, mixed.rng, 0.5)).toBe("自从早从晚从左从右");
+    expect(mixed.calls).toHaveLength(5); // 门限+pick + 3 次跳过门限
   });
 });

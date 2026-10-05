@@ -1,12 +1,15 @@
 // @vitest-environment happy-dom
 /**
- * BenchmarkPanel 分档建议文案与 ZhuquePanel 语义权重滑块（v0.9.16 长尾清扫）。
+ * BenchmarkPanel 分档建议文案、ZhuquePanel 语义权重滑块（v0.9.16 长尾清扫），
+ * 以及 ErrorBoundary 兜底分支补测（重载出口点击 / 非 Error 抛出回退文案 /
+ * componentDidCatch 日志断言——components.test.tsx 之外的盲区）。
  *  建议文案按官方预测分分五档，用不同 score 的 ScoreBreakdown 驱动各档渲染。
  */
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, fireEvent, cleanup } from "@testing-library/react";
 import { BenchmarkPanel } from "./BenchmarkPanel";
 import { ZhuquePanel } from "./ZhuquePanel";
+import { ErrorBoundary } from "./ErrorBoundary";
 import { DEFAULT_API } from "../api/llm-config";
 import { DEFAULT_DETECTOR } from "../api/detector";
 import { detectZhuque } from "../engine/zhuque";
@@ -103,5 +106,65 @@ describe("ZhuquePanel 语义权重滑块", () => {
     const { container } = render(<ZhuquePanel {...zqProps({ weight: 0.8 })} />);
     const slider = container.querySelector('input[type="range"]') as HTMLInputElement;
     expect(slider.value).toBe("0.8");
+  });
+});
+
+describe("ErrorBoundary 兜底分支（重载出口 / 非 Error 抛出）", () => {
+  // React 会把预期错误打到 console.error，静默之；同时借它断言 componentDidCatch 日志
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    errorSpy.mockRestore();
+  });
+
+  it("抛出无 message 的非 Error 值：回退 UI 显示 String(error) 而非 undefined", () => {
+    function BoomString(): never {
+      throw "裸字符串炸了";
+    }
+    const { getByText, queryByText } = render(
+      <ErrorBoundary>
+        <BoomString />
+      </ErrorBoundary>,
+    );
+    expect(getByText("界面出了点问题")).toBeTruthy();
+    expect(getByText("裸字符串炸了")).toBeTruthy();
+    expect(queryByText(/undefined/)).toBeNull();
+    expect(getByText("重载应用")).toBeTruthy();
+  });
+
+  it("点「重载应用」触发 location.reload", () => {
+    function Boom(): never {
+      throw new Error("渲染层炸了");
+    }
+    const reload = vi.spyOn(window.location, "reload").mockImplementation(() => {});
+    try {
+      const { getByText } = render(
+        <ErrorBoundary>
+          <Boom />
+        </ErrorBoundary>,
+      );
+      expect(getByText("渲染层炸了")).toBeTruthy();
+      fireEvent.click(getByText("重载应用"));
+      expect(reload).toHaveBeenCalledTimes(1);
+    } finally {
+      reload.mockRestore();
+    }
+  });
+
+  it("componentDidCatch 把错误与组件栈打到 console.error", () => {
+    function Boom(): never {
+      throw new Error("带日志的错误");
+    }
+    render(
+      <ErrorBoundary>
+        <Boom />
+      </ErrorBoundary>,
+    );
+    const hit = errorSpy.mock.calls.find((c: unknown[]) => c[0] === "[QuAiWei] 渲染层异常:");
+    expect(hit).toBeTruthy();
+    expect((hit![1] as Error).message).toBe("带日志的错误");
+    expect(hit![2]).toBeDefined(); // React 传入的组件栈 info
   });
 });

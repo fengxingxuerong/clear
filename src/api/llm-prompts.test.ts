@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { pickExemplarBlock, personaDirective } from "./llm-prompts";
+import { pickExemplarBlock, personaDirective, styleDirective, intensityDirective } from "./llm-prompts";
 
 /** v0.9.5 P3 范例条件注入：按体裁选范例组（议论默认 / 叙事判体 / 科普启发式 / academic 跳过） */
 describe("pickExemplarBlock（范例条件注入）", () => {
@@ -54,5 +54,45 @@ describe("personaDirective（人味人格分档，v0.9.5 P4）", () => {
     expect(d).toContain("垫词浓度减半");
     expect(d).toContain("余韵");
     expect(d).toContain('不许用"综上所述"式收束'); // 明确禁用（示例形式出现）
+  });
+});
+
+// 以下两组补的是 styleDirective/intensityDirective 此前 0 覆盖的 4 行
+// （academic 分支、casual 默认分支、轻度档、重度档）。
+describe("styleDirective（文风预设指令）", () => {
+  it("academic：保留术语与排版规范，但要求删掉总分总与 AI 套话", () => {
+    const d = styleDirective("academic");
+    expect(d).toContain("学术语体");
+    expect(d).toContain("跟随原文排版"); // 中英文空格不许统一增删
+    expect(d).toContain("综上所述"); // 要删掉的套话以示例形式出现
+    expect(d).toContain("人写的论文");
+  });
+
+  it("casual（switch 默认分支）：不追加任何文风指令，口语化战术在主提示词里", () => {
+    expect(styleDirective("casual")).toBe("");
+  });
+
+  it("plain 与 academic 互斥：平实书面档不含学术措辞", () => {
+    const plain = styleDirective("plain");
+    expect(plain).toContain("平实书面");
+    expect(plain).not.toContain("学术语体");
+  });
+});
+
+describe("intensityDirective（强度指令随滑块生效）", () => {
+  it("intensity < 0.35 → 轻度模式：只处理最刺眼的痕迹、不重构", () => {
+    expect(intensityDirective(0)).toContain("轻度模式");
+    expect(intensityDirective(0.34)).toContain("轻度模式");
+    expect(intensityDirective(0.34)).toContain("保持原句顺序");
+  });
+
+  it("intensity ≥ 0.75 → 重度模式：允许打散结构但事实与逻辑关系不变", () => {
+    expect(intensityDirective(0.75)).toContain("重度模式");
+    expect(intensityDirective(1)).toContain("重度模式");
+    expect(intensityDirective(1)).toContain("事实与逻辑关系仍不能变");
+  });
+
+  it("中档（0.35 ~ 0.75）不追加强度指令", () => {
+    expect(intensityDirective(0.5)).toBe("");
   });
 });

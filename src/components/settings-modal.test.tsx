@@ -6,7 +6,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, fireEvent, cleanup } from "@testing-library/react";
 import { SettingsModal } from "./SettingsModal";
-import { DEFAULT_API } from "../api/llm-config";
+import { DEFAULT_API, SENSENOVA_PRESET } from "../api/llm-config";
 import { DEFAULT_DETECTOR } from "../api/detector";
 import { DEFAULT_LOCAL } from "../store";
 import type { ApiConfig } from "../api/llm-config";
@@ -14,6 +14,12 @@ import type { DetectorConfig } from "../api/detector";
 import type { LocalSettings } from "../store";
 
 afterEach(() => cleanup());
+
+// 环境桩兜底：Electron 安全存储桥是用例中途挂上去的，
+// 即便断言失败也要摘掉，避免串味到后续用例
+afterEach(() => {
+  delete window.secureStore;
+});
 
 function base(overrides: Partial<Parameters<typeof SettingsModal>[0]> = {}) {
   return {
@@ -31,6 +37,22 @@ function base(overrides: Partial<Parameters<typeof SettingsModal>[0]> = {}) {
 
 function numInputs(container: HTMLElement): HTMLInputElement[] {
   return Array.from(container.querySelectorAll('input[type="number"]')) as HTMLInputElement[];
+}
+
+// 配置行定位：label.row 的首个 span 即配置名，返回该行的输入控件。
+// 为什么不用 getByLabelText：「模型」行里挂了 datalist，label 文本会被
+// 选项文本污染，精确匹配会落空；按行内首个 span 取对下拉/复选框/输入框统一。
+function rowControl(
+  container: HTMLElement,
+  name: string,
+): HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement {
+  const row = Array.from(container.querySelectorAll("label.row")).find(
+    (l) => l.querySelector("span")?.textContent?.trim() === name,
+  );
+  if (!row) throw new Error(`未找到配置行：${name}`);
+  const el = row.querySelector("input, select, textarea");
+  if (!el) throw new Error(`配置行里没有控件：${name}`);
+  return el as HTMLInputElement;
 }
 
 describe("SettingsModal（设置弹窗）", () => {
@@ -208,5 +230,247 @@ describe("SettingsModal 条件分支（v0.9.16 补盲追加）", () => {
     fireEvent.click(getByText("保存"));
     const savedApi = onSave.mock.calls[0][0] as ApiConfig;
     expect(savedApi.apiKey).toBe("sk-draft-key");
+  });
+});
+
+describe("SettingsModal 补盲（逐行覆盖 · 配置行编辑与环境分支）", () => {
+  it("非 Esc 按键不触发关闭（keydown 监听只认 Escape）", () => {
+    const onClose = vi.fn();
+    render(<SettingsModal {...base({ onClose })} />);
+    fireEvent.keyDown(window, { key: "Enter" });
+    fireEvent.keyDown(window, { key: "a" });
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("点标题栏 ✕ 按钮关闭模态", () => {
+    const onClose = vi.fn();
+    const { getByText } = render(<SettingsModal {...base({ onClose })} />);
+    fireEvent.click(getByText("✕"));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("模型 / 评判模型 / 备选改写三个文本框编辑后随保存上抛", () => {
+    const onSave = vi.fn();
+    const { container, getByText } = render(<SettingsModal {...base({ onSave })} />);
+    const modelInput = rowControl(container, "模型") as HTMLInputElement;
+    fireEvent.change(modelInput, { target: { value: "my-main-model" } });
+    fireEvent.change(rowControl(container, "评判模型"), { target: { value: "my-judge-model" } });
+    fireEvent.change(rowControl(container, "备选改写"), { target: { value: "my-alt-model" } });
+    expect(modelInput.value).toBe("my-main-model"); // 输入框随草稿回显
+    fireEvent.click(getByText("保存"));
+    const [api] = onSave.mock.calls[0] as [ApiConfig];
+    expect(api.model).toBe("my-main-model");
+    expect(api.judgeModel).toBe("my-judge-model");
+    expect(api.altModel).toBe("my-alt-model");
+  });
+
+  it("推理强度：选「高」落草稿；切回「关闭」归一化为 undefined", () => {
+    const onSave = vi.fn();
+    const { container, getByText } = render(<SettingsModal {...base({ onSave })} />);
+    const select = rowControl(container, "推理强度") as HTMLSelectElement;
+    expect(select.value).toBe(""); // DEFAULT_API.reasoningEffort 缺省 → 「关闭」档
+    fireEvent.change(select, { target: { value: "high" } });
+    expect(select.value).toBe("high");
+    fireEvent.click(getByText("保存"));
+    expect((onSave.mock.calls[0][0] as ApiConfig).reasoningEffort).toBe("high");
+    // 切回「关闭（非推理模型）」→ 空串必须归一化成 undefined，不能把 "" 写进配置
+    fireEvent.change(select, { target: { value: "" } });
+    expect(select.value).toBe("");
+    fireEvent.click(getByText("保存"));
+    expect((onSave.mock.calls[1][0] as ApiConfig).reasoningEffort).toBeUndefined();
+  });
+
+  it("人味人格分档 / 深度模式关断 / 严格保真勾选随保存上抛", () => {
+    const onSave = vi.fn();
+    const { container, getByText } = render(<SettingsModal {...base({ onSave })} />);
+    fireEvent.change(rowControl(container, "人味人格"), { target: { value: "netgen" } });
+    const deep = rowControl(container, "深度模式") as HTMLInputElement;
+    expect(deep.checked).toBe(true); // DEFAULT_API.deepMode 默认开
+    fireEvent.click(deep);
+    expect(deep.checked).toBe(false);
+    const strict = rowControl(container, "严格保真") as HTMLInputElement;
+    expect(strict.checked).toBe(false);
+    fireEvent.click(strict);
+    expect(strict.checked).toBe(true);
+    fireEvent.click(getByText("保存"));
+    const [api] = onSave.mock.calls[0] as [ApiConfig];
+    expect(api.persona).toBe("netgen");
+    expect(api.deepMode).toBe(false);
+    expect(api.strictFidelity).toBe(true);
+  });
+
+  it("最长等待 / 调用上限 / 首轮候选数三个下拉随保存上抛", () => {
+    const onSave = vi.fn();
+    const { container, getByText } = render(<SettingsModal {...base({ onSave })} />);
+    fireEvent.change(rowControl(container, "最长等待"), { target: { value: "120" } });
+    fireEvent.change(rowControl(container, "调用上限"), { target: { value: "20" } });
+    fireEvent.change(rowControl(container, "首轮候选数"), { target: { value: "3" } });
+    fireEvent.click(getByText("保存"));
+    const [api] = onSave.mock.calls[0] as [ApiConfig];
+    expect(api.maxWaitSeconds).toBe(120);
+    expect(api.maxApiCalls).toBe(20);
+    expect(api.contestSamples).toBe(3);
+  });
+
+  it("可选字段全部缺省时：各控件按 ?? / || 兜底值渲染，保存不凭空造值", () => {
+    const onSave = vi.fn();
+    const api: ApiConfig = {
+      ...DEFAULT_API,
+      apiKeys: undefined,
+      reasoningEffort: undefined,
+      maxWaitSeconds: undefined,
+      maxApiCalls: undefined,
+      contestSamples: undefined,
+      persona: undefined,
+      strictFidelity: undefined,
+    };
+    const { container, getByText } = render(<SettingsModal {...base({ onSave, api })} />);
+    // 兜底分支：缺省 → 空串 / "" / 0 / 1 / default / false
+    expect((container.querySelector("textarea") as HTMLTextAreaElement).value).toBe("");
+    expect((rowControl(container, "推理强度") as HTMLSelectElement).value).toBe("");
+    expect((rowControl(container, "最长等待") as HTMLSelectElement).value).toBe("0");
+    expect((rowControl(container, "调用上限") as HTMLSelectElement).value).toBe("0");
+    expect((rowControl(container, "首轮候选数") as HTMLSelectElement).value).toBe("1");
+    expect((rowControl(container, "人味人格") as HTMLSelectElement).value).toBe("default");
+    expect((rowControl(container, "严格保真") as HTMLInputElement).checked).toBe(false);
+    // 一个字段都没改就保存：草稿是 props 的浅拷贝，不该把 undefined 洗成 0/""/false
+    fireEvent.click(getByText("保存"));
+    const saved = onSave.mock.calls[0][0] as ApiConfig;
+    expect(saved.apiKeys).toBeUndefined();
+    expect(saved.reasoningEffort).toBeUndefined();
+    expect(saved.maxWaitSeconds).toBeUndefined();
+    expect(saved.maxApiCalls).toBeUndefined();
+    expect(saved.contestSamples).toBeUndefined();
+    expect(saved.persona).toBeUndefined();
+    expect(saved.strictFidelity).toBeUndefined();
+  });
+
+  it("困惑度检查与多候选择优：勾选态跟 props，关断后随保存上抛", () => {
+    const onSave = vi.fn();
+    const { container, getByText } = render(<SettingsModal {...base({ onSave })} />);
+    const ppl = rowControl(container, "启用困惑度检查") as HTMLInputElement;
+    const bestOf = rowControl(container, "多候选择优") as HTMLInputElement;
+    expect(ppl.checked).toBe(true); // base 默认 pplEnabled=true
+    expect(bestOf.checked).toBe(true); // DEFAULT_LOCAL.bestOf=true
+    fireEvent.click(ppl);
+    fireEvent.click(bestOf);
+    expect(ppl.checked).toBe(false);
+    expect(bestOf.checked).toBe(false);
+    fireEvent.click(getByText("保存"));
+    const [, , , pplEnabled, local] = onSave.mock.calls[0] as [
+      ApiConfig,
+      DetectorConfig,
+      boolean,
+      boolean,
+      LocalSettings,
+      string,
+    ];
+    expect(pplEnabled).toBe(false);
+    expect(local.bestOf).toBe(false);
+    expect(local.candidates).toBe(DEFAULT_LOCAL.candidates); // 另一字段没被误改
+  });
+
+  it("初始开关反相渲染：朱雀增强开 / 困惑度关 / 多候选择优关 / 候选数跟 props", () => {
+    const { container } = render(
+      <SettingsModal
+        {...base({
+          zhuqueMode: true,
+          pplEnabled: false,
+          local: { ...DEFAULT_LOCAL, bestOf: false, candidates: 5 },
+        })}
+      />,
+    );
+    expect((rowControl(container, "朱雀增强模式") as HTMLInputElement).checked).toBe(true);
+    expect((rowControl(container, "启用困惑度检查") as HTMLInputElement).checked).toBe(false);
+    expect((rowControl(container, "多候选择优") as HTMLInputElement).checked).toBe(false);
+    expect((rowControl(container, "候选数（1~30）") as HTMLInputElement).value).toBe("5");
+  });
+
+  it("对标检测器整行编辑：启用 / URL / Key / 分数路径 / 刻度随保存上抛", () => {
+    const onSave = vi.fn();
+    const { container, getByText } = render(<SettingsModal {...base({ onSave })} />);
+    fireEvent.click(rowControl(container, "启用检测器"));
+    fireEvent.change(rowControl(container, "接口 URL"), {
+      target: { value: "https://my-detector/api" },
+    });
+    // 检测器的 API Key 行与主配置同名，按占位符「可选」定位
+    const detKey = container.querySelector('input[placeholder="可选"]') as HTMLInputElement;
+    fireEvent.change(detKey, { target: { value: "dk-1" } });
+    fireEvent.change(rowControl(container, "分数路径"), { target: { value: "data.prob" } });
+    fireEvent.change(rowControl(container, "刻度"), { target: { value: "0-1" } });
+    fireEvent.click(getByText("保存"));
+    const det = onSave.mock.calls[0][1] as DetectorConfig;
+    expect(det.enabled).toBe(true);
+    expect(det.url).toBe("https://my-detector/api");
+    expect(det.apiKey).toBe("dk-1");
+    expect(det.scorePath).toBe("data.prob");
+    expect(det.scale).toBe("0-1");
+  });
+
+  it("SenseNova 预置：无 Key 时按钮禁用并解释来源；有 Key 一键填入常驻通道", () => {
+    const onSave = vi.fn();
+    const savedKeys = [...SENSENOVA_PRESET.keys];
+    try {
+      // 分支一：环境没配 Key（模拟成清空 keys）→ 禁用 + 文案解释缺 Key 原因
+      SENSENOVA_PRESET.keys = [];
+      const { getByText, rerender } = render(<SettingsModal {...base({ onSave })} />);
+      const btnNoKey = getByText(/填入 SenseNova 常驻通道/) as HTMLButtonElement;
+      expect(btnNoKey.disabled).toBe(true);
+      expect(btnNoKey.textContent).toContain("（未配置 Key）");
+      expect(btnNoKey.title).toContain("未检测到本地 Key");
+      // 分支二：配了 Key → 按钮可用，点击把常驻通道参数填进草稿
+      SENSENOVA_PRESET.keys = ["sk-sn-1", "sk-sn-2"];
+      rerender(<SettingsModal {...base({ onSave })} />);
+      const btn = getByText(/填入 SenseNova 常驻通道/) as HTMLButtonElement;
+      expect(btn.disabled).toBe(false);
+      expect(btn.textContent).not.toContain("（未配置 Key）");
+      expect(btn.title).toContain("2 Key 自动轮换");
+      fireEvent.click(btn);
+      fireEvent.click(getByText("保存"));
+      const [api] = onSave.mock.calls[0] as [ApiConfig];
+      expect(api.enabled).toBe(true);
+      expect(api.baseUrl).toBe("/sensenova/v1");
+      expect(api.apiKey).toBe("sk-sn-1");
+      expect(api.apiKeys).toBe("sk-sn-1\nsk-sn-2");
+      expect(api.model).toBe("deepseek-v4-flash");
+      expect(api.judgeModel).toBe("glm-5.2");
+      expect(api.altModel).toBe("deepseek-v4-pro");
+    } finally {
+      SENSENOVA_PRESET.keys = savedKeys;
+    }
+  });
+
+  it("有安全存储桥（Electron 桌面版）时不再提示明文存储风险", () => {
+    const { queryByText, rerender } = render(<SettingsModal {...base()} />);
+    // Web 版（无桥）默认提示 Key 明文落 localStorage
+    expect(queryByText(/Web 版 Key 以明文存储于浏览器 localStorage/)).toBeTruthy();
+    // 挂上 Electron 桥 → 同一段提示必须消失（桌面版走系统级加密存储）
+    window.secureStore = { get: async () => null, set: async () => true };
+    rerender(<SettingsModal {...base()} />);
+    expect(queryByText(/Web 版 Key 以明文存储于浏览器 localStorage/)).toBeNull();
+  });
+
+  it("Base URL 带前后空白的相对路径同样触发部署警告", () => {
+    const { container, getByText, queryByText } = render(<SettingsModal {...base()} />);
+    const baseUrlInput = container.querySelector(
+      'input[placeholder="https://api.openai.com/v1"]',
+    ) as HTMLInputElement;
+    fireEvent.change(baseUrlInput, { target: { value: "  /dev/api  " } });
+    expect(getByText(/以 \/ 开头的相对路径只在/)).toBeTruthy();
+    fireEvent.change(baseUrlInput, { target: { value: "  https://x.y/v1  " } });
+    expect(queryByText(/以 \/ 开头的相对路径只在/)).toBeNull();
+  });
+
+  it("候选数：0 夹到 1，非数字回退默认 8", () => {
+    const onSave = vi.fn();
+    const { container, getByText } = render(<SettingsModal {...base({ onSave })} />);
+    const candidates = numInputs(container)[1]; // [0]=温度，[1]=候选数
+    fireEvent.change(candidates, { target: { value: "0" } });
+    fireEvent.click(getByText("保存"));
+    expect((onSave.mock.calls[0][4] as LocalSettings).candidates).toBe(1);
+    // parseInt 出 NaN → Number.isFinite 不过 → 回退 8（不写 NaN 进配置）
+    fireEvent.change(candidates, { target: { value: "abc" } });
+    fireEvent.click(getByText("保存"));
+    expect((onSave.mock.calls[1][4] as LocalSettings).candidates).toBe(8);
   });
 });

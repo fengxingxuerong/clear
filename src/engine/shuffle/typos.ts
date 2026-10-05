@@ -37,7 +37,24 @@ const TYPO_MAX_GLOBAL = 2;
 const TYPO_INJECTION_ENABLED = false;
 
 export function injectHumanTypos(text: string, rng: () => number, intensity: number): string {
-  if (!TYPO_INJECTION_ENABLED) return text;
+  return injectTyposImpl(text, rng, intensity, TYPO_INJECTION_ENABLED);
+}
+
+/**
+ * 实现主体（2026-10-05 抽为可测形态）。
+ *
+ * 抽离只为一件事：让"保留以备回滚"的实现能被测试直接驱动——否则第 41 行的
+ * `TYPO_INJECTION_ENABLED=false` 会把这 30 行永远短路掉（覆盖率为 0），等到真要回滚时，
+ * 没人知道它是否还活着、换出来的字对不对。**生产路径行为与抽离前逐字一致**：
+ * 导出的 injectHumanTypos 仍然只看模块常量 TYPO_INJECTION_ENABLED，外部调用者无感。
+ */
+export function injectTyposImpl(
+  text: string,
+  rng: () => number,
+  intensity: number,
+  enabled: boolean,
+): string {
+  if (!enabled) return text;
   if (intensity < 0.7) return text;
   // P8 场景块保真：场景行区间不计入命中——错别字单字替换会破坏【场景：…】块头，
   // 同时保留全文级 TYPO_MAX_GLOBAL 预算语义不变

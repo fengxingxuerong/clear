@@ -604,3 +604,342 @@ describe("预算到点的收场口径（v0.9.14）", () => {
     }
   });
 });
+
+/* ================= 目标行补测（降级链 / 竞争段 / 守卫 / 预算） ================= */
+
+describe("空响应三档降级与长文自适应（目标行 160/362/368）", () => {
+  const ALT = "deepseek-v4-pro";
+  const cfg = { ...DEFAULT_API, enabled: true, apiKey: "test-key", altModel: ALT };
+
+  it("长文(>600字)：主力两档空 → altModel 第三档拿到稿，模型/预算序列与长文 note", async () => {
+    // 57 字/句 × 12 = 684 字 > ADAPTIVE_CONTEST_CHARS(600)，触发长文单候选路径
+    const base =
+      "街边的小店这几年换了一茬又一茬，能活下来的多半是把熟客处成了朋友的那类，" +
+      "老板记得你上回买了什么，也记得你嫌哪样太甜。";
+    const LONG = base.repeat(12);
+    const LONG_ALT =
+      base.repeat(11) +
+      "街边的小店这几年换了一茬又一茬，能活下来的多半是把熟客处成了朋友的那类，" +
+      "老板记得你上回买了什么，也记得你说过不爱吃甜。";
+    const rewrites: { model?: string; maxTokens?: number; user?: string }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: { body?: string }) => {
+        const body = JSON.parse(init?.body ?? "{}") as {
+          model?: string;
+          max_tokens?: number;
+          messages: { role: string; content: string }[];
+        };
+        const sys = body.messages?.[0]?.content ?? "";
+        if (sys.includes("质检员")) return okJson({ choices: [{ message: { content: "PASS" } }] });
+        if (sys.includes("改写专家")) {
+          rewrites.push({
+            model: body.model,
+            maxTokens: body.max_tokens,
+            user: body.messages?.[1]?.content,
+          });
+          // 主力（默认档 8000 / 翻倍档 16000）皆空，第三档换 altModel 才拿到正文
+          return okJson({
+            choices: [{ message: { content: body.model === ALT ? LONG_ALT : "" } }],
+          });
+        }
+        return okJson({ choices: [{ message: { content: "句长过于均匀\n15" } }] });
+      }),
+    );
+    const deep = await humanizeViaApiDeep(LONG, cfg, undefined, 10, 4, 0.6);
+    // 三次改写请求：主力 8000 → 主力 16000 → altModel 8000（行 160 第三档入链）
+    expect(rewrites.map((r) => r.model)).toEqual([cfg.model, cfg.model, ALT]);
+    expect(rewrites.map((r) => r.maxTokens)).toEqual([8000, 16000, 8000]);
+    expect(rewrites.every((r) => r.user === LONG)).toBe(true); // 首轮 user 恒为原文
+    expect(deep.roundScores).toEqual([15]);
+    expect(deep.note).toContain("长文自适应"); // 行 368 预置 note
+    expect(deep.note).not.toContain("双模型竞争"); // 行 362：长文不进赛马
+  });
+});
+
+describe("短文 altModel 竞争：候选空输出可见化（目标行 357/413-414/436-437）", () => {
+  const ALT = "deepseek-v4-pro";
+  const cfg = { ...DEFAULT_API, enabled: true, apiKey: "test-key", altModel: ALT };
+  const TEXT = "值得注意的是，人工智能正在深刻地改变着我们的生活方式。";
+
+  it("主力两档皆空 → note 记 #1:空输出、#2:15，改写请求恰 3 次", async () => {
+    let writes = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: { body?: string }) => {
+        const body = JSON.parse(init?.body ?? "{}") as {
+          model?: string;
+          messages: { role: string; content: string }[];
+        };
+        const sys = body.messages?.[0]?.content ?? "";
+        if (sys.includes("质检员")) return okJson({ choices: [{ message: { content: "PASS" } }] });
+        if (sys.includes("改写专家")) {
+          writes++;
+          // 主力两档（8000/16000）全空；altModel 首档即拿到过检稿
+          return okJson({
+            choices: [{ message: { content: body.model === ALT ? GOOD_REWRITE : "" } }],
+          });
+        }
+        return okJson({ choices: [{ message: { content: "句长过于均匀\n15" } }] });
+      }),
+    );
+    const deep = await humanizeViaApiDeep(TEXT, cfg, undefined, 10, 2, 0.6);
+    expect(writes).toBe(3); // 主力 2 档 + altModel 1 档
+    expect(deep.note).toContain("双模型竞争");
+    expect(deep.note).toContain("#1:空输出"); // 行 413-414 聚合进 contestInfo（436-437）
+    expect(deep.note).toContain("#2:15");
+    expect(deep.roundScores).toEqual([15]);
+  });
+});
+
+describe("降级链的预算掐断（目标行 163）", () => {
+  const TEXT = "值得注意的是，人工智能正在深刻地改变着我们的生活方式。";
+
+  it("maxApiCalls=1：第二档尝试被预算掐断，空内容拒绝且改写恰 1 次", async () => {
+    let writes = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        writes++;
+        return okJson({ choices: [{ message: { content: "" } }] });
+      }),
+    );
+    const budgetCfg = { ...DEFAULT_API, enabled: true, apiKey: "test-key", maxApiCalls: 1 };
+    await expect(
+      humanizeViaApiDeep(TEXT, budgetCfg, undefined, 10, 4, 0.6),
+    ).rejects.toThrow(/空内容/);
+    expect(writes).toBe(1); // 第 2 档在行 163 被 isOverBudget 掐掉，不再发请求
+  });
+});
+
+describe("修订空响应 → 纯原文重改写兜底（目标行 526/536-538）", () => {
+  const cfg = { ...DEFAULT_API, enabled: true, apiKey: "test-key" };
+  const TEXT = "值得注意的是，人工智能正在深刻地改变着我们的生活方式。";
+
+  it("兜底拿到内容继续闭环：user===text 恰 2 次，note 记未优于当前最优", async () => {
+    let userTextCount = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: { body?: string }) => {
+        const body = JSON.parse(init?.body ?? "{}") as {
+          messages: { role: string; content: string }[];
+        };
+        const sys = body.messages?.[0]?.content ?? "";
+        if (sys.includes("质检员")) return okJson({ choices: [{ message: { content: "PASS" } }] });
+        if (sys.includes("改写专家")) {
+          const user = body.messages?.[1]?.content ?? "";
+          if (user === TEXT) {
+            userTextCount++;
+            return okJson({ choices: [{ message: { content: GOOD_REWRITE } }] });
+          }
+          // 修订 prompt（带痕迹清单）两档皆空 → 走行 526 纯原文兜底
+          return okJson({ choices: [{ message: { content: "" } }] });
+        }
+        return okJson({ choices: [{ message: { content: "句长过于均匀\n60" } }] });
+      }),
+    );
+    const deep = await humanizeViaApiDeep(TEXT, cfg, undefined, 10, 4, 0.6);
+    expect(userTextCount).toBe(2); // 首轮改写 + 行 526 纯原文兜底（修订 prompt ≠ text）
+    expect(deep.note).toContain("未优于当前最优");
+    expect(deep.roundScores).toEqual([60, 60]);
+  });
+});
+
+describe("纯原文兜底也空：带第 1 轮稿收场（目标行 546）", () => {
+  const cfg = { ...DEFAULT_API, enabled: true, apiKey: "test-key" };
+  const TEXT = "值得注意的是，人工智能正在深刻地改变着我们的生活方式。";
+
+  it("第 2 轮修订与兜底全空 → note 记空内容（降级重试亦为空），交付第 1 轮稿", async () => {
+    let writes = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: { body?: string }) => {
+        const body = JSON.parse(init?.body ?? "{}") as {
+          messages: { role: string; content: string }[];
+        };
+        const sys = body.messages?.[0]?.content ?? "";
+        if (sys.includes("质检员")) return okJson({ choices: [{ message: { content: "PASS" } }] });
+        if (sys.includes("改写专家")) {
+          writes++;
+          // 仅第 1 次（首轮改写）有正文，其余（修订两档 + 纯原文兜底两档）全空
+          return okJson({ choices: [{ message: { content: writes === 1 ? GOOD_REWRITE : "" } }] });
+        }
+        return okJson({ choices: [{ message: { content: "句长过于均匀\n60" } }] });
+      }),
+    );
+    const deep = await humanizeViaApiDeep(TEXT, cfg, undefined, 10, 4, 0.6);
+    expect(deep.note).toContain("第 2 轮模型返回空内容（降级重试亦为空）");
+    expect(deep.text).toBe(GOOD_REWRITE);
+    expect(deep.roundScores).toEqual([60]);
+  });
+});
+
+describe("质检全程打回：单轮内直接回退本地（目标行 559）", () => {
+  const cfg = { ...DEFAULT_API, enabled: true, apiKey: "test-key" };
+  const TEXT = "值得注意的是，人工智能正在深刻地改变着我们的生活方式。";
+
+  it("maxRounds=1 且质检恒 FAIL → rejects /各轮质检均未通过/", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: { body?: string }) => {
+        const body = JSON.parse(init?.body ?? "{}") as {
+          messages: { role: string; content: string }[];
+        };
+        const sys = body.messages?.[0]?.content ?? "";
+        if (sys.includes("质检员")) {
+          // 首行 FAIL + 明细 → 修复重试后仍 FAIL，本候选整轮打回
+          return okJson({ choices: [{ message: { content: "FAIL\n句长过于均匀" } }] });
+        }
+        if (sys.includes("改写专家")) return okJson({ choices: [{ message: { content: GOOD_REWRITE } }] });
+        return okJson({ choices: [{ message: { content: "句长过于均匀\n50" } }] });
+      }),
+    );
+    await expect(humanizeViaApiDeep(TEXT, cfg, undefined, 10, 1, 0.6)).rejects.toThrow(
+      /各轮质检均未通过/,
+    );
+  });
+});
+
+describe("L2 风格回退守卫：修订引入新指纹即停（目标行 571-579）", () => {
+  const cfg = { ...DEFAULT_API, enabled: true, apiKey: "test-key" };
+  const TEXT = "值得注意的是，人工智能正在深刻地改变着我们的生活方式。";
+  /** 5 句等长（均 12 字）→ 句长 CV=0，必中「句长节奏过平」（count≥4 且 CV<0.40） */
+  const FLAT =
+    "算法安排了清晨的信息推送。导航决定了今天出门的路线。" +
+    "推荐塑造了晚饭的选择口味。日程被软件划分成若干模块。生活被悄悄整理成固定流程。";
+
+  it("第 2 轮返回等长 FLAT 稿 → note 记风格回退与新指纹，停在第 1 轮稿", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: { body?: string }) => {
+        const body = JSON.parse(init?.body ?? "{}") as {
+          messages: { role: string; content: string }[];
+        };
+        const sys = body.messages?.[0]?.content ?? "";
+        if (sys.includes("质检员")) return okJson({ choices: [{ message: { content: "PASS" } }] });
+        if (sys.includes("改写专家")) {
+          const user = body.messages?.[1]?.content ?? "";
+          // 首轮（user=原文）给好稿，修订轮给碎句化的等长稿
+          return okJson({
+            choices: [{ message: { content: user === TEXT ? GOOD_REWRITE : FLAT } }],
+          });
+        }
+        return okJson({ choices: [{ message: { content: "句长过于均匀\n50" } }] });
+      }),
+    );
+    const deep = await humanizeViaApiDeep(TEXT, cfg, undefined, 10, 4, 0.6);
+    expect(deep.roundScores).toEqual([50]); // 第 2 轮在评分前就被守卫拦下
+    expect(deep.note).toContain("第 2 轮风格回退");
+    expect(deep.note).toContain("句长节奏过平");
+    expect(deep.text).toBe(GOOD_REWRITE); // 保留上一轮最优稿
+  });
+});
+
+describe("L1 痕迹收敛守卫：同两条定罪痕迹不消除即停（目标行 599-603）", () => {
+  const cfg = { ...DEFAULT_API, enabled: true, apiKey: "test-key" };
+  const TEXT = "值得注意的是，人工智能正在深刻地改变着我们的生活方式。";
+
+  it("两轮评判同两条痕迹同分 50 → note 记痕迹收敛守卫，roundScores=[50,50]", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: { body?: string }) => {
+        const body = JSON.parse(init?.body ?? "{}") as {
+          messages: { role: string; content: string }[];
+        };
+        const sys = body.messages?.[0]?.content ?? "";
+        if (sys.includes("质检员")) return okJson({ choices: [{ message: { content: "PASS" } }] });
+        if (sys.includes("改写专家")) return okJson({ choices: [{ message: { content: GOOD_REWRITE } }] });
+        // 两条痕迹 + 独立分数行（第 2 轮与上轮重合 2 项 → 触发 L1）
+        return okJson({ choices: [{ message: { content: "句长过于均匀\n对仗工整\n50" } }] });
+      }),
+    );
+    const deep = await humanizeViaApiDeep(TEXT, cfg, undefined, 10, 4, 0.6);
+    expect(deep.roundScores).toEqual([50, 50]);
+    expect(deep.note).toContain("痕迹收敛守卫");
+    expect(deep.text).toBe(GOOD_REWRITE);
+  });
+});
+
+describe("评判全失败：评分记 -1 且兜底保留过检稿（目标行 276/619/647-651）", () => {
+  const cfg = { ...DEFAULT_API, enabled: true, apiKey: "test-key" };
+  const TEXT = "值得注意的是，人工智能正在深刻地改变着我们的生活方式。";
+
+  it("两轮评判都不给数字 → roundScores=[-1,-1]、未达标说明按绝对目标 10 收口", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: { body?: string }) => {
+        const body = JSON.parse(init?.body ?? "{}") as {
+          messages: { role: string; content: string }[];
+        };
+        const sys = body.messages?.[0]?.content ?? "";
+        if (sys.includes("质检员")) return okJson({ choices: [{ message: { content: "PASS" } }] });
+        if (sys.includes("改写专家")) return okJson({ choices: [{ message: { content: GOOD_REWRITE } }] });
+        // 无数字 → parseJudgeVerdict/reasoning 双双落空 → 评判抛错 → score=null
+        return okJson({ choices: [{ message: { content: "评判通道异常，暂无分数" } }] });
+      }),
+    );
+    const deep = await humanizeViaApiDeep(TEXT, cfg, undefined, 10, 2, 0.6);
+    expect(deep.roundScores).toEqual([-1, -1]); // 行 619：评分失败标记 -1
+    expect(deep.note).toContain("仅完成 2 轮");
+    expect(deep.note).toContain("未达目标 ≤10 分"); // 行 276：anchorScore=null → 绝对目标
+    expect(deep.note).not.toContain("评判锚点");
+    expect(deep.targetUsed).toBe(10);
+    expect(deep.text).toBe(GOOD_REWRITE); // 行 647-651：评分失败但过检 → 兜底保留
+  });
+});
+
+describe("竞争段预算跳过（目标行 396-397/436-437）", () => {
+  const ALT = "deepseek-v4-pro";
+  const TEXT = "值得注意的是，人工智能正在深刻地改变着我们的生活方式。";
+
+  it("先跑满预算再 budgetShared=true → rejects /已达调用上限/ 且 fetch 零增长", async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: { body?: string }) => {
+        calls++;
+        const body = JSON.parse(init?.body ?? "{}") as {
+          messages: { role: string; content: string }[];
+        };
+        const sys = body.messages?.[0]?.content ?? "";
+        if (sys.includes("质检员")) return okJson({ choices: [{ message: { content: "PASS" } }] });
+        if (sys.includes("改写专家")) return okJson({ choices: [{ message: { content: GOOD_REWRITE } }] });
+        return okJson({ choices: [{ message: { content: "句长过于均匀\n15" } }] });
+      }),
+    );
+    const cfg = { ...DEFAULT_API, enabled: true, apiKey: "test-key", altModel: ALT, maxApiCalls: 2 };
+    // 块 1：预算从零起跑（双候选并发，每候选 1 改写 + 1 质检 + 3 评判），烧穿 maxApiCalls=2
+    const first = await humanizeViaApiDeep(TEXT, cfg, undefined, 10, 2, 0.6);
+    expect(first.roundScores.length).toBeGreaterThan(0);
+    expect(calls).toBeGreaterThanOrEqual(2);
+    // 块 2：budgetShared=true 继承计数 → 竞争段每个候选在开跑前被预算跳过（396-397），
+    // 聚合照常记录跳过原因（436-437），主循环收场按"调用上限"措辞拒绝
+    const before = calls;
+    await expect(
+      humanizeViaApiDeep(TEXT, cfg, undefined, 10, 2, 0.6, true),
+    ).rejects.toThrow(/已达调用上限/);
+    expect(calls).toBe(before); // 零请求增长
+  });
+});
+
+describe("零可见字符的压缩率口径（目标行 192）", () => {
+  const cfg = { ...DEFAULT_API, enabled: true, apiKey: "test-key" };
+
+  it("原文全是空白字符 → shrinkRatio 定为 1，不产生 NaN/0", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: { body?: string }) => {
+        const body = JSON.parse(init?.body ?? "{}") as {
+          messages: { role: string; content: string }[];
+        };
+        const sys = body.messages?.[0]?.content ?? "";
+        if (sys.includes("质检员")) return okJson({ choices: [{ message: { content: "PASS" } }] });
+        if (sys.includes("改写专家")) return okJson({ choices: [{ message: { content: GOOD_REWRITE } }] });
+        return okJson({ choices: [{ message: { content: "句长过于均匀\n15" } }] });
+      }),
+    );
+    const deep = await humanizeViaApiDeep("   ", cfg, undefined, 10, 4, 0.6);
+    expect(deep.shrinkRatio).toBe(1); // 原文去空白后 0 字 → 行 192 直接返回 1
+    expect(deep.text).toBe(GOOD_REWRITE);
+  });
+});

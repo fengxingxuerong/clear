@@ -12,6 +12,7 @@ import {
   addCalibPoint,
   buildSubmission,
   clearCalibPoints,
+  copyText,
   loadCalibPoints,
   openOfficial,
   parseOfficialResult,
@@ -138,6 +139,47 @@ describe("parseOfficialResult（异常与夹取）", () => {
 
   it("数字与百分号间有空格也能解析", () => {
     expect(parseOfficialResult("概率： 82 %").probability).toBe(82);
+  });
+
+  // 补 clampPct 的 !isFinite 分支（zhuque.ts:210，此前 0 覆盖）：
+  // parseFloat 对 309 位以上的数字返回 Infinity，若没有这道兜底，
+  // Math.min(100, Infinity) 会把它夹成 100 —— 凭空造出一个满分 AI 判定。
+  it("超长数字 parseFloat 出 Infinity 时归 0，而不是被夹成 100", () => {
+    const r = parseOfficialResult(`AI生成 ${"9".repeat(400)}%`);
+    expect(r.probability).toBe(0);
+    expect(r.probability).not.toBe(100);
+  });
+});
+
+/* ------------------------------ 复制兜底 ------------------------------ */
+
+describe("copyText（剪贴板回退路径）", () => {
+  it("clipboard 拒绝 + execCommand 抛错 → 返回 false 且不冒泡（zhuque.ts:94，此前 0 覆盖）", async () => {
+    const d = document as Document & { execCommand?: () => boolean };
+    const nav = navigator as Navigator & { clipboard?: { writeText?: () => Promise<void> } };
+    const origExec = d.execCommand;
+    const origClip = nav.clipboard;
+    // 第一段：navigator.clipboard 存在但被拒（非安全上下文/权限被拒的真实形态）→ 落到 textarea 降级
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: () => Promise.reject(new Error("Write permission denied")) },
+    });
+    expect(nav.clipboard?.writeText).toBeTruthy(); // 前置条件：桩确实生效，否则测的是第一条路径
+    // 第二段：textarea 降级里 execCommand 也不可用 → 走 catch 返回 false
+    Object.defineProperty(d, "execCommand", {
+      configurable: true,
+      value: () => {
+        throw new Error("not supported");
+      },
+    });
+    try {
+      await expect(copyText("要复制的官方送检文本")).resolves.toBe(false);
+    } finally {
+      if (origExec) Object.defineProperty(d, "execCommand", { configurable: true, value: origExec });
+      else Reflect.deleteProperty(d, "execCommand");
+      if (origClip) Object.defineProperty(nav, "clipboard", { configurable: true, value: origClip });
+      else Reflect.deleteProperty(nav, "clipboard");
+    }
   });
 });
 
