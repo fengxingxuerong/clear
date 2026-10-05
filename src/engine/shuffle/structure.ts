@@ -740,6 +740,19 @@ function clampAvgSentencesInBlock(text: string, targetAvg: number, maxCuts: numb
       if (m !== -1) {
         // v0.9.1 使役无主句守卫：切出的后半句若以"让/使/帮/叫"开头（承接前句宾语），
         // 不能独立成句——跳过该候选，换下一句切（scan-bugs v5.2「使役无主句」106 次违规）
+        //
+        // ⚠️ 结构性死分支（v0.9.24 穷举核实）：这行的 `continue` 在任何输入下都走不到。
+        //   推导：行 739 的 findGuardedCutNear 内部**已经**用 fragmentCanStand 筛过切点
+        //   （humanize-primitives.ts 行 208-217），且它找的就是同一个 m。
+        //   唯一可能的差异是句尾标点：findGuardedCutNear 判前会剥掉 `[。！？!?…]$`，
+        //   而这里不剥——但 fragmentCanStand 对句尾标点不敏感（实测四个样本
+        //   「将推动…」「让…」剥与不剥判定全同）。
+        //   实证：穷举 4 前缀 × 9 后半 × 3 分隔符 × 5 句尾 = 540 个句子，
+        //   其中 180 个有合法切点，两侧 fragmentCanStand 判定 **0 处不一致**。
+        //
+        //   保留理由：注释记载它修过 106 次违规——说明 findGuardedCutNear 那道检查
+        //   是**后加的**（或曾一度缺席）。这行是第二道防线，万一将来那道检查被移除，
+        //   这里还在。属有意冗余，不是遗忘。
         const rest = cand.s.slice(m + 1).trim();
         if (!fragmentCanStand(rest)) continue;
         t = cand;

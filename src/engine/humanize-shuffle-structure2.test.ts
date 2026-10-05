@@ -186,6 +186,48 @@ describe("enforceParagraphLeadSentVariance（P3-3 段首方差）", () => {
     const onlyBlanks = "　\n\n　";
     expect(onlyBlanks.split(/\n\n+/).filter((p) => p.trim().length > 0)).toHaveLength(0);
   });
+
+  /**
+   * intensity 门槛的**精确边界**（行 641）。
+   *
+   * 此前只测了 0.6（不改）——0.7 恰好是边界本身，没被钉住。
+   * 探针实测：0.69 不改、0.70 改。差 0.01 就换行为，是最容易写松的地方。
+   *
+   * 语料要满足 diff ≤ 2：段首句**等长**。用「甲×6。/ 乙×6。」这种
+   * 长度完全对称的，否则会因为 645-651 的长度差判定而压根不进入改写。
+   */
+  it("intensity 门槛精确在 0.7：0.69 原样、0.70 改写（行 641）", () => {
+    const t = "甲甲甲甲甲甲。\n\n乙乙乙乙乙乙。";
+    expect(enforceParagraphLeadSentVariance(t, rngLow, 0)).toBe(t);
+    expect(enforceParagraphLeadSentVariance(t, rngLow, 0.69)).toBe(t);
+    const at = enforceParagraphLeadSentVariance(t, rngLow, 0.7);
+    expect(at).not.toBe(t);
+    expect(enforceParagraphLeadSentVariance(t, rngLow, 0.8)).not.toBe(t);
+    expect(enforceParagraphLeadSentVariance(t, rngLow, 1)).not.toBe(t);
+  });
+
+  /**
+   * chopLead 分支的段首长度门槛（行 669 的 `if (s0.length > 12)`）。
+   *
+   * 探针实测：段首 11 字不改，**12 字改**（`>` 是严格大于，边界恰在 12）。
+   * 改写效果是把首句句号换成逗号（把两句并成一句），而不是插入什么——
+   * 与 prependShort 模式的加前缀完全不同，两个分支都钉住。
+   */
+  it("chopLead 只在段首 > 12 字时触发：11 字不改、12 字改（行 669）", () => {
+    for (const n of [11, 12, 13]) {
+      const head = "甲".repeat(n);
+      const t = `${head}。\n\n${"乙".repeat(n)}。\n\n${"丙".repeat(n)}。`;
+      const out = enforceParagraphLeadSentVariance(t, () => 0.9, 1);
+      if (n === 11) {
+        expect(out, "11 字不该触发 chopLead").toBe(t);
+      } else {
+        expect(out, `${n} 字应触发 chopLead`).not.toBe(t);
+        // 效果是句号换逗号（并句），而不是插入前缀
+        expect(out, "chopLead 不该插入口语前缀").not.toContain("先说清楚哈——");
+        expect(out).toContain("，");
+      }
+    }
+  });
 });
 
 describe("resegmentParagraphsAggressive（段长强制方差，行 200/221）", () => {

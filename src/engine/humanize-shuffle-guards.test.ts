@@ -13,7 +13,7 @@ import {
   clampAvgSentenceLenUnder25,
   ensureEmDashCountHardCap,
 } from "./humanize-shuffle.ts";
-import { fragmentFrontCanStand } from "./humanize-primitives.ts";
+import { fragmentFrontCanStand, sentenceStats } from "./humanize-primitives.ts";
 import { fragmentCanStand } from "./humanize-vocab.ts";
 import { humanize } from "./humanize.ts";
 import { boostBurstinessIfLow, boostBurstiness } from "./shuffle/burstiness.ts";
@@ -94,6 +94,16 @@ describe("clampAvgSentenceLenUnder25（句长硬上限）", () => {
    * 探针实测（下面四个）原样返回，一个字都没改。
    */
   it("切出的后半句是使役无主句时放弃切分（行 744 continue）", () => {
+    /**
+     * ⚠️ 用例名保留 v0.9.24 的原措辞，但结论已在当轮修正——见下方断言注释。
+     * 这四条实际上**没走到 744 行的 continue**：行 739 的 findGuardedCutNear
+     * 内部先做了同一判定（且更严格，它会剥句尾标点），切点在这里就被拒了，
+     * `if (m !== -1)` 根本不成立。744 的 continue 是**结构性死分支**，
+     * 已在 structure.ts 744 处写明推导与穷举实证。
+     *
+     * 本用例的价值因此变成：**钉住端到端行为**——这类超长句在守卫生效下
+     * 不会被切成残句，且 avg 确实超了 25（排除「提前 break」这个假解释）。
+     */
     const cases: [string, string][] = [
       [
         "以「将推动」开头",
@@ -119,7 +129,13 @@ describe("clampAvgSentenceLenUnder25（句长硬上限）", () => {
         .trim();
       // 前置确认：这些 rest 确实被判为「不能独立成句」，否则本用例没意义
       expect(fragmentCanStand(rest), `${label}: ${rest.slice(0, 12)}`).toBe(false);
-      // avg 已超阈值（所以确实进入切分尝试），但守卫生效 → 原样返回
+      // ⚠️ 第二个前置确认，v1 漏了它：
+      // 行 722 是 `if (stats.avg <= targetAvg) break;`。若平均句长没超 25，
+      // 函数在**进入候选循环之前**就break 了，「原样返回」的原因是提前退出，
+      // 而不是守卫生效——那样 744 一次都没走到，用例照样绿。
+      // 探针实测下面四个的 avg 都在 30 以上。
+      expect(sentenceStats(t).avg, `${label} 的 avg 必须 > 25`).toBeGreaterThan(25);
+      // avg 已超阈值（所以确实进入切分尝试），守卫生效 → 原样返回
       expect(clampAvgSentenceLenUnder25(t, 25, 6), label).toBe(t);
     }
   });
