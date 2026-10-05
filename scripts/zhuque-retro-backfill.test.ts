@@ -537,4 +537,25 @@ describe("档案畸形：缺列 / 多余键的兜底", () => {
     expect(r.code).toBe(1);
     expect(r.lines.filter((l) => l.includes("体裁")).length).toBeGreaterThan(0);
   });
+
+  /**
+   * v3 TSV 的某行**末尾缺列**（行 151 的 `c[gi] ?? ""`）。
+   *
+   * TSV 按 `\t` 切分，某行尾部少一个制表符就会让后面的列取到 undefined。
+   * 头几列不够时 `id` 会被映射成空串、那条点因查无此 id 被忽略——
+   * 所以这里只砍掉**末尾**的列，保留前面的 id 与 zhuqueOfficialPct。
+   */
+  it("v3 TSV 某行末尾缺列 → declaredGenre 取空串，该点因体裁被拒（行 151）", () => {
+    const r = withPatchedFile("calibration-input-v3.tsv", (txt) => {
+      const lines = txt.trim().split(/\r?\n/);
+      const gi = lines[0].split("\t").indexOf("genre");
+      const row = lines[1].split("\t");
+      lines[1] = row.slice(0, gi).join("\t");
+      return lines.join("\n");
+    });
+    expect(r.hits).toBe(1);
+    // 该点 declaredGenre 为空 → 体裁检查拒收 → 退出 1
+    expect(r.code).toBe(1);
+    expect(r.lines.filter((l) => l.includes("体裁")).length).toBeGreaterThan(0);
+  });
 });
