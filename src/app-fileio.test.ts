@@ -102,6 +102,31 @@ describe("importFileToText", () => {
     expect(r.note).toContain("读取文件失败");
     vi.unstubAllGlobals();
   });
+
+  /* 2026-10-05 分支补测：app-fileio.ts 此前分支 83.3%，剩 69 与 75 两处右支。 */
+
+  it('FileReader 的 result 为 null → 走 `?? ""` 右支并提示内容为空（行 75）', async () => {
+    const FakeReader = class {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      result: unknown = null; // 关键：读成功但 result 是 null
+      readAsText() {
+        queueMicrotask(() => this.onload?.());
+      }
+    };
+    vi.stubGlobal("FileReader", FakeReader);
+    const r = await importFileToText(new File(["x"], "空结果.txt"));
+    expect(r.text).toBe("");
+    expect(r.note).toContain("文件内容为空");
+    vi.unstubAllGlobals();
+  });
+
+  it("docx 解析抛出的不是 Error（字符串）→ 走 String(err) 右支（行 69）", async () => {
+    readDocxTextMock.mockRejectedValue("底层库炸了个字符串");
+    const r = await importFileToText(new File(["x"], "怪.docx"));
+    expect(r.text).toBe("");
+    expect(r.note).toBe("docx 解析失败：底层库炸了个字符串");
+  });
 });
 
 describe("makeDatedName / downloadBlob / Blob 构造", () => {

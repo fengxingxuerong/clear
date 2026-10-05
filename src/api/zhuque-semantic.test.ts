@@ -139,4 +139,67 @@ describe("语义缓存（50 条 LRU 与钳制）", () => {
     expect(loadSemanticCache(text, cfg({ model: "m1" }))?.score).toBe(10);
     expect(loadSemanticCache(text, cfg({ model: "m2" }))?.score).toBe(90);
   });
+
+  /* 2026-10-05 分支补测：readSemanticCache 的兜底与 load/save 的 ?? 右支此前从未被走到。 */
+  const SEM_KEY = "quaiwei.zhuque.semcache"; // 与源码 K_SEM_CACHE 同值（存储键，非私有逻辑）
+
+  it("缓存值不是普通对象（数组 / null / 原始值）→ 按空缓存处理（行 92 false 与行 98）", () => {
+    const c = cfg();
+    for (const bad of [JSON.stringify([{ score: 1, ts: 1 }]), "null", "42", '"字符串"']) {
+      localStorage.setItem(SEM_KEY, bad);
+      expect(loadSemanticCache(`脏缓存文本${bad.length}号。`, c), bad).toBeNull();
+    }
+    // JSON 都解析不出来的直接进 catch，同样落到行 98
+    localStorage.setItem(SEM_KEY, "{不是 json");
+    expect(loadSemanticCache("坏 JSON 文本。", c)).toBeNull();
+  });
+
+  it("旧版条目缺 critique / source → 默认空数组与空串（行 106/107 的 ?? 右支）", () => {
+    const c = cfg();
+    saveSemanticCache("缺字段文本。", c, { score: 42, critique: ["x"], source: "s" });
+    const raw = JSON.parse(localStorage.getItem(SEM_KEY) ?? "{}") as Record<
+      string,
+      Record<string, unknown>
+    >;
+    for (const k of Object.keys(raw)) {
+      delete raw[k].critique;
+      delete raw[k].source;
+    }
+    localStorage.setItem(SEM_KEY, JSON.stringify(raw));
+
+    const hit = loadSemanticCache("缺字段文本。", c);
+    expect(hit?.score).toBe(42);
+    expect(hit?.critique).toEqual([]);
+    expect(hit?.source).toBe("");
+  });
+
+  it("条目缺 ts → 排序用 0 兜底，不炸且新条目照常保留（行 117 的 ?? 0）", () => {
+    const c = cfg();
+    saveSemanticCache("无时间戳文本。", c, { score: 7, critique: [], source: "s" });
+    const raw = JSON.parse(localStorage.getItem(SEM_KEY) ?? "{}") as Record<
+      string,
+      Record<string, unknown>
+    >;
+    for (const k of Object.keys(raw)) delete raw[k].ts;
+    localStorage.setItem(SEM_KEY, JSON.stringify(raw));
+
+    saveSemanticCache("新条目文本。", c, { score: 8, critique: [], source: "s" });
+    expect(loadSemanticCache("无时间戳文本。", c)?.score).toBe(7); // 无 ts 那条按 0 排最前，仍保留
+    expect(loadSemanticCache("新条目文本。", c)?.score).toBe(8);
+
+    // 比较器两侧都要走到：把「有 ts」的排到「无 ts」之前，再存第三条触发排序，
+    // 这样 a[1].ts ?? 0（左，无 ts 作 a）与 b[1].ts ?? 0（右，无 ts 作 b）两个兜底臂都被执行
+    const cur = JSON.parse(localStorage.getItem(SEM_KEY) ?? "{}") as Record<
+      string,
+      Record<string, unknown>
+    >;
+    const ordered: Record<string, Record<string, unknown>> = {};
+    for (const k of Object.keys(cur)) if (typeof cur[k].ts === "number") ordered[k] = cur[k];
+    for (const k of Object.keys(cur)) if (typeof cur[k].ts !== "number") ordered[k] = cur[k];
+    localStorage.setItem(SEM_KEY, JSON.stringify(ordered));
+
+    saveSemanticCache("第三条文本。", c, { score: 9, critique: [], source: "s" });
+    expect(loadSemanticCache("无时间戳文本。", c)?.score).toBe(7);
+    expect(loadSemanticCache("第三条文本。", c)?.score).toBe(9);
+  });
 });
