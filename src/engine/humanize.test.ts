@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   humanize,
   applyZhuqueFeatures,
+  adviceFor,
   aiScore,
   humanizeWithScore,
   crossChunkCleanup,
@@ -508,5 +509,49 @@ describe("学术体冻结表：口语替身在 academic 下不得生效", () => 
     expect(casual).not.toBe(src);
     // 而两体裁对同一个词给出了不同处理 —— 证明差异来自冻结表本身
     expect(academic).not.toBe(casual);
+  });
+});
+
+/* ─────────── v0.9.22 adviceFor：低风险输入的「其实不用去味」提示 ───────────
+ *
+ * 这个函数此前**一次都没被调用过**。它守的是一条反直觉的产品口径：
+ * 本项目的标定结论是「纯人写稿越去味官方朱雀分反而略升」（H0=15% → H1/H2=17~19%），
+ * 所以对已落在人写带的输入只**给提示、不改行为**——
+ * 真跳过处理会让 regression-12samples 的 H1/H2 基线瞬间爆红。
+ *
+ * 「不改行为」是这个函数的全部价值所在：若有人后来把它接成真跳过，
+ * 下面第一条会立刻抓到（提示里必须出现实测分与阈值）。
+ */
+describe("adviceFor（低风险提示）", () => {
+  /** 人写口语稿：探针实测 aiScore = 6，落在人写带（阈值 27） */
+  const HUMAN =
+    "我家楼下那家早餐店开了快十年了。老板娘记得我不吃香菜，每次都是提前给我挑出来。有次我出差一个月没去，回来她问我：上哪儿发财去了？这店能开十年，靠的不是什么营销打法，就是记得住人。";
+  /** AI 议论文：探针实测 aiScore = 28，越过阈值 */
+  const AI =
+    "随着信息技术的不断发展，数字化阅读逐渐走进人们的日常生活。值得注意的是，数字化阅读不仅改变了人们获取知识的方式，还显著提升了阅读的便捷性。因此，我们需要统筹好效率与深度的关系。";
+
+  it("落在人写带 → skip-low-risk，提示里必须带实测分与阈值", () => {
+    const a = adviceFor(HUMAN);
+    expect(a.code).toBe("skip-low-risk");
+    // 提示是给用户看的，必须报出实际分与阈值，否则用户无从判断
+    expect(a.message).toMatch(/AI 味代理分 6/);
+    expect(a.message).toMatch(/人写带/);
+    expect(a.message).toMatch(/建议/);
+  });
+
+  it("AI 稿越过人写带 → ok 且 message 为空（不啰嗦）", () => {
+    const a = adviceFor(AI);
+    expect(a.code).toBe("ok");
+    expect(a.message).toBe("");
+  });
+
+  it("行 1515：显式传入的 beforeScore 优先于实测；0 分按 0 走而不是回落到实测", () => {
+    // 探针实测：同一段人写稿，传入 0 → skip（与实测一致），传入 99 → ok（覆盖实测）
+    expect(adviceFor(HUMAN, 99).code).toBe("ok"); // 显式高分压过实测的 6
+    expect(adviceFor(AI, 0).code).toBe("skip-low-risk"); // 显式零分压过实测的 28
+    // undefined 走 ?? 右支，回到实测值（探针实测同为 skip-low-risk）
+    expect(adviceFor(HUMAN, undefined).code).toBe("skip-low-risk");
+    // 对照组：不传时确实是按实测分的
+    expect(adviceFor(HUMAN).code).toBe(adviceFor(HUMAN, aiScore(HUMAN).score).code);
   });
 });
