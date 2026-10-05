@@ -96,7 +96,29 @@ dev 依赖 → `continue-on-error` 只提示（dev 漏洞硬拦会让作业长�
 - `prettier --check` 实测 57 处不合规（**存量漂移**：fmt 脚本一直有、但 lint/CI 从未校验格式），
   一次性格式化 53 文件（+548/−275，纯排版零语义），改后 tsc/lint/1312 用例/check:release/build 全绿。
 
-### ⑨ 发布边界（照旧，未变）
+### ⑨ 吸收对标优点：SKILL.md 薄壳 + 对标表复测（2026-10-05）
+
+按 README「开源同类对标」的结论，把欠着的那条待办做掉——**分发形态**是本项目唯一被
+`blader/humanizer`（54k★，靠一行 `npx skills add` 装进 agent）压过的地方：
+
+- **新增根目录 `SKILL.md`**：薄壳，不带规则，只告诉 agent「怎么调 CLI、哪些边界不能越」；
+  含完整参数表与五条诚实边界（不承诺过检 / 代理分非官方分 / 换词不换骨 / 人写稿别去味 / 转人工处理）。
+- **新增 `scripts/skill-md.test.ts`（9 条）双向锁死**：文档参数 ↔ CLI 的 `case "--x"` 互相覆盖
+  （不许造参数、不许落后于代码，且先断言 CLI ≥20 个参数防永真）、`metadata.version` 与
+  `package.json` 一致、frontmatter 字段齐全、诚实声明三件套在位、禁止「保证通过/必过检测」
+  与「绕过检测」话术。**首跑就抓到我自己写的「保证 100% 通过某检测器」**——虽是否定语境，
+  但门禁不区分语境，已改写措辞。文档从此和 `check:version` 一样是可测契约，不是散文。
+- **README 对标表按 GitHub API 复测更新**：原 6 行 star 修正，并补上首测漏掉的 8 个项目
+  （`im-not-ai` 5.9k 韩文、`lynote/humanize-text` 3.2k 改写管线、`sepia` 3.0k、
+  `academic-humanizer` 1.8k、`speak-human-tw` 1.0k 繁体、`AIWriteX` 2.1k「过朱雀」发布流水线、
+  `humanizer-zh-next` 166、`humanizer-zh-academic` 303），并记入**同名撞车提醒**
+  （GitHub 上另有两个也叫 `qu-ai-wei` 的仓库：622★ / 65★，与本项目 Electron 包名相同）
+  与**假阳性排除口径**（`Humanizr/Humanizer` 9.9k★ 实为 .NET 字符串库）。
+- 记下两个值得长期借鉴的点：`lynote/humanize-text` 的**公开每步中间产物**（可解释性）、
+  `baibanbao/qu-ai-wei` 的**规则冲突逐条裁决并给出依据**——本仓库目前只有源码注释在做后者，
+  面向用户的「为什么这么改」清单仍是缺口。
+
+### ⑩ 发布边界（照旧，未变）
 
 `npm run check:publish` 仍然**必然红**：18 个标定点凭证 **0/18 认证**（无截图/API 响应）。
 这是 README 早已声明的发布阻断项，只有真实官方送检 + `zhuque-evidence.ts seal` 入账才能解，

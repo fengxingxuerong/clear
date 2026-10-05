@@ -71,6 +71,14 @@ npm run dev          # 打开 http://localhost:5173
 
 ---
 
+### 快速开始（作为 agent skill）
+
+仓库根目录的 [`SKILL.md`](SKILL.md) 是给 Claude Code / Codex / 任意 agent skill 系统用的**薄壳**——
+它不带规则，只负责告诉 agent「怎么调 CLI、哪些边界不能越」，规则与引擎都在本仓库里。
+让 agent 读根目录 `SKILL.md` 即可（或按你所用 skill 系统的方式把本仓库加入其 skills 搜索路径）。
+文档里的参数表 ↔ `scripts/humanize-cli.ts` 的参数由 `scripts/skill-md.test.ts` **双向锁死**：
+改了 CLI 忘改文档、或文档凭空多写一个参数，测试直接红。
+
 ## 批量处理（CLI，v0.8.6；v0.9.15 起可选 LLM 通道）
 
 目录下所有 `.txt` 批量去味，输出到指定目录：
@@ -531,27 +539,51 @@ npm run check:publish   # = audit --strict：连"历史点无凭证"一起拦 �
 | 交叉模型评判 | —（多数竞品无此能力） | ✅ 领先：glm-5.2 交叉 + 痕迹定向修法（多数竞品单模型黑盒） |
 | 本地离线零成本 | —（竞品全部 SaaS 按字收费 1~8 元/千字） | ✅ 领先：纯本地引擎不联网不花钱（PPL 首次需联网下载一次约 99MB 模型，之后离线） |
 
-### 2026-10-03 开源同类对标（GitHub，Agent Skill 生态）
+### 2026-10-03 开源同类对标（GitHub，Agent Skill 生态）· 2026-10-05 复测更新
 
 上面两次对标的是**商业 SaaS**。这一次对标的是**开源同类**——本赛道 GitHub 上真正高 star 的
 不是应用，而是 **Agent Skill**（一份 `SKILL.md` 规则清单，靠 `npx skills add <repo>` 一行装进
-Claude Code / Codex）。实测数据（GitHub API，2026-10-03）：
+Claude Code / Codex）。首测 2026-10-03，**2026-10-05 用 GitHub Search/Repos API 复测**：
+原 6 行 star 已按当日实测更新，并补上首测漏掉的 8 个相关项目。
 
 | 项目 | star | 形态 | 内置检测打分 | 闭环复测 | 交付形态 |
 |---|---|---|---|---|---|
-| [blader/humanizer](https://github.com/blader/humanizer) | 53.6k | Agent Skill | ❌ | ❌ | 规则清单 |
-| [op7418/Humanizer-zh](https://github.com/op7418/Humanizer-zh) | 18.8k | Agent Skill | ❌ | ❌ | 规则清单（31 检查点） |
-| [hardikpandya/stop-slop](https://github.com/hardikpandya/stop-slop) | 17.7k | Agent Skill | ❌（仅 LLM 自评） | ❌ | 规则清单 |
-| [larashero3-dotcom/lieflat-less-ai-tone](https://github.com/larashero3-dotcom/lieflat-less-ai-tone) | 2.2k | Agent Skill | ❌ | ❌ | 规则清单 |
+| [blader/humanizer](https://github.com/blader/humanizer) | 54.0k | Agent Skill | ❌ | ❌ | 规则清单 |
+| [op7418/Humanizer-zh](https://github.com/op7418/Humanizer-zh) | 18.9k | Agent Skill | ❌ | ❌ | 规则清单（31 检查点） |
+| [hardikpandya/stop-slop](https://github.com/hardikpandya/stop-slop) | 17.8k | Agent Skill | ❌（仅 LLM 自评） | ❌ | 规则清单（2026-03 后未更新） |
+| [epoko77-ai/im-not-ai](https://github.com/epoko77-ai/im-not-ai) | 5.9k | Agent Skill | ❌ | ❌ | **韩文**去味（71 种痕迹），非中文赛道 |
+| [lynote-ai/humanize-text](https://github.com/lynote-ai/humanize-text) | 3.2k | 改写管线 | ❌ | ❌ | ⭐ 两轮 LLM 重写（temp 1.3）+ 跨两个 NMT 引擎双向跳跃，**公开每步中间产物** |
+| [Nanako0129/sepia](https://github.com/Nanako0129/sepia) | 3.0k | Agent Skill | ❌ | ❌ | De-AI skill，支持 77+ agent |
+| [larashero3-dotcom/lieflat-less-ai-tone](https://github.com/larashero3-dotcom/lieflat-less-ai-tone) | 2.3k | Agent Skill | ❌ | ❌ | 规则清单（283 万字语料实测） |
+| [iniwap/AIWriteX](https://github.com/iniwap/AIWriteX) | 2.1k | 发布流水线 | ❌ | ❌ | 公众号全自动发布，宣称「去AI味、**过朱雀检测**」 |
 | [MrGeDiao/shuorenhua](https://github.com/MrGeDiao/shuorenhua) | 2.0k | Agent Skill | ❌ | ❌ | 规则清单 |
+| [AIScientists-Dev/academic-humanizer](https://github.com/AIScientists-Dev/academic-humanizer) | 1.8k | Agent Skill | ❌ | ❌ | 论文/基金本向 |
+| [Raymondhou0917/speak-human-tw](https://github.com/Raymondhou0917/speak-human-tw) | 1.0k | Agent Skill | ❌ | ❌ | **繁体**「說人話」，38 种痕迹 |
+| [redbaronyyyyy-eng/humanizer-zh-academic](https://github.com/redbaronyyyyy-eng/humanizer-zh-academic) | 303 | Agent Skill | ❌ | ❌ | 中文学术向 |
+| [Hyacehila/humanizer-zh-next](https://github.com/Hyacehila/humanizer-zh-next) | 166 | Agent Skill | ❌ | ❌ | 基于 blader + op7418 二次开发 |
+| [qoqu/anti-zhuque](https://github.com/qoqu/anti-zhuque) / [weiyinerzui/humanize-cn](https://github.com/weiyinerzui/humanize-cn) | 25 / 22 | 工具 | ❌ | ❌ | 直接冲朱雀/知网/维普，**均已停更**（2026-03 / 2026-05） |
 | [pengong101/ai-humanizer-cn](https://github.com/pengong101/ai-humanizer-cn) | 1 | Python 包 | ❌（质量评分非 AI 检测） | ❌ | pip |
-| **本项目** | — | **Electron + Web + CLI** | ✅ 启发式 14 维 | ✅ 朱雀官方 API 自动送检 | 免安装 exe / 静态站 / CLI |
+| **本项目** | — | **Electron + Web + CLI + Skill** | ✅ 启发式 14 维 | ✅ 朱雀官方 API 自动送检 | 免安装 exe / 静态站 / CLI / SKILL.md |
 
-**结论（诚实版）**：同类项目**全部**是"给 LLM 的规则清单"，无一具备内置检测打分、闭环复测或
-桌面交付——本项目的引擎与验证闭环是同类里的超集。差距不在能力，**在分发形态**：
-`SKILL.md` 能一行装进 agent、零安装成本，而本项目要先 clone + `npm install`。
-⇒ 待办（未做）：补一份薄壳 `SKILL.md` 指向 `scripts/humanize-cli.ts`，吃这条赛道的入口；
-本版只修代码内已核实的真缺陷（见 CHANGELOG v0.9.21），不做功能扩张。
+**同名撞车提醒**：GitHub 上已有两个也叫 `qu-ai-wei` 的仓库——
+[LifelongLazyLearner/qu-ai-wei](https://github.com/LifelongLazyLearner/qu-ai-wei)（622★，五语 README、
+版本号也到 0.9.1）与 [baibanbao/qu-ai-wei](https://github.com/baibanbao/qu-ai-wei)（65★，合并三家规则
+并逐条裁决 7 处矛盾）；与本项目 Electron 包名同名，搜索与 SEO 上会互相稀释，命名需另行决策。
+
+**假阳性排除口径**（不排除会误判格局）：[Humanizr/Humanizer](https://github.com/Humanizr/Humanizer)
+9.9k★ 是 .NET 字符串/日期**格式化库**；`jo-inc/camofox-browser` 11.4k★ 是反爬隐身浏览器；
+`TheGP/untidetect-tools` 2.0k★ 是工具**清单**——三者纯属关键词撞车，与本赛道无关。
+
+**结论（诚实版）**：同类项目**绝大多数**是"给 LLM 的规则清单"，无一具备内置检测打分、闭环复测或
+桌面交付；规则清单型项目也没有回归测试可言（本项目 1300+ 条用例、CI 每次提交全跑）。本项目的引擎
+与验证闭环仍是同类里的**能力超集**，差距原在**分发形态**：
+⇒ **已补（v0.9.24）**：根目录新增薄壳 `SKILL.md` 指向 `scripts/humanize-cli.ts`，
+吃 `npx skills add` 这条入口；并用 `scripts/skill-md.test.ts` **双向锁死**——
+文档参数 ↔ CLI 参数互相覆盖（不许造参数、不许落后于代码）、版本号与 `package.json` 一致、
+诚实声明三件套在位、且禁止「保证通过」类话术。
+真正值得长期借鉴的两个：`lynote-ai/humanize-text` 的**公开每步中间产物**（可解释性），
+与 `baibanbao/qu-ai-wei` 的**规则冲突逐条裁决并给出依据**（本仓库目前只有源码注释在做这件事，
+还没有面向用户的「为什么这么改」清单）。
 
 ---
 
