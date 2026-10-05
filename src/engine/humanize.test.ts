@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   humanize,
+  applyZhuqueFeatures,
   aiScore,
   humanizeWithScore,
   crossChunkCleanup,
@@ -417,5 +418,95 @@ describe("injectDialect（方言注入，主路径已停用、保留以备回滚
     const mixed = queueRng([0, 0.9]);
     expect(injectDialect(src, mixed.rng, 0.5)).toBe("自从早从晚从左从右");
     expect(mixed.calls).toHaveLength(5); // 门限+pick + 3 次跳过门限
+  });
+});
+
+/* ─────────── 观点垫词注入：剧本格式守卫 + 去重重试 ───────────
+ *
+ * injectOpinion 有两层此前未被单独钉住的行为：
+ *   1) isScriptFormatLine —— 剧本块的说话人标签前绝不能插垫词
+ *      （否则「讲真，张总（项目经理）：…」直接破坏剧本格式）；
+ *   2) used 去重 —— 同一垫词不得复读，复读是可被统计抓到的机器指纹。
+ *
+ * 两层都是「静默破坏格式/指纹」类缺陷，所以各自都配一条反向断言：
+ * 非剧本行**必须**被注入，否则守卫就写成了「一律不插」的一刀切。
+ */
+describe("观点垫词注入：剧本格式守卫与去重", () => {
+  /** 说话人标签行（剧本格式）——垫词不得插到标签前面 */
+  const SCRIPT =
+    "张总（项目经理）：说实话这个方案确实有点意思。我个人感觉这套逻辑还挺顺的。以后可以再试试别的办法看看效果如何。整体来说应该没问题。";
+  /** 散文文本，探针确认 seed=3/5/7/8/99 会稳定产出垫词 */
+  const PROSE =
+    "这套方案的整体思路是清楚的。具体的执行步骤也已经列好了。后续跟踪要看数据反馈才靠谱。另外要注意排期安排不能太紧。资源也要提前协调好免得中途卡住。风险点需要单独列出来跟进。";
+  /** 垫词池（humanize-zhuque.ts OPINION_PHRASES）——全是「我觉得」型第一人称短语 */
+  const PAD =
+    /(我觉得|我个人觉得|我感觉|我认为|在我看来|以我的经验|据我观察|按我的理解|我的看法是|我个人的看法|我寻思着|我琢磨着|老实说)/;
+  // injectOpinion/injectFragments 只在 applyZhuqueFeatures 的 casual 门控内被调用
+  // （行 999-1005），不在 humanize() 主链路——所以直接调 applyZhuqueFeatures。
+  const inject = (t: string, seed: number) => applyZhuqueFeatures(t, 1, seed, "casual");
+
+  it("剧本格式行原样保留：说话人标签前不得出现任何垫词", () => {
+    // 探针 seed=3 会给散文行注入「我寻思着」；同样内容带上说话人标签后必须不再注入
+    expect(inject(PROSE, 3)).toMatch(PAD);
+    const scriptOut = inject(SCRIPT, 3);
+    // 标签行必须仍以说话人开头——垫词若插在前面会变成「讲真，张总（项目经理）：…」
+    expect(scriptOut.split("\n")[0]).toMatch(/^张总（项目经理）/);
+  });
+
+  it("对照组：非剧本行确实会被注入垫词（证明守卫按格式生效，不是一律不插）", () => {
+    // 同 seed 同强度，散文注入、剧本不注入 —— 差异只来自 isScriptFormatLine 守卫
+    expect(inject(PROSE, 3)).toMatch(PAD);
+    expect(inject(SCRIPT, 3).split("\n")[0]).not.toMatch(PAD);
+  });
+
+  it("同段落内垫词不复读：抽到已用垫词时必须换一句（行 1450 的 used 去重守卫）", () => {
+    // 探针实测 seed=3 会产生两个**不同**垫词（我寻思着 / 据我观察）——正是去重的体现：
+    // 若守卫失效，同一个垫词会被复读，那是可被统计抓到的机器指纹
+    const out = inject(PROSE, 3);
+    const pads = [...out.matchAll(new RegExp(PAD, "g"))].map((m) => m[0]);
+    expect(pads.length).toBeGreaterThan(1); // 前置：确实注入了多处垫词
+    expect(new Set(pads).size).toBe(pads.length); // 无复读
+  });
+});
+
+/* ─────────── v0.9 P5 学术体冻结表（ACADEMIC_FROZEN） ───────────
+ *
+ * 这张表此前**一行覆盖都没有**：humanize() 的 style 参数在全部测试里
+ * 只出现过 "casual"，academic 分支（行 392/399）从未被执行。
+ *
+ * 它守的是一条产品口径：书面语体 + 口语替身 = 错位签名。学术体下
+ * 「持续改善」不能换成「一直调顺」。所以这条用例的对照组必须是
+ * casual——同一 seed 同一强度下两体裁输出必须不同，否则冻结表形同虚设。
+ */
+describe("学术体冻结表：口语替身在 academic 下不得生效", () => {
+  const OPTS = { intensity: 1.0, seed: 7 } as const;
+  /** 冻结表里的源词 + 一个 casual 下确实会换掉的对照 */
+  const CASES = [
+    { src: "我们需要持续改善整体效率。", frozen: "持续" },
+    { src: "由此可见，认知水平有待提升。", frozen: "认知" },
+    { src: "与此同时，配套措施也在逐步完善。", frozen: "逐步" },
+  ];
+
+  it("academic 保留书面源词，casual 换成口语替身（同 seed 同强度）", () => {
+    for (const { src, frozen } of CASES) {
+      const academic = humanize(src, { ...OPTS, style: "academic" });
+      const casual = humanize(src, { ...OPTS, style: "casual" });
+      // 学术体必须保留源词本身
+      expect(academic, `academic 应保留「${frozen}」：${academic}`).toContain(frozen);
+      // 而 casual 确实换掉了它 —— 否则上条只是因为源词压根没命中替换表（永真）
+      expect(casual.includes(frozen), `casual 应换掉「${frozen}」：${casual}`).toBe(false);
+    }
+  });
+
+  it("对照组：冻结表之外的词两体裁行为一致（证明冻结是按表生效，不是 academic 全停替换）", () => {
+    // 「由此可见」不在冻结表里 ⇒ 两体裁都会动它（casual 换替身，academic 走别的删词规则）
+    const src = "由此可见，认知水平有待提升。";
+    const academic = humanize(src, { ...OPTS, style: "academic" });
+    const casual = humanize(src, { ...OPTS, style: "casual" });
+    // academic 体仍然在正常改写（不是把替换功能整体关掉），只是不走「口语替身」这一路
+    expect(academic).not.toBe(src);
+    expect(casual).not.toBe(src);
+    // 而两体裁对同一个词给出了不同处理 —— 证明差异来自冻结表本身
+    expect(academic).not.toBe(casual);
   });
 });
