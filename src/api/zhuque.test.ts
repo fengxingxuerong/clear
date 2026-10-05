@@ -350,3 +350,87 @@ describe("openOfficial", () => {
     expect(openOfficial()).toBe(true);
   });
 });
+
+/* 2026-10-05 分支补测：4 处缺口（行 63/76/154/203）都是"边界恰好取等"时才走的另一侧。 */
+describe("边界另一侧：截断点为 0、剪贴板 API 缺席、档位词与 pct 标签不匹配", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("行 63：整段放不进预算（第一句就超限）→ 退到硬切上限，绝不返回空文本", () => {
+    // 前置：正文全是长句但**一个句末标点都没有**，splitSentences 只算得出 0 句 ⇒ last 恒为 0，
+    // 这正是行 63 三元的左支（`last > 0 ? ... : text.slice(0, limit)`）。
+    const noPunct = "文".repeat(500); // 500 个汉字，零标点
+    const r = buildSubmission(noPunct, 100);
+    expect(r.truncated).toBe(true);
+    expect(r.text).not.toBe(""); // 左支失效就会返回空串 → 送检直接废掉
+    expect(r.text).toHaveLength(100);
+    // 对照组：有句末标点时走右支，长度按句边界而非硬切
+    const withPunct = longText(120);
+    const r2 = buildSubmission(withPunct, 2000);
+    expect(r2.text.endsWith("。")).toBe(true);
+    expect(r2.text.length).toBeGreaterThan(100);
+  });
+
+  it("行 76：navigator.clipboard 整个不存在 → 直接走 textarea 降级", async () => {
+    // happy-dom 上 execCommand 不存在，必须先钉上去；用 try/finally 严格还原，不泄漏给下一条
+    const d = document as Document & { execCommand?: () => boolean };
+    const nav = navigator as Navigator & { clipboard?: { writeText?: () => Promise<void> } };
+    const origExec = Object.getOwnPropertyDescriptor(d, "execCommand");
+    const origClip = Object.getOwnPropertyDescriptor(nav, "clipboard");
+    // 前置断言：桩生效——clipboard 被整个摘掉（老浏览器/非安全上下文的真实形态）
+    Object.defineProperty(nav, "clipboard", { configurable: true, value: undefined });
+    expect(nav.clipboard?.writeText).toBeUndefined();
+    const rc = vi.fn(() => true);
+    Object.defineProperty(d, "execCommand", { configurable: true, value: rc });
+    try {
+      expect(await copyText("边界文本")).toBe(true);
+      expect(rc).toHaveBeenCalled(); // 真的走了 textarea 降级
+    } finally {
+      if (origExec) Object.defineProperty(d, "execCommand", origExec);
+      else Reflect.deleteProperty(d, "execCommand");
+      if (origClip) Object.defineProperty(nav, "clipboard", origClip);
+      else Reflect.deleteProperty(nav, "clipboard");
+    }
+    // 对照组：clipboard 存在时成功路径不碰 execCommand（证明上一条的红确实来自缺席）
+    const rc2 = vi.fn(() => true);
+    Object.defineProperty(d, "execCommand", { configurable: true, value: rc2 });
+    try {
+      expect(await copyText("对照组")).toBe(true);
+      expect(rc2).not.toHaveBeenCalled();
+    } finally {
+      if (origExec) Object.defineProperty(d, "execCommand", origExec);
+      else Reflect.deleteProperty(d, "execCommand");
+    }
+  });
+
+  it("行 154：行 153 的 find 恒有值，if(false) 是死分支——真正兜底在行 157 的通用正则", () => {
+    // label 只能由遍历 LABELED 产出，而三项 label 互异 ⇒ find 必中 ⇒ 行 154 的 else 不可能。
+    // 这条用例转而钉住**真实存在的兜底**：档位词与百分比被长句隔开时专用形态失配，
+    // 由行 157 的通用正则从全文另找一处百分比，数值不丢。
+    const pasted = "先说结论 AI特征 然后是一段很长的说明文字超过十二个字 88%";
+    // 前置自检：专用形态确实不命中（否则这条测不到兜底）
+    expect(pasted.indexOf("88%") - pasted.indexOf("AI特征")).toBeGreaterThan(12);
+    const r = parseOfficialResult(pasted);
+    expect(r.label).toBe("ai"); // 档位仍认出来了
+    expect(r.probability).toBe(88); // 数值靠通用兜底救回
+    // 对照组：两要素挨得近 → 走专用正则（左支），结论一致才说明兜底不是侥幸
+    expect(parseOfficialResult("AI特征 88%").probability).toBe(88);
+  });
+
+  it("行 203：行 181 的互证逻辑保证出口处 label 与 probability 至少有一个非空", () => {
+    // 静态分析把行 203 标成可达，实测是**死分支**，成因写在源码注释里，这里只钉住成因本身：
+    // 行 170 先把「两值皆空」提前 return 掉；行 181 再把「只有分数没档位」按官方口径补出档位。
+    // 于是走到行 203 时，probability!==null 必然蕴含 label!==null —— 三元的 else 永不触发。
+    // 若哪天下掉了行 181 的互证，这条的前置断言就会先红（届时应改断言而不是庆祝）。
+    const half = parseOfficialResult("综合得分 88.2%");
+    expect(half.probability).toBe(88.2);
+    expect(half.label).toBe("ai"); // 行 181-184 按 ≥60 补出档位，不是"解析出的档位"
+    expect(half.note).toBe("已识别：AI生成 88.2%");
+    // 三种分数各钉一档，证明补档是按官方口径而非恒定值
+    expect(parseOfficialResult("综合得分 45%").label).toBe("suspected");
+    expect(parseOfficialResult("综合得分 12%").label).toBe("human");
+    // 对照组：档位与分数都在时，note 走 true 分支并报出档位词与数值
+    expect(parseOfficialResult("AI生成 99.99%").note).toBe("已识别：AI生成/AI特征 99.99%");
+    // 对照组：两值皆空是另一条路（行 170 提前 return），note 完全不同
+    expect(parseOfficialResult("一段没有任何可识别字段的话").note).toMatch(/没解析出百分比或档位/);
+  });
+});

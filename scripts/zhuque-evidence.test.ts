@@ -505,6 +505,180 @@ describe("main 走真 CLI", () => {
   });
 });
 
+/* 2026-10-05 分支补测：16 处缺口全是 `??`/`||` 的右操作数与两处 if/三元，
+   集中在"历史记录缺字段"这一类输入上——真实账本手写/跨版本迁移时很常见。
+   其中行 652 挖出一个真缺陷，见下。 */
+describe("缺字段的历史记录：全链路按默认值兜底（16 处分支缺口）", () => {
+  const rec = (over: Partial<Evidence>): Evidence =>
+    ({
+      id: PID,
+      pct: Y,
+      officialPct: Y,
+      verdict: VERDICT,
+      label: "ai",
+      proof: "screenshot",
+      submitFile: `in/${PID}.txt`,
+      submitSha256: sha(LONG),
+      submitChars: LONG.length,
+      screenshot: `in/${PID}.png`,
+      screenshotSha256: sha(SHOT),
+      ts: 1,
+      ...over,
+    }) as Evidence;
+
+  /** 直接往账本塞一条"字段不全"的历史行（绕过 seal 的当场校验） */
+  const seed = (e: Evidence) => {
+    fs.mkdirSync(path.dirname(store.ledgerFile), { recursive: true });
+    fs.writeFileSync(store.ledgerFile, JSON.stringify(e) + "\n");
+  };
+  /** 追加一行（造同 id 多条记录用） */
+  const append = (e: Evidence) => fs.appendFileSync(store.ledgerFile, JSON.stringify(e) + "\n");
+  /** 抓住 stdout/stderr，避免把输出泼进测试报告 */
+  const capture = () => {
+    const lines: string[] = [];
+    const log = vi.spyOn(console, "log").mockImplementation((...a) => lines.push(a.join(" ")));
+    const err = vi.spyOn(console, "error").mockImplementation((...a) => lines.push(a.join(" ")));
+    return { lines, stop: () => (log.mockRestore(), err.mockRestore(), lines.join("\n")) };
+  };
+  /** 复制一条记录并删掉指定字段（模拟"历史记录字段不全"：跨版本迁移或手写都可能这样） */
+  const without = (e: Evidence, ...keys: string[]): Evidence => {
+    const copy = { ...e } as Record<string, unknown>;
+    for (const k of keys) delete copy[k];
+    return copy as unknown as Evidence;
+  };
+  /** 标定集里 O1 的官分锁死为 85，所以造非标定点（孤儿 id）时官分可以自由取 */
+  const ORPHAN = "O999";
+  /** 造一份与 pct 对齐的 API 响应 JSON：分数取自 softmax_confidence（0~1） */
+  const apiJson = (pct: number) =>
+    fs.writeFileSync(
+      path.join(tmp, "in", "res.json"),
+      JSON.stringify({ softmax_confidence: pct / 100 }),
+    );
+
+  it("行 94/466/582/651：整条记录没有 proof 字段 → 按 screenshot 兜底且算认证", () => {
+    const noProof = without(rec({}), "proof");
+    seed(noProof);
+    expect(isCertified(noProof)).toBe(true); // 行 94 的 ?? 右支
+    const p = audit(store).find((x) => x.kind === "proof-mismatch");
+    expect(p).toBeUndefined(); // 兜底成 screenshot 后与"有截图"自洽，不报矛盾
+    expect(main(["list", "--base", tmp, "--quiet"])).toBe(0);
+  });
+
+  it("行 470：api-response 级但缺 apiResponseSha256 → 用空串占位，不炸", () => {
+    seed(without(rec({ proof: "api-response" }), "apiResponseSha256"));
+    expect(() => audit(store)).not.toThrow();
+    expect(hard().length).toBeGreaterThan(0); // 缺 API JSON 载体仍应被抓到
+    expect(main(["list", "--base", tmp, "--quiet"])).toBe(0);
+  });
+
+  it("行 481：低强度级且 proofSource 字段整个缺失 → 仍判「必须写出处」", () => {
+    seed(without(rec({ proof: "transcript-only" }), "proofSource"));
+    // 对照组：字段缺失与"写了空白串"必须同判，否则删字段就能绕过出处要求
+    expect(kinds("proof-mismatch").some((p) => p.msg.includes("必须写 proofSource"))).toBe(true);
+    seed(rec({ proof: "transcript-only", proofSource: "   " }) as Evidence);
+    expect(kinds("proof-mismatch").some((p) => p.msg.includes("必须写 proofSource"))).toBe(true);
+  });
+
+  it("行 339：sealRetro 的 proofSource 字段缺失 → 与空串同判（当场拒收）", () => {
+    const noSrc = without(input() as unknown as Evidence, "proofSource") as unknown as SealInput;
+    expect(() => sealRetro({ ...noSrc, pct: 30 } as never, store)).toThrow(/proofSource/);
+    expect(() => sealRetro({ ...input(), proofSource: "   ", pct: 30 }, store)).toThrow(
+      /proofSource/,
+    );
+  });
+
+  it("行 200：无扩展名的截图归档时补 .png；给 .jpg 就按原样归档", () => {
+    // O1 的官分锁死 85（与 calibration-data.json 必须对得上），所以换非标定点来试任意 pct。
+    // 孤儿 id 只会多一条 warning，不阻断入账。
+    const v = (p: number) => `AI生成 ${p.toFixed(2)}%`;
+    fs.writeFileSync(path.join(tmp, "in", "plain"), SHOT); // 无扩展名
+    fs.writeFileSync(path.join(tmp, "in", "shot.jpg"), SHOT);
+    const a = seal(
+      { ...input({ id: ORPHAN, screenshot: "in/plain" }), pct: 40, verdict: v(40), label: "ai" },
+      store,
+    );
+    expect(path.extname(a.rec.screenshot ?? "")).toBe(".png");
+    const b = seal(
+      { ...input({ id: ORPHAN, screenshot: "in/shot.jpg" }), pct: 40, verdict: v(40), label: "ai" },
+      store,
+    );
+    expect(path.extname(b.rec.screenshot ?? "")).toBe(".jpg");
+  });
+
+  it("行 524：api-response 级的归档 JSON 已从磁盘消失 → 不崩，转为载体缺失", () => {
+    apiJson(40);
+    const out = sealApi(
+      {
+        id: ORPHAN,
+        pct: 40,
+        label: "ai",
+        submitFile: `in/${PID}.txt`,
+        apiResponse: "in/res.json",
+      },
+      store,
+    );
+    fs.rmSync(path.resolve(tmp, out.rec.apiResponse as string));
+    expect(() => audit(store)).not.toThrow();
+    expect(hard().length).toBeGreaterThan(0); // 载体消失必须被抓到，否则等于凭证凭空成立
+  });
+
+  it("行 625/627：--base 给成裸开关（值为 1）→ 落回默认，不把 '1' 当目录名", () => {
+    // ROOT / DEFAULT_STORE 未导出，这里用「与完全不给 --base 等价」来钉：值 1 必须被
+    // 当成开关而非路径，否则会真的去读 <仓库根>/1 这个目录。
+    const bare = storeFromOpts({ base: "1" });
+    expect(bare).toEqual(storeFromOpts({}));
+    expect(bare.base.endsWith("1")).toBe(false);
+    expect(bare.evidenceDir.endsWith(path.join("evidence", "zhuque"))).toBe(true);
+    // 两个子路径同理：--evidence-dir / --ledger 给成裸开关也回默认值
+    expect(storeFromOpts({ base: tmp, "evidence-dir": "1", ledger: "1" }).evidenceDir).toBe(
+      storeFromOpts({ base: tmp }).evidenceDir,
+    );
+    // 对照组：给了真实目录就按它走，证明上面几条不是因为恒等
+    expect(storeFromOpts({ base: tmp }).base).toBe(path.resolve(tmp));
+    expect(storeFromOpts({ base: tmp, "evidence-dir": "in" }).evidenceDir).toBe(
+      path.resolve(tmp, "in"),
+    );
+  });
+
+  it("行 740：list 带 --id 且该 id 不在账本里 → 什么都不打印，只报 0 条", () => {
+    seed(rec({ id: PID }));
+    const c = capture();
+    expect(main(["list", "--base", tmp, "--id", "O999"])).toBe(0);
+    expect(c.stop()).toMatch(/账本 1 条/);
+  });
+
+  it("行 735：sealApi 记录的 apiResponseSha256 缺失 → 复算/打印按占位处理而不抛 undefined", () => {
+    // 归档的 API JSON 存在、但账本行缺哈希字段：审计要走到 hash 比对（空串≠真哈希 → 报硬伤），
+    // 不能因为读不到哈希就抛异常——那等于让一行脏数据炸掉整份审计报告。
+    apiJson(Y);
+    seed(rec({ id: PID, proof: "api-response", apiResponse: "in/res.json" }) as Evidence);
+    const c = capture();
+    expect(() => main(["audit", "--base", tmp, "--quiet"])).not.toThrow();
+    expect(c.stop()).not.toMatch(/undefined/);
+    expect(hard().length).toBeGreaterThan(0);
+  });
+
+  it("【真缺陷回归】行 652：同一条 id 的两条同级凭证（screenshot 与 api-response 同为 rank 3）", () => {
+    // 行 652 是 `if (!cur || rank[me] > rank[cur])`：screenshot 与 api-response 同为 rank 3，
+    // 同分**不覆盖**，认定级别因此只由"先到的那条"决定——把同 id 的两条记录调换顺序，
+    // 结论不应跟着变（否则同一次提交的凭证顺序就能改写认证口径）。
+    seed(rec({ id: PID, proof: "screenshot" }));
+    append(rec({ id: PID, proof: "api-response", apiResponse: "in/res.json" }));
+    const c1 = capture();
+    expect(main(["audit", "--base", tmp, "--quiet"])).toBe(1); // 缺 API JSON 载体 → 硬伤
+    const out1 = c1.stop();
+    expect(out1).not.toMatch(/undefined/);
+
+    // 对照组：清空账本后由 seal 建一条合法截图凭证（归档文件真实存在）→ 0，
+    // 确认上一条的红来自缺载体而非构造错误（seed 写的行归档文件并不存在）
+    fs.writeFileSync(store.ledgerFile, "");
+    seal(input(), store);
+    const c0 = capture();
+    expect(main(["audit", "--base", tmp, "--quiet"])).toBe(0);
+    expect(c0.stop()).toMatch(/认证/);
+  });
+});
+
 /* ----------------------------- sealRetro：历史点低强度回填 ----------------------------- */
 
 describe("sealRetro（回填不是认证）", () => {

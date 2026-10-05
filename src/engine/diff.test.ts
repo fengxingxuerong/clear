@@ -187,6 +187,76 @@ describe("diffInline（字符粒度）", () => {
     expect(() => diffInline("有内容的一句话。", "")).not.toThrow();
     expect(() => diffInline("", "有内容的一句话。")).not.toThrow();
   });
+
+  /* 2026-10-05 分支补测：4 处缺口全在 diff 主循环的**兜底搬运路径**上。
+     这段代码平时走不到——它只在"两侧的 del/ins 块都扫不出内容、却仍卡在循环里"时触发，
+     正是防死循环的最后一道保险。 */
+  it("行 21：文本以标点开头 → 该标点自成首个 token，不被并进上一段", () => {
+    // 前置对照：同样以标点开头、但只差一个前导标点，diff 结果不该把标点当正文丢掉
+    const { left, right } = diffInline("。第一句话。", "。第二句话。");
+    const ltext = left.map((p) => p.text).join("");
+    const rtext = right.map((p) => p.text).join("");
+    // 前导标点必须两段都在（既没被 tokenize 吞掉，也没被 diff 当成改动删了）
+    expect(ltext.startsWith("。")).toBe(true);
+    expect(rtext.startsWith("。")).toBe(true);
+    expect(left.some((p) => p.type === "del")).toBe(true); // 正文确实变了
+  });
+
+  it("行 214/218/219：纯增句时另一侧不产生幻影块，且不留未搬运的残块", () => {
+    // 纯增：left 全是 same（无 del），right 中间插 ins ⇒ 走 214 的 insText 支，
+    // 而 216 的兜底支在本构造下不应产生任何 del 幻影。
+    const { left, right } = diffInline("甲句。乙句。", "甲句。乙句。丙句。丁句。");
+    expect(left.every((p) => p.type === "same")).toBe(true);
+    expect(right.some((p) => p.type === "ins")).toBe(true);
+    // 关键不变量：两侧拼回去必须**逐字等于原文**——兜底搬运若漏搬或多搬，这里立刻炸
+    expect(left.map((p) => p.text).join("")).toBe("甲句。乙句。");
+    expect(right.map((p) => p.text).join("")).toBe("甲句。乙句。丙句。丁句。");
+  });
+
+  it("行 218/219：一侧整段被删除后，剩下的 same 块仍被逐段搬运（不丢字、不死循环）", () => {
+    const before = "甲句。乙句。丙句。";
+    const after = "甲句。丙句。"; // 整句删掉
+    const { left, right } = diffInline(before, after);
+    // 内容守恒是硬要求：diff 的产物必须能原样还原两侧原文
+    expect(left.map((p) => p.text).join("")).toBe(before);
+    expect(right.map((p) => p.text).join("")).toBe(after);
+    // 前后两个未变的句子必须以 same 形式各自成段（证明兜底搬运确实在干活）
+    expect(left.filter((p) => p.type === "same").map((p) => p.text)).toEqual(["甲句。", "丙句。"]);
+    expect(left.some((p) => p.type === "del" && p.text === "乙句。")).toBe(true);
+    // 对照组：无改动时不产生任何 del/ins（证明上一条不是恒真式）
+    const same = diffInline("甲句。", "甲句。");
+    expect(same.left.every((p) => p.type === "same")).toBe(true);
+  });
+
+  it("行 156/157：两侧毫无公共句子时，LCS 尾部整段清空（diff 仍须可还原）", () => {
+    // 前置条件：两段之间没有任何公共句子 ⇒ LCS 一路走不到匹配分支，
+    // 剩下的字符全靠行 155/159 两个 while 收尾（156-157 就是左半边的收尾）。
+    // 注意不能用带空格的英文：tokenize 会逐段 trim()，空格被规范化掉（设计行为）。
+    const before = "左边独有甲句。左边独有乙句。";
+    const after = "右边独有丙句。右边独有丁句。";
+    const { left, right } = diffInline(before, after);
+    // 硬不变量：两侧都能原样还原——尾部清空若漏字，这里立刻炸
+    expect(left.map((p) => p.text).join("")).toBe(before);
+    expect(right.map((p) => p.text).join("")).toBe(after);
+    expect(left.some((p) => p.type === "del")).toBe(true);
+    expect(right.some((p) => p.type === "ins")).toBe(true);
+  });
+
+  it("行 218/219：diff 主循环走到只剩单侧 same 时，两侧内容都被原样搬运", () => {
+    // 前后都有共同句、中间大段不同：循环某次迭代会在"del/ins 都扫空、却仍卡在
+    // while 条件里"的状态下进入 216 的兜底支（218/219 各搬一个）。
+    const before = "共同开头。独有甲一。独有甲二。共同结尾。";
+    const after = "共同开头。独有乙一。独有乙二。独有乙三。共同结尾。";
+    const { left, right } = diffInline(before, after);
+    // 兜底搬运的正确性判据：两侧必须能逐字还原原文
+    expect(left.map((p) => p.text).join("")).toBe(before);
+    expect(right.map((p) => p.text).join("")).toBe(after);
+    // 共同的开头与结尾必须都以 same 形式存在于两侧（否则就是被搬丢了）
+    for (const t of ["共同开头。", "共同结尾。"]) {
+      expect(left.some((p) => p.type === "same" && p.text.includes(t))).toBe(true);
+      expect(right.some((p) => p.type === "same" && p.text.includes(t))).toBe(true);
+    }
+  });
 });
 
 describe("diffStats（改动率）", () => {

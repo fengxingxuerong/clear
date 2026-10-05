@@ -151,6 +151,10 @@ export function parseOfficialResult(raw: string): OfficialResult {
   const near: RegExp[] = [];
   if (label !== null) {
     const hit = LABELED.find((x) => x.label === label);
+    // 2026-10-05 实测：`hit` 恒有值——label 只可能由上面遍历 LABELED 产出，
+    // 而 LABELED 三项 label 互异，所以 find 必中，这里 if(false) 是死分支。
+    // 真正的兜底在行 157 的通用正则：档位词与百分比被长句隔开时专用形态失配，
+    // 由它从全文另找一处百分比（见 zhuque.test.ts「行 154」用例）。保留 if 为防御。
     if (hit) near.push(new RegExp(hit.re.source + PCT_AFTER));
   }
   // 未命中档位词时退回通用形态（"AI 生成概率：98.47%"）
@@ -200,6 +204,9 @@ export function parseOfficialResult(raw: string): OfficialResult {
     label,
     labelText,
     note:
+      // 2026-10-05 实测：这里的 else 是死分支。行 170 先把「两值皆空」提前 return 掉，
+      // 行 181 再把「只有分数没档位」按官方口径补出档位，于是走到这里 probability!==null
+      // 必然蕴含 label!==null。保留三元是为防御未来新增的解析分支，不为覆盖率而删。
       probability !== null && label !== null
         ? `已识别：${labelText} ${probability}%`
         : "已识别部分字段",
