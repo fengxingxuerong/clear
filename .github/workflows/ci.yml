@@ -39,6 +39,14 @@ jobs:
         # 下次谁跑一次未格式化的编辑器改动就又漂回去了。
         run: npx prettier --check "src/**/*.{ts,tsx,css}" "*.{ts,tsx,json,mjs}" "vite.config.ts"
 
+      - name: Regex self-check (字符类提前闭合)
+        # 2026-10-05：classify-genre.ts 的冒号台词正则字符类写了 `（）()【】[]]`，
+        # 类内裸 `[` 让 `]` 提前收尾 —— 整条正则恒不匹配，对话体判定少了一条主特征。
+        # 这类缺陷 lint 和覆盖率都抓不到：行被执行了（行覆盖率 100%），
+        # 只是结果永远错；eslint 甚至会对正确的 `\[` 报 no-useless-escape（误报）。
+        # 详见 scripts/check-regex-defects.ts。
+        run: npm run check:regex
+
       - name: Unit tests (vitest, with coverage gate)
         # coverage 阈值在 scripts/coverage-thresholds.ts（**唯一事实源**，v0.9.16 起收拢），
         # 2026-10-05 从 75×4 收紧到 93/87/94/94——阈值贴着实际值（实测 97.4/91.6/98.8/98.2）
