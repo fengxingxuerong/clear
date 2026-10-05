@@ -517,25 +517,83 @@ describe("档案畸形：缺列 / 多余键的兜底", () => {
     return { code, lines: cap.lines, hits };
   }
 
-  it("回传文件里多出一个档案没有的键 → 被忽略，不产出野点（行 118 的 if (rec)）", () => {
-    // 回传格式是 `KEY=分`，行 115 的 matchAll 把每行拆成若干键值对。
-    // 塞进一个 V2_MAP 与档案里都不存在的键，走的是 `out.get(id)` 返回 undefined 那一支。
-    const r = withPatchedFile("zhuque-calibration-v2.txt", (txt) => `ZZZ_UNKNOWN_KEY=88\n${txt}`);
+  it("回传行里多出一个档案没有的键 → 被忽略，不产出野点（行 118 的 if (rec)）", () => {
+    /**
+     * ⚠️ 第一版把野键插在文件**第一行**，用例照样绿——但没走到目标分支。
+     *   行 113 是 `if (!retLines[i].includes("回传值")) continue;`，
+     *   第一行不含「回传值」→ 直接跳过，行 115 的 matchAll 压根没执行。
+     *
+     * 正确做法：把野键**追加到已含「回传值」的那一行**末尾，
+     * 这样 115 会把 `ZZZ_UNKNOWN_KEY=88` 也拆成一个键值对，
+     * V2_MAP 里查不到 → id 原样透传 → `out.get(id)` 返回 undefined → 走 if 的 else 支。
+     */
+    const r = withPatchedFile("zhuque-calibration-v2.txt", (txt) => {
+      const lines = txt.split(/\r?\n/);
+      const idx = lines.findIndex((l) => l.includes("回传值"));
+      expect(idx, "回传文件里应至少有一行含「回传值」").toBeGreaterThanOrEqual(0);
+      lines[idx] = `${lines[idx]} ZZZ_UNKNOWN_KEY=88`;
+      return lines.join("\n");
+    });
     expect(r.hits).toBe(1);
     // 野键既不该让程序崩，也不该凭空多出一个校准点
     expect(r.code).toBe(0);
     expect(r.lines.join("\n")).not.toContain("ZZZ_UNKNOWN_KEY");
+    // 对照：回填本身照常完成 18 点（证明野键没把整行解析带崩）
+    expect(r.lines.length).toBeGreaterThan(5);
   });
 
-  it("v2 块头没有体裁声明 → declaredGenre 取空串，该点因体裁被拒（行 107）", () => {
-    // 块头形如「叙事文  /  原文」，把斜杠前那半删掉即可让 m[2] 捕获为空。
-    const r = withPatchedFile("zhuque-manual-inputs-v2-genres.txt", (txt) =>
-      txt.replace(/(\S+)(\s*)\/(\s*)原文/g, "原文"),
-    );
+  /**
+   * ⚠️ 行 107 的 `m[2] ?? ""` 是**结构性死分支**（v0.9.24 核实）。
+   *
+   * `HDR` 正则是 `/【\s*\d+\s*·\s*id=(...)\s*】\s*(.+?)\s+aiScore=(\d+)\s+字数=(\d+)/`。
+   * 推导：只要 HDR 匹配上，`(.+?)` 必有值（`+` 量词至少吃一个字符），
+   * 于是 m[2] 不可能是 undefined。而让整行不匹配 HDR 也没用——
+   * 那时行 101 的 `out.set(id, …)` 压根不执行，行 107 走不到。
+   *
+   * 第一版的用例把「叙事文  /  原文」的斜杠前半删掉，想让 m[2] 变空，
+   * 结果整行不再被识别为块头，**用例照样绿但没覆盖任何东西**。
+   *
+   * 探针实测两个真值（都写进断言）：
+   *   正常块头 group2 = ". 叙事文  /  原文"，取声明体裁 = ". 叙事文"（**带那个点**）
+   *   「】aiScore=…」这种没点号的块头 **HDR 整体不匹配** → m[2] 才是 undefined
+   * 也就是说 `?? ""` 那一侧结构上不可达，而「块头没被识别」是另一条业务路径
+   *（由下面那条用例钉）。
+   */
+  it("行 107 成因：HDR 的体裁组是必需组，m[2] 不可能为 undefined", () => {
+    const HDR_RE = /【\s*\d+\s*·\s*id=([A-Za-z0-9._-]+)\s*】\s*(.+?)\s+aiScore=(\d+)\s+字数=(\d+)/;
+    // 块头形如「【9 · id=N9】. 叙事文  /  原文」——】后那个「. 」是固定装饰，
+    // 它就是 `(.+?)` 吃进去的第一个字符，所以 declaredGenre 带着点（源码原样，不"修正"）。
+    const head = "【9 · id=N9】. 叙事文  /  原文    aiScore=47  字数=452  →  官方 y= ____ %";
+    const m = HDR_RE.exec(head);
+    expect(m).not.toBeNull();
+    expect(m![2]).toBe(". 叙事文  /  原文");
+    expect(m![2].split("/")[0].trim()).toBe(". 叙事文");
+
+    // 「】aiScore=…」这种连点号都没有的块头：HDR **整体不匹配**，
+    // 这才是 m[2] 会是 undefined 的唯一情形——而那时 107 行根本不会被执行。
+    const headBare = "【9 · id=N9】aiScore=47  字数=452  →  官方 y= ____ %";
+    expect(HDR_RE.test(headBare)).toBe(false);
+    expect(HDR_RE.exec(headBare)?.[2]).toBeUndefined();
+  });
+
+  /**
+   * 「块头里没有体裁声明」在业务上意味着什么：**该点根本不会被登记**。
+   * 用「把 aiScore 段删掉」让整行不再匹配 HDR 来模拟，效果与用户手误一致。
+   */
+  it("块头缺少 aiScore/字数 段 → 整行不识别为块头，那几条点不再登记", () => {
+    // 第一版用 `/^\s*aiScore=\d+\s+字数=\d+.*$/gm`，结果一个都没替换上（hits 为 1
+    // 只说明文件被读过，替换本身是空操作），code 仍是 0。
+    // 原因：块头里 aiScore 前面还有体裁与分隔符，不在行首 ⇒ 不能用 ^ 锚定。
+    const r = withPatchedFile("zhuque-manual-inputs-v2-genres.txt", (txt) => {
+      const out = txt.replace(/aiScore=\d+\s+字数=\d+/g, "已抹掉");
+      expect(out, "替换必须真的发生").not.toBe(txt);
+      return out;
+    });
     expect(r.hits).toBe(1);
-    // 体裁检查会拒收（有声明但不认 = 拒收，没声明同样拒收，见文件行 80 的用例）
+    // 所有 v2 点都不再被登记 → 只剩 v3 的六个点，且多数因缺官分被拒
     expect(r.code).toBe(1);
-    expect(r.lines.filter((l) => l.includes("体裁")).length).toBeGreaterThan(0);
+    // 不能出现「因为体裁被拒」的字样——这次是压根没登记
+    expect(r.lines.join("\n")).not.toContain("体裁");
   });
 
   /**
