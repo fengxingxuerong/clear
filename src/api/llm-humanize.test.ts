@@ -932,6 +932,70 @@ describe("竞争段预算跳过（目标行 396-397/436-437）", () => {
   });
 });
 
+describe("竞争段单候选质检失败：另一个候选照常交付（目标行 436-440）", () => {
+  const ALT = "deepseek-v4-pro";
+  const TEXT = "值得注意的是，人工智能正在深刻地改变着我们的生活方式。";
+
+  /**
+   * ⚠️ 这一块试了三版才对，记在这里省后人一遍：
+   *
+   * v1「让 altModel 的 fetch 返 HTTP 500」——**超时 5s**。chatNonEmpty 逐档
+   *    try/catch 把 500 吞掉，转去走「空响应降级重试」，得到的不是干净的失败。
+   * v2「让 altModel 的 fetch 直接 throw」——**超时 5s（实测 38s / 13 次请求）**。
+   *    抛异常同样进降级链，而且深克隆会跑多轮，一次失败把整场拖满。
+   *
+   * 结论：**竞争段的 catch（427-428）在纯网络故障下极难干净触发**，
+   * 因为降级链会把异常吃掉再重试。真正稳定的入口是「业务层失败」——
+   * 让 alt 候选的质检返回 FAIL，而不是让网关挂掉。
+   */
+  it("alt 候选质检 FAIL + 编造嫌疑 → 仍交付主候选稿，note 里两个候选都有分", async () => {
+    let n = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: { body?: string }) => {
+        n++;
+        const body = JSON.parse(init?.body ?? "{}") as {
+          model?: string;
+          messages: { role: string; content: string }[];
+        };
+        const sys = body.messages?.[0]?.content ?? "";
+        if (sys.includes("质检员")) {
+          // alt 候选没过检，主候选过检
+          return body.model === ALT
+            ? okJson({
+                choices: [
+                  {
+                    message: {
+                      content: "FAIL\n1. 编造了原文中不存在的量子纠缠实验\n2. 结构与原文差异过大",
+                    },
+                  },
+                ],
+              })
+            : okJson({ choices: [{ message: { content: "PASS" } }] });
+        }
+        if (sys.includes("改写专家"))
+          return okJson({ choices: [{ message: { content: GOOD_REWRITE } }] });
+        return okJson({ choices: [{ message: { content: "句长过于均匀\n15" } }] });
+      }),
+    );
+    const cfg = {
+      ...DEFAULT_API,
+      enabled: true,
+      apiKey: "test-key",
+      altModel: ALT,
+      strictFidelity: true,
+    };
+    const r = await humanizeViaApiDeep(TEXT, cfg, undefined, 10, 1, 0.6);
+    // 一个候选没过检，整场仍然交付了主候选的稿子 —— 失败被隔离
+    expect((r as { text?: string }).text ?? "").not.toBe("");
+    // 两个候选都进了评分序列（note 里两个 tag 都有分）
+    expect(r.note).toContain("双模型竞争");
+    expect(r.note).toContain(`${ALT}#2`);
+    expect(r.roundScores.length).toBeGreaterThan(0);
+    expect(n).toBeGreaterThan(1);
+  });
+});
+
 describe("零可见字符的压缩率口径（目标行 192）", () => {
   const cfg = { ...DEFAULT_API, enabled: true, apiKey: "test-key" };
 
