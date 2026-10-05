@@ -215,7 +215,9 @@ describe("官分互证与 append-only 幂等", () => {
     expect(pctRej[0]).toContain("N2v3");
     expect(pctRej[0]).toMatch(/档案官分 18 与正本 y=15 不符/);
     // 源点 N3v2 因为被挪走而查无出处，也必须如实报出来（不许静默少一条）
-    expect(cap.lines.filter((l) => l.includes("N3v2") && l.includes("三处档案里都没有"))).toHaveLength(1);
+    expect(
+      cap.lines.filter((l) => l.includes("N3v2") && l.includes("三处档案里都没有")),
+    ).toHaveLength(1);
     // 还原后同一 store 立刻恢复全绿（防"这条守卫其实没在动代码"）
     const cap2 = capture();
     expect(cap2.run(store, true)).toBe(0);
@@ -277,7 +279,9 @@ describe("映射表兜底：未登记的裸 id 原样透传，不静默变 undef
       V2_MAP.N1 = saved;
     }
     expect(code).toBe(0);
-    expect(cap.lines.filter((l) => l.includes("不收") || l.includes("三处档案里都没有"))).toHaveLength(0);
+    expect(
+      cap.lines.filter((l) => l.includes("不收") || l.includes("三处档案里都没有")),
+    ).toHaveLength(0);
     const recs = readLedger(store);
     expect(recs).toHaveLength(18);
     // 兜底后 N1 仍拿到它自己的那一条：pct/text 都对得上，不是靠"碰巧没被检查"
@@ -287,7 +291,9 @@ describe("映射表兜底：未登记的裸 id 原样透传，不静默变 undef
     expect(n1!.proof).toBe("text+transcript");
     // 对照：映射还原后行为完全一致（证明这条测的是兜底，不是别的副作用）
     const cap2 = capture();
-    const tmp2 = storeFromOpts({ base: fs.mkdtempSync(path.join(os.tmpdir(), "retro-fallback-ctl-")) });
+    const tmp2 = storeFromOpts({
+      base: fs.mkdtempSync(path.join(os.tmpdir(), "retro-fallback-ctl-")),
+    });
     expect(cap2.run(tmp2, false)).toBe(0);
     expect(readLedger(tmp2)).toHaveLength(18);
   });
@@ -338,7 +344,11 @@ describe("CLI 入口：--dry-run 走只读、不往账本追加", () => {
     const before = fs.existsSync(ledger) ? fs.readFileSync(ledger, "utf8") : null;
     const r = spawnSync(
       process.execPath,
-      [path.join(repoRoot, "node_modules", "tsx", "dist", "cli.mjs"), path.join(repoRoot, "scripts", "zhuque-retro-backfill.ts"), "--dry-run"],
+      [
+        path.join(repoRoot, "node_modules", "tsx", "dist", "cli.mjs"),
+        path.join(repoRoot, "scripts", "zhuque-retro-backfill.ts"),
+        "--dry-run",
+      ],
       { cwd: repoRoot, encoding: "utf8" },
     );
     expect(r.status).toBe(0);
@@ -381,7 +391,11 @@ describe("档案故障：字数对不上 / O1 原文档缺失", () => {
     let bumps = 0;
     try {
       // 把档案里每处「字数=N」抬高 5 字 ⇒ 正文实际字数与档案记录对不上
-      fs.readFileSync = function (this: unknown, p: Parameters<typeof fs.readFileSync>[0], ...rest: unknown[]) {
+      fs.readFileSync = function (
+        this: unknown,
+        p: Parameters<typeof fs.readFileSync>[0],
+        ...rest: unknown[]
+      ) {
         const s = typeof p === "string" ? p : (p as { toString?: () => string })?.toString?.();
         const passthrough = () =>
           real.apply(fs, [p as never, ...rest] as unknown as Parameters<typeof fs.readFileSync>);
@@ -444,9 +458,83 @@ describe("档案故障：字数对不上 / O1 原文档缺失", () => {
     expect(cap.lines.filter((l) => l.includes("O1:") && l.includes("只有 L2"))).toHaveLength(1);
     // 对照：O1 原文档在时它是 text+transcript（缺失才降级）
     const cap2 = capture();
-    const tmp2 = storeFromOpts({ base: fs.mkdtempSync(path.join(os.tmpdir(), "retro-fault-ctl-")) });
+    const tmp2 = storeFromOpts({
+      base: fs.mkdtempSync(path.join(os.tmpdir(), "retro-fault-ctl-")),
+    });
     expect(cap2.run(tmp2, false)).toBe(0);
     const o1ctl = readLedger(tmp2).find((r) => r.id === "O1");
     expect(o1ctl!.proof).toBe("text+transcript");
+  });
+});
+
+/**
+ * 解析阶段的 `??` 兜底（行 107 / 118 / 151）。
+ *
+ * 这三处都是「数据文件里缺列/多键」时的容错，真实档案格式一变就会走到：
+ *   107  `(m[2] ?? "").split("/")[0].trim()` —— 块头没写体裁
+ *   118  `if (rec)`                 —— 回传行里的键在档案里**查无此点**
+ *   151  `c[gi] ?? ""`              —— v3 TSV 的 genre 列为空
+ *
+ * 三条都用手�� readFileSync 包装注入畸形数据（与上面两条用例同一手法）。
+ */
+describe("档案畸形：缺列 / 多余键的兜底", () => {
+  let tmp: string;
+  let store: Store;
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "retro-malformed-"));
+    store = storeFromOpts({ base: tmp });
+  });
+  afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  /** 把 fs.readFileSync 包一层，对命中 suffix 的文件做 transform */
+  function withPatchedFile(
+    suffix: string,
+    transform: (txt: string) => string,
+  ): { code: number; lines: string[]; hits: number } {
+    const real = fs.readFileSync;
+    const cap = capture();
+    let hits = 0;
+    let code: number;
+    try {
+      fs.readFileSync = function (
+        this: unknown,
+        p: Parameters<typeof fs.readFileSync>[0],
+        ...rest: unknown[]
+      ) {
+        const s = typeof p === "string" ? p : (p as { toString?: () => string })?.toString?.();
+        const passthrough = () =>
+          real.apply(fs, [p as never, ...rest] as unknown as Parameters<typeof fs.readFileSync>);
+        if (s && s.endsWith(suffix)) {
+          hits++;
+          return transform(String(passthrough()));
+        }
+        return passthrough();
+      } as typeof fs.readFileSync;
+      code = cap.run(store, true);
+    } finally {
+      fs.readFileSync = real;
+    }
+    return { code, lines: cap.lines, hits };
+  }
+
+  it("回传文件里多出一个档案没有的键 → 被忽略，不产出野点（行 118 的 if (rec)）", () => {
+    // 回传格式是 `KEY=分`，行 115 的 matchAll 把每行拆成若干键值对。
+    // 塞进一个 V2_MAP 与档案里都不存在的键，走的是 `out.get(id)` 返回 undefined 那一支。
+    const r = withPatchedFile("zhuque-calibration-v2.txt", (txt) => `ZZZ_UNKNOWN_KEY=88\n${txt}`);
+    expect(r.hits).toBe(1);
+    // 野键既不该让程序崩，也不该凭空多出一个校准点
+    expect(r.code).toBe(0);
+    expect(r.lines.join("\n")).not.toContain("ZZZ_UNKNOWN_KEY");
+  });
+
+  it("v2 块头没有体裁声明 → declaredGenre 取空串，该点因体裁被拒（行 107）", () => {
+    // 块头形如「叙事文  /  原文」，把斜杠前那半删掉即可让 m[2] 捕获为空。
+    const r = withPatchedFile("zhuque-manual-inputs-v2-genres.txt", (txt) =>
+      txt.replace(/(\S+)(\s*)\/(\s*)原文/g, "原文"),
+    );
+    expect(r.hits).toBe(1);
+    // 体裁检查会拒收（有声明但不认 = 拒收，没声明同样拒收，见文件行 80 的用例）
+    expect(r.code).toBe(1);
+    expect(r.lines.filter((l) => l.includes("体裁")).length).toBeGreaterThan(0);
   });
 });
