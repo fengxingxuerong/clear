@@ -81,6 +81,58 @@ describe("clampAvgSentenceLenUnder25（句长硬上限）", () => {
     const t = "这是一个完全没有逗号分隔的超长句子用来验证没有切点时不应该被强行切断处理。";
     expect(clampAvgSentenceLenUnder25(t, 10, 6)).toBe(t);
   });
+
+  /**
+   * v0.9.1「使役无主句」守卫（structure.ts 行 744）
+   *
+   * 744 行是 `if (!fragmentCanStand(rest)) continue;` —— 切出的后半句若以
+   * 「让/使/将」开头（承接前句宾语做主语），单独成句就是**无主病句**，
+   * 必须跳过该候选换下一句切（scan-bugs v5.2 曾报 106 次违规）。
+   *
+   * 上面那条「状语从句开头」的用例其实走不到这里——它的 rest 有主语。
+   * 要命中 744 必须让**唯一可切点**的 rest 无主语：
+   * 探针实测（下面四个）原样返回，一个字都没改。
+   */
+  it("切出的后半句是使役无主句时放弃切分（行 744 continue）", () => {
+    const cases: [string, string][] = [
+      [
+        "以「将推动」开头",
+        "一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十，将推动整个行业重新洗牌。",
+      ],
+      [
+        "以「让…」开头",
+        "一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十，让教师的负担明显减轻很多。",
+      ],
+      [
+        "以「将提高」开头",
+        "一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十，将提高整体的效率水平很多。",
+      ],
+      [
+        "以「使…」开头",
+        "一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十，使效率大幅提升很多。",
+      ],
+    ];
+    for (const [label, t] of cases) {
+      const rest = t
+        .split(/[，；、：]/)
+        .pop()!
+        .trim();
+      // 前置确认：这些 rest 确实被判为「不能独立成句」，否则本用例没意义
+      expect(fragmentCanStand(rest), `${label}: ${rest.slice(0, 12)}`).toBe(false);
+      // avg 已超阈值（所以确实进入切分尝试），但守卫生效 → 原样返回
+      expect(clampAvgSentenceLenUnder25(t, 25, 6), label).toBe(t);
+    }
+  });
+
+  it("rest 带主语时照常切分（守卫生效方向不搞反）", () => {
+    // 对照组：同样超长、同样只有一个逗号，但 rest 有主语「这次改版」→ 允许切
+    const t =
+      "一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十，这次改版将推动整个行业重新洗牌。";
+    const out = clampAvgSentenceLenUnder25(t, 25, 6);
+    expect(fragmentCanStand("这次改版将推动整个行业重新洗牌。")).toBe(true);
+    expect(out).not.toBe(t);
+    expect(out.endsWith("。")).toBe(true);
+  });
 });
 
 describe("ensureEmDashCountHardCap（破折号硬上限）", () => {
