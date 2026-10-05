@@ -38,6 +38,12 @@ export function relaxColon(text: string, rng: () => number, p: number): string {
   let out = text.replace(
     /([\u4e00-\u9fa5])：(?=[\u4e00-\u9fa5])/g,
     (_m: string, pre: string, offset: number) => {
+      // ⚠️ 死分支（2026-10-05 复核，见 shuffle/primitives.test.ts 同名注释）：
+      // offset 是**匹配起点**（pre 那个字的下标），所以 next 恒等于全角冒号本身，
+      // 下面这句引号守卫永假；而且正则前瞻 (?=[一-龥]) 早已把「冒号紧跟引号」
+      // 排除在匹配之外——两道判据都不可能成立，任何测试都到不了这行。
+      // 想让它有意义只有两条路：删掉这两行，或把下标改成 offset+2 并同步放宽前瞻。
+      // 现状的引号场景实际由前瞻兜住：`他说：“开始吧”` 整段不匹配、原样返回。
       const next = text[offset + 1];
       if (next === '"' || next === "\u201c" || next === "\u201d") return _m;
       return rng() < p ? pre + pick(rng, ["，", "，", "："]) : _m;

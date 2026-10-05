@@ -201,6 +201,11 @@ function effectiveIntensity(intensity: number): number {
  *                  其他三体裁无上限，交给用户滑块自由控制。
  *  · disableZhuque：只有 humanHand 强制关闭朱雀增强（负斜率特征，叠加方言/自问自答会官分跳升）。
  *  · expoForceP3：只有论说 + 强度≥0.75 才强制 P3（覆盖 expoScore 略低于 0.55 的边缘论说文）。
+ *     ⚠️ 叙事 / 人写两档里的 `() => false` 是**永不执行**的（2026-10-05 复核）：
+ *     本字段唯一调用点在结构层入口（下方 `if (intensity >= 0.55 && structuralAllowedGenre)` 内），
+ *     而 narrative / humanHand 恰好被 structuralAllowedGenre 挡在结构层之外，
+ *     故这两行的行覆盖恒为 0 —— 属设计使然，不是漏测，别为凑覆盖率把调用硬塞进去。
+ *     真要消除它：把这两档的字段与调用点一起收进结构层分支，而不是造一次假调用。
  *  · skipSceneInject：只有对话体需要（剧本【场景/人物/背景】块不塞自问自答，避免违和）。
  */
 type EffectiveGenre = AutoGenre | "humanHand";
