@@ -300,6 +300,36 @@ const REPLACE_VOCAB_CANDIDATES: [string, string[]][] = VOCAB_ENTRIES.map(([from,
 const VOCAB_KEY_SET: Set<string> = new Set(REPLACE_VOCAB_CANDIDATES.map(([k]) => k));
 
 /**
+ * v0.9.24 **助词结尾词条的前缀闭包**：`前缀 → 至少一个以它开头的助词结尾源词`。
+ *
+ * 词表实测 14 对前缀重叠（取得 ⊂ 取得了、展现 ⊂ 展现出 ⊂ 展现出了、
+ * 发挥 ⊂ 发挥着 ⊂ 发挥了、日益 ⊂ 日益增多/增加/增长…）。
+ * `replaceVocab` 逐词条循环改写共享的 `base`，同一位置会被**整条前缀链**依次命中。
+ *
+ * 探针日志实录（本轮最贵的一次定位）：
+ *
+ *     [SCAN] from=取得了 idx=2   ← 类别守卫命中，跳过（base 未被改写）
+ *     [SCAN] from=取得   idx=2   ← 「取得了」原样还在，前缀立刻顶上来
+ *     OUT:  我们拿到了地这件事      ← 词干被换、助词残留 ⇒ 病句
+ *
+ * 所以**只拦长词条是无效的**——拦住的瞬间前缀就补位。必须让**前缀也知道**
+ * 「我这条链上有以助词结尾的词条」，一起让位，源词才能完整保留。
+ *
+ * 这里取「前缀 → 该前缀下最长的助词结尾词条」，一个前缀只需登记一次。
+ */
+const PARTICLE_PREFIX_BLOCK: Set<string> = (() => {
+  const keys = REPLACE_VOCAB_CANDIDATES.map(([k]) => k);
+  const s = new Set<string>();
+  for (const k of keys) {
+    // ⚠️ 只看「了/着」，与 guardBlocks 的类别规则保持一致。
+    //   收「地/得」会把「取得」「获得」「落地」的前缀也拦掉——它们是正常词条。
+    if (!"了着".includes(k[k.length - 1])) continue;
+    for (let i = 1; i < k.length; i++) s.add(k.slice(0, i)); // 登记它的所有真前缀
+  }
+  return s;
+})();
+
+/**
  * 该替身是否**本身也是词表里的源词**（即会不会被下一轮词条循环再替一次）。
  *
  * 导出它是为了让 `humanize-quality-v0922.test.ts` 能白盒钉住这个集合——
@@ -408,7 +438,11 @@ function replaceVocab(
         !isProtectedTerm(base, idx, end) &&
         // 前窗取 6 字而非 3 字：够着"受到广泛"这类隔了状语的搭配。
         // judgeGuardBlocks 里所有前缀判据都是尾锚定（endsWith / /…$/），加宽不改变既有行为。
-        !guardBlocks(from, base.slice(end, end + 8), base.slice(Math.max(0, idx - 6), idx))
+        !guardBlocks(from, base.slice(end, end + 8), base.slice(Math.max(0, idx - 6), idx)) &&
+        // v0.9.24 前缀闭包：本词条是某个「助词结尾词条」的前缀 → 一起让位。
+        // 见 PARTICLE_PREFIX_BLOCK 注释：不加这条，守卫拦住「取得了」的那一刻，
+        // 「取得」会立刻在同一位置顶上来，替换词干并把助词留成病句。
+        !PARTICLE_PREFIX_BLOCK.has(from)
       ) {
         const rep = pick(rng, candidates);
         // v0.9.22 级联守卫（见 VOCAB_KEY_SET 注释）：替身本身是源词 → 会被下一轮
@@ -429,7 +463,27 @@ function replaceVocab(
         // v0.9.22 类别级：口语结果动词接抽象名词宾语 = 搭配不当（见 COLLOQUIAL_RESULT_VERBS）
         const clashAbstract =
           COLLOQUIAL_RESULT_VERBS.has(rep) && ABSTRACT_OBJECT_RE.test(base.slice(end, end + 8));
-        if (rep && !cascade && !clashRight && !clashLeft && !clashAbstract)
+        // v0.9.24 类别级：替身**末字或倒数第二字**是助词，且右邻也是助词 = 助词连用。
+        //
+        // 「抱着」+「了」→「抱着了」；「就出现了」+「地」→「就出现了地」。
+        //
+        // 为什么 clashRight 拦不住：它查**单字碰撞**，「着」≠「了」⇒ 放行。
+        // 与「不光仅」同型——各部分都没问题，合起来才成病（**第三类盲区**）。
+        //
+        // 全表实测 48 处，分三轮收敛：
+        //   v1 只判「着尾+了」     → 48 → 41（漏 着+地/得/着）
+        //   v2 「着尾+任一助词」   → 48 → 27（漏 了尾的动补短语）
+        //   v3 +「了尾+地得着」    → 48 → 15（漏 源词自身残留助词的）
+        //
+        // ⚠️ 只看倒数第二字（不是全串扫助词）：替身中间带助词但句尾干净的
+        //   情况很少见，全串扫会误伤「得到了成果」这类正常搭配。
+        //
+        // 注：源词自身以助词结尾的那 15 处（发挥着/取得了/展现出了…）
+        // 由 `guardBlocks` 里的**类别规则**拦——只有那里能覆盖前缀链。
+        const clashParticle =
+          "了地得着".includes(nextCh) &&
+          ("了地得着".includes(rep[rep.length - 1]) || "了地得着".includes(rep[rep.length - 2]));
+        if (rep && !cascade && !clashRight && !clashLeft && !clashAbstract && !clashParticle)
           hits.push({ at: idx, rep });
       }
       idx = base.indexOf(from, end);

@@ -62,10 +62,26 @@ describe("本地引擎输出质量（v0.8.4 反指纹回归）", () => {
 
   it("「取得了」不再产出「得了了」病句（替身+尾随了撞车回归）", () => {
     const src = "本季度各项工作取得了显著成效，同时取得了新的突破，团队也取得了成长。";
+    // ⚠️ v0.9.24：这两条断言过去一直是**假绿**，本轮才暴露。
+    //
+    // 原写法 `not.toContain("得了")` 有一个**自匹配**缺陷：
+    // 源串「取**得了**显著成效」里本来就有「得了」二字，所以只要源词没被替换，
+    // 这条断言就必然红——它从来没真正验证过「替身+尾随了」的撞车。
+    //
+    // 之所以过去没红：v0.9.22 时「取得了」会被替换成「得到了」，紧跟尾随的「了」
+    // 撞出「得了了」，被上面那条 `not.toContain("了了")` 抓到了，于是这条被"顺带盖住"。
+    // v0.9.24 给「了/着」结尾的源词加了类别守卫后，「取得了」不再被替换，
+    // 真实行为变正常了，这条断言才露出它一直在测一个恒真条件。
+    //
+    // 现在改成**扣掉源串自带部分**再比对——测的才是「产出比原文多了什么」。
+    // ⚠️ 用 split/join 不用 replaceAll：本项目 target 是 ES2020，没有 replaceAll。
+    const stripSource = (out: string) => out.split(src).join("").split("取得了").join("");
     for (let seed = 0; seed < 20; seed++) {
       const out = humanize(src, { intensity: 0.9, seed, zhuqueMode: seed % 2 === 0 });
       expect(out, `seed=${seed}：${out}`).not.toContain("了了");
-      expect(out, `seed=${seed}：${out}`).not.toContain("得了");
+      // 只查「原文里没有、产出里冒出来」的「得了」——那才是替身撞车
+      const extra = stripSource(out);
+      expect(extra, `seed=${seed}：多出「${extra}」`).not.toContain("得了");
     }
   });
 
