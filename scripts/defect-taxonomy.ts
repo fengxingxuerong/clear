@@ -187,8 +187,23 @@ export const DEFECT_TAXONOMY: DefectTaxonomyEntry[] = [
     desc:
       "多个注入器在同一处重复叠加——垫词复读、双垫词、垫词接连接词双开头。\n" +
       "判定要点：这些是**标尺驱动**的，修引擎没用，要改的是「什么条件下允许注入」。",
-    signatures: ["v5.2:双垫词", "v5.2:垫词接连接词双开头", "anti-fp:垫词复读"],
-    fixes: [],
+    signatures: [
+      "v5.2:双垫词",
+      "v5.2:垫词接连接词双开头",
+      "anti-fp:垫词复读",
+      "injection-overlap:垫词复读",
+      "injection-overlap:双垫词",
+      "injection-overlap:垫词接连接词",
+    ],
+    fixes: [
+      "v0.9.24 体检确认三条当前**全部 0 命中，且不是死签名**——缺陷注入实测：\n" +
+        "     在 `humanize` 出口（第 975 行 `return result;`）叠同一垫词后，\n" +
+        "     垫词复读 0→480 处、垫词接连接词 0→165 处（960 次运行口径）。\n" +
+        "     「双垫词」注入后仍 0：注入的是**同一个**垫词，而签名要求**两个**垫词相邻；\n" +
+        "     直接构造「讲真，讲真，」证明它可命中。\n" +
+        "     新增 `src/engine/injection-overlap.test.ts`：4 段 × 4 档 × 30 种子 × 2 管线，\n" +
+        "     并补上 scan-bugs 这三条**原本缺的正反对照**（防永真式签名）。",
+    ],
   },
   {
     category: "标尺失效",
