@@ -26,6 +26,10 @@ const ZIP = path.join(ROOT, "electron-dist", `QuAiWei-win32-x64-${TAG}.zip`);
 const BUILD_INFO = path.join(ROOT, "electron-app", "build-info.json");
 const CHANGELOG = path.join(ROOT, "CHANGELOG.md");
 
+/** Node 的 fetch **不读** http_proxy；Node 22.22 起可用这个开关让它走环境代理。
+ *  本机网络需要它才能碰到 api.github.com。显式开着，免得哪次又连不上。 */
+process.env.NODE_USE_ENV_PROXY = process.env.NODE_USE_ENV_PROXY || "1";
+
 const CHECK_ONLY = process.argv.includes("--check");
 
 const log = (...a) => console.log(...a);
@@ -95,20 +99,44 @@ const probeTcp = (host, port, ms = 8000) =>
   log(`  github.com:443      ${gh === "ok" ? "✅ 可达" : `❌ ${gh}`}`);
   log(`  api.github.com:443  ${api === "ok" ? "✅ 可达" : `❌ ${api}`}`);
   if (gh !== "ok") {
-    log("\n  ⚠️  github.com:443 不可达 —— push 需要这个域。");
-    log("     本机曾实测：代理只放行 api.github.com、github.com 走代理 502、直连超时。");
-    log("     若走代理，先 `echo $https_proxy` 现看端口；不要盲目循环重试（会挂住）。");
-    if (!CHECK_ONLY) die("网络不通，publish 中止（未做任何远端改动）");
+    log("\n  ⚠️  github.com:443 不可达 —— **git push** 需要这个域（TCP 可达也不代表 TLS/握得成）。");
+    log("     本机实测过：代理放行 api.github.com、对 github.com 返回 502、直连超时。");
+    log("     ⇒ 此时先 `node scripts/_api-push.cjs`（走 Git Data API 推提交），");
+    log("       远端同步后再回来发版。别盲目循环重试 push（会挂住十几分钟）。");
   }
   if (CHECK_ONLY) {
     log("\n--check 模式：到此为止，未推未发。");
     return;
   }
 
-  /* ---------- 3. push（直连优先，失败才回落代理） ---------- */
+  /* ---------- 3. 取凭据（只在内存）——提前：核对远端不再依赖 git ls-remote ---------- */
+  const cred = execFileSync("git", ["credential", "fill"],
+    { input: "protocol=https\nhost=github.com\n\n", encoding: "utf-8" });
+  const token = (cred.match(/^password=(.+)$/m) || [])[1];
+  if (!token) die("没取到 GitHub 凭据（Git Credential Manager 里没有？）");
+
+  const apiCall = async (method, url, payload) => {
+    const res = await fetch(url, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "User-Agent": "quaiwei-publish",
+        ...(payload ? { "Content-Type": "application/json" } : {}),
+      },
+      body: payload ? JSON.stringify(payload) : undefined,
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`${method} ${url} → ${res.status} ${text.slice(0, 300)}`);
+    return JSON.parse(text);
+  };
+
+  /* ---------- 4. push（远端已同步则跳过） ---------- */
   log(`\n== [3] push ${branch} ==`);
   const localHead = git(["rev-parse", "HEAD"]);
-  const remoteBefore = (git(["ls-remote", "origin", `refs/heads/${branch}`]).split(/\s/)[0] || "");
+  const remoteRef = async () =>
+    (await apiCall("GET", `https://api.github.com/repos/${REPO}/git/ref/heads/${branch}`)).object.sha;
+  const remoteBefore = await remoteRef();
   if (remoteBefore === localHead) {
     log("  远端已是最新，跳过 push");
   } else {
@@ -131,33 +159,11 @@ const probeTcp = (host, port, ms = 8000) =>
         log(`  ✗ ${label} 失败，换下一条路`);
       }
     }
-    if (!ok) die("两条路都失败。不要改用其它协议/上游绕过，先修网络；核对远端用 `git ls-remote`（别信 API 的 commits 接口，有缓存）");
+    if (!ok) die("push 失败。可改用 `node scripts/_api-push.cjs`（Git Data API）推完再回来发版；不要改用其它协议/上游绕过");
   }
-  const remoteSha = git(["ls-remote", "origin", `refs/heads/${branch}`]).split(/\s/)[0];
+  const remoteSha = await remoteRef();
   if (remoteSha !== localHead) die(`推送后远端 ${remoteSha.slice(0, 7)} ≠ 本地 HEAD ${localHead.slice(0, 7)}，别继续发 Release`);
-  log(`  ✅ 远端 ${branch} = ${remoteSha.slice(0, 7)}`);
-
-  /* ---------- 4. 取凭据（只在内存） ---------- */
-  const cred = execFileSync("git", ["credential", "fill"],
-    { input: "protocol=https\nhost=github.com\n\n", encoding: "utf-8" });
-  const token = (cred.match(/^password=(.+)$/m) || [])[1];
-  if (!token) die("没取到 GitHub 凭据（Git Credential Manager 里没有？）");
-
-  const apiCall = async (method, url, payload) => {
-    const res = await fetch(url, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/vnd.github+json",
-        "User-Agent": "quaiwei-publish",
-        ...(payload ? { "Content-Type": "application/json" } : {}),
-      },
-      body: payload ? JSON.stringify(payload) : undefined,
-    });
-    const text = await res.text();
-    if (!res.ok) throw new Error(`${method} ${url} → ${res.status} ${text.slice(0, 300)}`);
-    return JSON.parse(text);
-  };
+  log(`  ✅ 远端 ${branch} = ${remoteSha.slice(0, 7)}（经 API 核对，不依赖 git ls-remote）`);
 
   /* ---------- 5. 建 Release（幂等） ---------- */
   log(`\n== [4] Release ${TAG} ==`);
