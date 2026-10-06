@@ -307,6 +307,12 @@ dev 依赖 → `continue-on-error` 只提示（dev 漏洞硬拦会让作业长�
   双口径 `npm audit` 均 **0 vulnerabilities**。
 - `prettier --check` 实测 57 处不合规（**存量漂移**：fmt 脚本一直有、但 lint/CI 从未校验格式），
   一次性格式化 53 文件（+548/−275，纯排版零语义），改后 tsc/lint/1312 用例/check:release/build 全绿。
+- **顺带实测：挂着很久的「PPL wasm 缺失」待办已消失**。`electron-dist/…/resources/app/assets/`
+  下实测存在 `ort-wasm-simd-threaded.asyncify-CxOG5pUO.wasm`（**26.9 MB**），
+  而 v0.9.19~v0.9.23 的产物里没有它 ⇒ README 承诺的「PPL 下载完成后离线可用」重新有了支撑。
+  ⚠️ **因果关系是推断而非实测**：它与本节的 transformers 4.2.0→4.3.0 升级同批出现（同口径体积差
+  186.7 − 161.1 = 25.6 MB，与该文件大小吻合），但**没有**做「降回 4.2.0 重打包」的对照实验。
+  ⇒ 体积基线由此更新为 `resources/app` **186.7 MB** / 整包（裁剪后）**488.6 MB**（旧记 161.1 / 443.4）。
 
 ### ⑨ 吸收对标优点：SKILL.md 薄壳 + 对标表复测（2026-10-05）
 
