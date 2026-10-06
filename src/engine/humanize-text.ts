@@ -8,9 +8,38 @@ export function isCJK(ch: string): boolean {
   return (c >= 0x4e00 && c <= 0x9fff) || (c >= 0x3400 && c <= 0x4dbf);
 }
 
-/** 按中英文标点切句，保留分隔符 */
+/** 按中英文标点切句，保留分隔符
+ *
+ * v0.9.24：**切点不得落在 URL 内部**。
+ *
+ * 原实现按 `[。！？!?；;\n]+` 直接切，于是
+ *
+ *     https://example.com/docs/api?id=42&v=2
+ *                  ↑ 这个 ? 被当成中文问号
+ *
+ * URL 从中间被腰斩成两句（`…/api?` + `id=42&v=2`）。
+ * 后果不是「句读奇怪」而是**链接彻底失效**——重排后两半还会各奔东西
+ * （实测 seed=1：`id=42&v=2` 被搬到句首，原位只剩 `https://example.com/docs/api?`）。
+ *
+ * 触发条件：段落里有 **≥4 句**（`shuffleSentencesSafe` 的门槛）+ 强度 ≥0.55。
+ *
+ * 修法：**先把 URL 段替换成占位符，切完再还原**。
+ * 这是最窄的修复——只对 URL 生效，不动原有的切句语义（中文问号照切）。
+ */
 export function splitSentences(text: string): string[] {
-  const parts = text.split(/([。！？!?；;\n]+)/);
+  // v0.9.24：URL / 邮箱等结构化串整体保护，避免被标点切碎
+  //
+  // ⚠️ 占位符**不能用私用区码点**——那样编辑器和 git 会把整个 .ts 当二进制文件，
+  //   diff 全废、prettier 也跳��。改用全角私用字符区的低位段 U+E000~U+E00F，
+  //   它在 UTF-8 里是 3 字节正常文本，且不与任何标点冲突。
+  //   实测：私用区 U+F0000 版本写入后 `read` 工具直接报「binary file」，已弃用。
+  const shielded: string[] = [];
+  const masked = text.replace(/(?:https?:\/\/|www\.)[!-~]+|[\w.+-]+@[\w.-]+\.\w+/g, (m) => {
+    shielded.push(m);
+    // 全角私用区低位段：不含任何标点，split 不会切开它
+    return String.fromCharCode(0xe000 + shielded.length - 1);
+  });
+  const parts = masked.split(/([。！？!?；;\n]+)/);
   const out: string[] = [];
   for (let i = 0; i < parts.length; i++) {
     const seg = parts[i];
@@ -23,7 +52,14 @@ export function splitSentences(text: string): string[] {
       out.push(seg);
     }
   }
-  return out.map((s) => s.trim()).filter((s) => s.length > 0);
+  // 还原占位符
+  return out
+    .map((s) => {
+      const t = s.trim();
+      if (!/[\uE000-\uE00F]/.test(t)) return t;
+      return t.replace(/[\uE000-\uE00F]/g, (c) => shielded[c.charCodeAt(0) - 0xe000] ?? "");
+    })
+    .filter((s) => s.length > 0);
 }
 
 export function pick<T>(rng: () => number, arr: T[]): T {

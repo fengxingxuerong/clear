@@ -212,13 +212,26 @@ function boostBurstinessInBlock(
     if (cur.cv >= targetCv) break;
     const sents = splitSentences(working);
     // P5-B 放宽切句门槛 L≥10（原为 14），D2 对话体有更多中等句可供"塞极短锚"
+    //
+    // v0.9.24：**含 URL 的句子必须排除**。L 的算法只剔中文标点、不剔 ASCII，
+    // 于是 `https://example.com/docs/api?id=42&v=2` 的 L≈42 ≥ 10 被选为候选，
+    // 锚点直接插进 URL 内部：
+    //     https://example.com/docs/api?id=42&v=2
+    //   → https://example.com/docs/api好吧?id=42&v=2
+    // 这不是语病，是**数据损坏**——链接彻底失效。
+    // 实测 30/30 种子稳定复现，触发门槛为 intensity ≥ 0.5
+    // （orchestrator 的 `if (intensity >= 0.5)` 才进 structuralShuffleParagraph）。
+    //
+    // 为什么邮箱/版本号不用管：它们的 L 通常 < 10，进不了候选池（实测 0/30）。
+    // 这里只挡 URL 是**最窄的修复**——判据越宽越容易误伤正常句子。
+    const URL_IN_SENT_RE = /(?:https?:\/\/|www\.)[!-~]+/i;
     const withIdx = sents
       .map((s, i) => ({
         s,
         i,
         L: s.replace(/[\s。！？!?…—\-，、；：""''「」（）《》【】]/g, "").length,
       }))
-      .filter((x) => x.L >= 10 && !endsWithParticle(x.s));
+      .filter((x) => x.L >= 10 && !endsWithParticle(x.s) && !URL_IN_SENT_RE.test(x.s));
     if (withIdx.length < 1) break;
     withIdx.sort((a, b) => b.L - a.L);
     // 优先切第 2/3 长句，避免同一句反复切
