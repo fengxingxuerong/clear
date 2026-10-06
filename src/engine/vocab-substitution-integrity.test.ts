@@ -55,10 +55,11 @@
  *   ③ 分类登记：已确证的合法项显式登记，避免后人误判后误删
  */
 import { describe, it, expect } from "vitest";
-import { VOCAB } from "./humanize-vocab";
+import { VOCAB, VOCAB_ENTRIES } from "./humanize-vocab";
 // DIALECT_VOCAB 的定义处在 humanize-zhuque.ts（humanize-data 只是转导出，
 // 但转出口在 humanize-vocab 里不存在——直接引源文件，少一跳少一个歧义）
 import { DIALECT_VOCAB } from "./humanize-zhuque";
+import { GUARD_AFTER, GUARD_BEFORE } from "./humanize-guard";
 import { humanize } from "./humanize";
 
 /* ------------------------------------------------------------------ *
@@ -446,5 +447,109 @@ describe("递进连词被改成限定（端到端，v0.9.24 实测缺陷）", ()
     ).not.toContain("不只是");
     // 剩余替身必须都保持递进语义，且不少于 2 个（保证 pick 的多样性）
     expect(VOCAB["不仅"].length).toBeGreaterThanOrEqual(2);
+  });
+
+  /* ============ 守卫表自身的效力与覆盖（前缀链维度） ============ */
+  /**
+   * v0.9.24 —— 量化「`PARTICLE_PREFIX_BLOCK` 能否通用化」的结论。
+   *
+   * 背景：上一提交加的 `PARTICLE_PREFIX_BLOCK` 只认「了/着」结尾的词条。
+   * 自然要问：能不能改成**通用规则**——任何守卫条目的前缀链都继承其守卫？
+   *
+   * 探针实测结论（23 个守卫词条里，词表内的 20 个逐个查）：
+   *
+   * | 维度 | 实测 |
+   * |---|---|
+   * | 词表内守卫词条 | 20 条（GUARD_AFTER 16 + GUARD_BEFORE 7，去重） |
+   * | 其中有前缀链的 | **仅 4 条**：发挥着/发挥了/取得了/展现出了 |
+   * | 这 4 条的共同点 | **恰好都以「了/着」结尾** ⇒ 已被现有规则覆盖 |
+   * | 前缀在正常语境 | 5/10 仍可替换（无误伤） |
+   *
+   * 所以**不需要通用化**：有前缀链的守卫条目全部落在现有判据内。
+   * 这条断言的作用是**在词表变动时报警**——若将来新增一个以别的字结尾的
+   * 守卫词条且带前缀链，这里会红，提示该补 `PARTICLE_PREFIX_BLOCK` 了。
+   */
+  it("守卫条目带前缀链的，必须都已落进「了/着」类别规则（否则该补前缀闭包）", () => {
+    const keys = new Set(VOCAB_ENTRIES.map(([k]) => k));
+    const allGuarded = [
+      ...new Set([...Object.keys(GUARD_AFTER), ...Object.keys(GUARD_BEFORE)]),
+    ].filter((k) => keys.has(k));
+    // 有前缀链（词表里存在以它开头的更短源词）的守卫词条
+    const withPrefix = allGuarded.filter((k) => [...keys].some((x) => x !== k && k.startsWith(x)));
+    // 现有前缀闭包只认「了/着」，所以这些必须都以「了/着」结尾
+    const uncovered = withPrefix.filter((k) => !"了着".includes(k[k.length - 1]));
+    expect(
+      uncovered,
+      `这 ${uncovered.length} 条守卫词条有前缀链但不在「了/着」类别规则内：${JSON.stringify(uncovered)}\n` +
+        `前缀会让位失效——请把它并入 \`PARTICLE_PREFIX_BLOCK\` 的判据，或说明为什么不需要。`,
+    ).toEqual([]);
+  });
+
+  /**
+   * 守卫表**逐条生效**门禁：每个词表内的守卫词条，在它守卫的语境里必须真的被拦。
+   *
+   * 为什么必须逐条跑而不靠几条抽样断言：`humanize-quality-v0922` 的语料是**手写**的，
+   * 某个源词没出现在语料里，它的守卫写错成什么样都不会被发现。
+   * 守卫表有 20 条词表内条目，手写语料不可能全覆盖。
+   *
+   * ⚠️ 探针方法论（本轮又踩了一次）：
+   *   `GUARD_BEFORE` 判的是**左邻**（`before.endsWith(g)`），
+   *   `GUARD_AFTER` 判的是**右邻**（`context` 8 字窗口包含）。
+   *   第一版把守卫词统一塞到右邻，于是 4 条 `GUARD_BEFORE` 条目**全部假报「0/8 放行」**——
+   *   看起来像四个大漏洞，实际是探针把守卫词放错了侧。
+   *   **守卫表的两个方向不能共用一套探针。**
+   *
+   * ⚠️ 第二个坑，更隐蔽：**句式里不能带「我们决定」这个使役前缀**。
+   *   它自己会触发别的守卫（判据里认「决定/要/得…」这类使役动词），
+   *   于是即使把 `GUARD_AFTER.价值` 整条删掉，探针仍然报 8/8 拦下——
+   *   **门禁看起来在生效，实际测的是另一个守卫**。
+   *   发现方式：故意删掉一条守卫条目跑一遍，**仍然是绿的**。
+   *   所以这条门禁的敏感度验证必须**清空整张 `GUARD_AFTER`**：
+   *   实测立刻变红并点名（与「不光仅」那条一起红）。
+   */
+  it("守卫表逐条生效：GUARD_BEFORE 左邻语境 8/8 拦下", () => {
+    const keys = new Set(VOCAB_ENTRIES.map(([k]) => k));
+    const failures: string[] = [];
+    let checked = 0;
+    for (const [from, guards] of Object.entries(GUARD_BEFORE)) {
+      if (!keys.has(from)) continue;
+      const g = guards.find((x) => /[\u4e00-\u9fa5]{2,}/.test(x));
+      if (!g) continue; // 单字守卫（如「可」「是」）另由各自用例覆盖
+      checked++;
+      // ⚠️ 守卫词必须放**左邻**——GUARD_BEFORE 判 `before.endsWith(g)`
+      const src = `${g}${from}这件事。`;
+      const blocked = Array.from({ length: 8 }, (_, seed) =>
+        humanize(src, { intensity: 0.9, seed }),
+      ).filter((out) => out.includes(from)).length;
+      if (blocked !== 8) failures.push(`${from}（左邻「${g}」）：只拦下 ${blocked}/8`);
+    }
+    expect(
+      failures,
+      `${failures.length}/${checked} 条守卫未生效：\n  ${failures.join("\n  ")}`,
+    ).toEqual([]);
+    expect(checked, "守卫词表在词表内的中文长守卫词条太少，扫不到东西").toBeGreaterThan(0);
+  });
+
+  it("守卫表逐条生效：GUARD_AFTER 右邻语境 8/8 拦下", () => {
+    const keys = new Set(VOCAB_ENTRIES.map(([k]) => k));
+    const failures: string[] = [];
+    let checked = 0;
+    for (const [from, guards] of Object.entries(GUARD_AFTER)) {
+      if (!keys.has(from)) continue;
+      const g = guards.find((x) => /[\u4e00-\u9fa5]{2,}/.test(x));
+      if (!g) continue;
+      checked++;
+      // ⚠️ 守卫词必须放**右邻**——GUARD_AFTER 判 `context.slice(0,8).includes(g)`
+      const src = `我${from}${g}这件事。`;
+      const blocked = Array.from({ length: 8 }, (_, seed) =>
+        humanize(src, { intensity: 0.9, seed }),
+      ).filter((out) => out.includes(from)).length;
+      if (blocked !== 8) failures.push(`${from}（右邻「${g}」）：只拦下 ${blocked}/8`);
+    }
+    expect(
+      failures,
+      `${failures.length}/${checked} 条守卫未生效：\n  ${failures.join("\n  ")}`,
+    ).toEqual([]);
+    expect(checked, "守卫词表在词表内的中文长守卫词条太少，扫不到东西").toBeGreaterThan(0);
   });
 });
