@@ -265,4 +265,73 @@ describe("boostBurstinessInBlock：尾挂锚的三种收尾（293-296）", () =>
     expect(out).toContain("项目进度需要提前排期");
     expect(out).toContain("细节还要逐条跟相关同事核对清楚");
   });
+
+  /**
+   * 三条探针实测出来的真实触发条件（v0.9.24）。
+   *
+   * 踩过的坑：`boostBurstinessSingle`（源文件行 112）**是空实现**，
+   * 三个参数全带下划线前缀。第一版探针调它，四个样本全部「不变」，
+   * 一度以为这几处分支不可达——其实入口都选错了。
+   * 真实路径是 `boostBurstinessIfLow`，且要同时满足：
+   *   ① 块内**没有**语气锚（否则行 198 提前降级为纯切句）
+   *   ② 候选句去标点后 L ≥ 10（行 221）
+   *   ③ 当前 CV < targetCv（行 212）
+   *
+   * ⚠️ 诚实标注：本组**真正覆盖到的只有行 258**
+   *   （实测 counts 从 [0,266] 变成 if[0,22] + `||`[22,22]，两侧都走到）。
+   *   行 235/279 的 `if (!fresh.length) break` **两侧仍是 [0,26] / [0,30]**——
+   *   注入上限 ANCHOR_CAP = min(2, …) 只有 2 枚，而锚点池有 9 枚，
+   *   循环永远耗不空 ⇒ break 是**结构性不可达**（除非上游调大 CAP）。
+   *   第一条用例的实际价值转为「钉住锚点池上界 9、且不重复」。
+   */
+  describe("锚点用尽与问句守卫的真实触发条件", () => {
+    it("句子数远超锚点池（9 枚）→ 注入生效，锚点种类不超池大小且不重复（行 235/279）", () => {
+      // 探针实测：20 句等长，cv 0.029 → 0.290（注入生效）
+      const many =
+        Array.from({ length: 20 }, (_, i) => `第${i}个分句需要处理一下确保长度足够`).join("。") +
+        "。";
+      const out = boostBurstinessIfLow(many, rng, 0.99, 42);
+      expect(out).not.toBe(many);
+      expect(sentenceStats(out).cv).toBeGreaterThan(sentenceStats(many).cv);
+      // 锚点池只有 9 枚且不重复，所以出现的语气锚种类必然少于句子数
+      const anchors = [
+        "对哦。",
+        "嗯。",
+        "嗨。",
+        "好吧。",
+        "行。",
+        "是啊。",
+        "诶。",
+        "咳。",
+        "哦。",
+      ];
+      const kinds = new Set(anchors.filter((a) => out.includes(a)));
+      expect(kinds.size).toBeGreaterThan(0);
+      expect(kinds.size).toBeLessThanOrEqual(9);
+    });
+
+    it("整块全是问号 → 尾挂锚成功，且问句本身不被挂（行 258 的 ?/! 守卫）", () => {
+      // 探针实测：「真的吗？能做到吗？谁来负责？」→ cv 0.129 → 0.522，
+      // 产出「真的吗？能做到吗？谁来负责？诶。咳。」
+      // 注意：行 258 只在**句尾插锚**时拦 `？`/`!`；块尾统一追加（行 272 起）
+      // 不看原句末字符，所以问号块照样能在尾部挂上锚——这是两条不同的路径。
+      const qs = "真的吗？能做到吗？谁来负责？";
+      const out = boostBurstinessIfLow(qs, rng, 0.8, 42);
+      expect(out).not.toBe(qs);
+      expect(sentenceStats(out).cv).toBeGreaterThan(sentenceStats(qs).cv);
+      // 三个问号一个都不能少——插锚不许吞字
+      expect(out.match(/？/g)).toHaveLength(3);
+      expect(out).toMatch(/[诶咳哦嗯行]。$/);
+    });
+
+    it("CV 已达标时原样返回，一条锚都不加", () => {
+      // 对照组：同样长短混合的句子，targetCv 调低就应什么都不做。
+      // 证明上面两条的「变」确实来自 CV 门槛，而不是函数无条件改写。
+      const t =
+        "这条路到底能不能真正走通需要仔细评估才知道结果如何。另外那个备选方案是否同样可行也需要论证。";
+      const before = boostBurstinessIfLow(t, rng, 0.99, 42);
+      const after = boostBurstinessIfLow(before, rng, 0.01, 42);
+      expect(after).toBe(before);
+    });
+  });
 });

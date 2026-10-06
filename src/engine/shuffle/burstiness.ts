@@ -232,6 +232,11 @@ function boostBurstinessInBlock(
           : withIdx[0];
     const target = choice;
     const fresh = ULTRA_SHORT_ANCHORS.filter((a) => !usedAnchors.has(a));
+    // ⚠️ 这行的 break 目前**不可达**（v0.9.24 核实）：ULTRA_SHORT_ANCHORS 有 9 枚，
+    // 而本轮注入上限 ANCHOR_CAP = min(2, max(1, ceil(maxCuts/4))) 最多 2 枚，
+    // usedAnchors 永远耗不空 9 枚池子。行 279 尾挂锚处同理。
+    // 保留理由：CAP 是配置量，一旦调大（或池子被裁剪）这行就是必要的护栏。
+    // 与 structure.ts:744 同类——属有意冗余，不是遗忘。
     if (!fresh.length) break;
     const anchorFull = fresh[Math.floor(rng() * fresh.length)];
     usedAnchors.add(anchorFull);
@@ -276,6 +281,7 @@ function boostBurstinessInBlock(
     for (let i = 0; i < tails; i++) {
       // 同块去重：老实现两次随机可抽中同一锚，挂出「是啊。是啊。」复读串
       const fresh = ULTRA_SHORT_ANCHORS.filter((a) => !usedAnchors.has(a));
+      // ⚠️ 同上：ANCHOR_CAP+1 最多 3 枚，池子 9 枚 ⇒ 这行 break 当前不可达（v0.9.24 核实）
       if (!fresh.length) break;
       const a = fresh[Math.floor(rng() * fresh.length)];
       usedAnchors.add(a);
