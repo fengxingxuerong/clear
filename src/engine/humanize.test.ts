@@ -125,11 +125,16 @@ describe("humanize 引擎", () => {
     it("0.001 就已经改写——门槛不是「很小强度≈不改」", () => {
       const zero = humanize(T, { intensity: 0, seed: 42 });
       expect(zero).toBe(T); // 0 是硬短路
-      const tiny = humanize(T, { intensity: 0.001, seed: 42 });
-      expect(tiny).not.toBe(T); // 但 0.001 已经越过替换阈值
+      // ⚠️ 这里**不能**继续用 T：v0.9.24 加了 `GUARD_AFTER.不仅 = ["仅"]`
+      // 后，「仅仅」开头的 T 被完全保护，任何强度都不会改写它的头部——
+      // 那会让本用例从「门槛很陡」变成「守卫很严」，测的东西就变了。
+      // 换成不含「仅仅」的等价句，只测门槛本身。
+      const T2 = "这不仅是一次尝试，而且是诸多方案中颇具效率的一种路径选择。";
+      const tiny = humanize(T2, { intensity: 0.001, seed: 42 });
+      expect(tiny).not.toBe(T2); // 但 0.001 已经越过替换阈值
       // 只钉「第一句头部被改写过」这一件事，不断言具体在哪一个字上、
       // 也不断言替换了几个（v0.9.24 实测教训，见上方注释）。
-      expect(tiny.slice(0, 4), `产出「${tiny}」`).not.toBe(T.slice(0, 4));
+      expect(tiny.slice(0, 4), `产出「${tiny}」`).not.toBe(T2.slice(0, 4));
     });
 
     it("负强度与 0 完全等价——负数不会被当成放大强度", () => {
