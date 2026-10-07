@@ -3,7 +3,7 @@ name: qu-ai-wei
 description: 去 AI 味（简体中文）——调用本仓库自带的本地离线引擎（零成本、不联网）或可选 LLM 深度闭环，把 AI 写的中文改得更像人写的，并输出前后 AI 味评分与逐条痕迹报告。当用户要求「降 AI 率 / 去 AI 味 / 去 AIGC 痕迹 / 让这段更像人写的 / 自检朱雀类检测」时使用。
 license: MIT
 metadata:
-  version: 0.9.24
+  version: 0.9.25
   repo: https://github.com/fengxingxuerong/clear
 ---
 
