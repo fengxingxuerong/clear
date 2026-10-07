@@ -25,6 +25,7 @@
  * 返回 { genre, confidence, rawFeatures }，BenchmarkPanel 用 genre 选下拉、confidence 展示徽章。
  */
 import { classifyExpositionScore } from "./humanize-shuffle.ts";
+import { guardFor } from "./text-shield";
 
 export type AutoGenre = "main" | "narrative" | "dialogue";
 
@@ -62,13 +63,23 @@ export interface GenreResult {
 /** 极简中文分句子（避免对 splitSentences 的循环依赖，分类器要能单独使用）*/
 function splitSentencesLight(text: string): string[] {
   if (!text) return [];
+  // v0.9.25：跳过落在 URL/邮箱内部的切点（与 humanize-text.ts 同一判据）。
+  //
+  // ⚠️ **收益有限，如实登记**：含 URL 段落此前会多切出一句，修复后句数 5→4，
+  // 但端到端 `classifyGenre` 的**输出未变**（探针 `artifacts/_probe-splitsent-fork.ts`
+  // 实测样本1 修复前后同为 `dialogue/0.615`）——该样本的体裁由引号/短句特征决定，
+  // 句数只是分母。同理 detector 侧 detectAI 17→16。
+  // 探针表里「原样 vs 把 URL 整体删掉」的大差异（genre → narrative/0.750）
+  // 主要来自 **URL 字符本身**（文本变短、pureChars 变小），不是切句贡献，别算在这条账上。
+  // 保留此修改的理由是**统计口径正确 + 消除四份切句的分叉**，不是它能修体裁误判。
+  const guard = guardFor(text);
   // 先在标点处切开，保留结尾标点
   const pieces: string[] = [];
   let buf = "";
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
     buf += ch;
-    if ("。！？!?".includes(ch) || ch === "…") {
+    if (!guard(i) && ("。！？!?".includes(ch) || ch === "…")) {
       // 再吸收可能的叠词（……、！！、？？）
       let j = i + 1;
       while (j < text.length && "。！？!?…".includes(text[j])) {

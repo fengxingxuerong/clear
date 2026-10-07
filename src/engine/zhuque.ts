@@ -37,6 +37,7 @@ import {
   reModalZhuque,
   reIdiomLike,
 } from "./zhuque-lexicon";
+import { guardFor } from "./text-shield";
 
 /* ----------------------------- 类型 ----------------------------- */
 
@@ -186,6 +187,37 @@ function countRe(text: string, re: RegExp): number {
   return (text.match(new RegExp(re.source, re.flags.replace("g", "") + "g")) || []).length;
 }
 
+/**
+ * 与 `countRe` 等价，但要求传入**已带 g 标志的预编译正则** —— 省掉每次调用重建 RegExp。
+ *
+ * 只给热路径用（`scoreSentence` 逐句调用）。篇章级那几处仍走 `countRe`，保持原样。
+ *
+ * 安全性：`String.prototype.match` 在 global 模式下会先把 `lastIndex` 置 0 再匹配，
+ * 所以共享同一个 RegExp 实例不会像 `.test()` 那样留下状态（v0.9.21 在 detector 踩过那个坑）。
+ */
+function countG(text: string, reG: RegExp): number {
+  return (text.match(reG) || []).length;
+}
+
+/**
+ * 逐句热路径的预编译表。
+ *
+ * v0.9.25：`scoreSentence` 原本对**每句**跑 `new RegExp(p)`（FORMULAIC 42 + OFFICIAL 46
+ * + SKELETON 13 ≈ 101 次）+ `countRe` 内部再重建 5 次 —— 300 句实测 **31800 次编译**。
+ * 词表是模块级常量、运行期不变 ⇒ 提到模块级编译一次即可。
+ *
+ * 实测（`artifacts/_probe-regex-zhuque.ts`）：300 句下该循环 6ms → 2ms，
+ * 占 `detectZhuque` 约 36%。**等价优化**：正则源与 flag 逐字不变，仅复用实例。
+ */
+const FORMULAIC_RES: RegExp[] = FORMULAIC.map((p) => new RegExp(p));
+const OFFICIAL_RES: RegExp[] = OFFICIAL.map((p) => new RegExp(p));
+const SKELETON_RES: RegExp[] = SKELETON.map((p) => new RegExp("^\\s*" + p));
+const PERSONAL_G = new RegExp(PERSONAL.source, "g");
+const CONCRETE_G = new RegExp(CONCRETE.source, "g");
+const MODAL_G = new RegExp(MODAL.source, "g");
+const VAGUE_SUBJECT_G = new RegExp(VAGUE_SUBJECT.source, "g");
+const COLLOQUIAL_G = new RegExp(COLLOQUIAL.source, "g");
+
 interface Sent {
   text: string;
   start: number;
@@ -195,10 +227,15 @@ interface Sent {
 /** 切句并保留原文偏移，供高亮用 */
 function splitSentences(text: string): Sent[] {
   const out: Sent[] = [];
+  // v0.9.25：跳过落在 URL/邮箱内部的切点（与 humanize-text.ts 同一判据）。
+  // 这里要保留原文偏移供 UI 高亮，所以用「区间表」而不是占位符——占位符会把
+  // 多字符压成 1 字符，偏移全乱。
+  const guard = guardFor(text);
   const re = /[。！？!?；;]/g;
   let last = 0;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
+    if (guard(m.index)) continue;
     const seg = text.slice(last, m.index + 1);
     if (seg.replace(/[\s。！？!?；;，,、]/g, ""))
       out.push({ text: seg, start: last, end: m.index + 1 });
@@ -225,24 +262,24 @@ function scoreSentence(s: string): SentenceScore {
   let risk = 0;
 
   // 1. 套话/模板
-  for (const p of FORMULAIC) {
-    if (new RegExp(p).test(s)) {
+  for (const re of FORMULAIC_RES) {
+    if (re.test(s)) {
       risk += 30;
       reasons.push("AI 套话/模板句");
       break;
     }
   }
   // 2. 公文黑话
-  for (const p of OFFICIAL) {
-    if (new RegExp(p).test(s)) {
+  for (const re of OFFICIAL_RES) {
+    if (re.test(s)) {
       risk += 16;
       reasons.push("公文/黑话用词");
       break;
     }
   }
   // 3. 提纲骨架开头
-  for (const p of SKELETON) {
-    if (new RegExp("^\\s*" + p).test(s)) {
+  for (const re of SKELETON_RES) {
+    if (re.test(s)) {
       risk += 28;
       reasons.push("提纲骨架开头");
       break;
@@ -288,12 +325,12 @@ function scoreSentence(s: string): SentenceScore {
     reasons.push("三段并列句式");
   }
   // 11. 泛指主语
-  if (countRe(s, VAGUE_SUBJECT) > 0) {
+  if (countG(s, VAGUE_SUBJECT_G) > 0) {
     risk += 10;
     reasons.push("泛指主语（我们/人们）");
   }
   // 12. 情态词密集
-  const modalHits = countRe(s, MODAL);
+  const modalHits = countG(s, MODAL_G);
   if (modalHits >= 2) {
     risk += 8;
     reasons.push("情态词密集");
@@ -302,16 +339,16 @@ function scoreSentence(s: string): SentenceScore {
   // —— 真人痕迹（减风险）——
   // 注意：泛指主语（我们要/人们/大家…）不算主观视角，AI 论述文里最常见，
   // 若这里减分会把典型 AI 句误判成真人句（实测踩到，故先判泛指再加减分）
-  const vague = countRe(s, VAGUE_SUBJECT) > 0;
-  if (!vague && countRe(s, PERSONAL) > 0) {
+  const vague = countG(s, VAGUE_SUBJECT_G) > 0;
+  if (!vague && countG(s, PERSONAL_G) > 0) {
     risk -= 20;
     reasons.push("有第一人称/主观视角");
   }
-  if (countRe(s, CONCRETE) > 0) {
+  if (countG(s, CONCRETE_G) > 0) {
     risk -= 12;
     reasons.push("有具体细节/数字");
   }
-  if (countRe(s, COLLOQUIAL) > 0) {
+  if (countG(s, COLLOQUIAL_G) > 0) {
     risk -= 10;
     reasons.push("有口语语气词");
   }

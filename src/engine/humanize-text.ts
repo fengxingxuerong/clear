@@ -3,6 +3,11 @@
  * 垫词/句式开头/机械套话名单与评分排除集。
  */
 /* ----------------------------- 工具函数 ----------------------------- */
+import { guardFor } from "./text-shield";
+
+/** 切句分隔符（与原 `[。！？!?；;\n]+` 逐字等价，抽成常量避免逐字符跑正则） */
+const DELIM_CHARS = "。！？!?；;\n";
+
 export function isCJK(ch: string): boolean {
   const c = ch.charCodeAt(0);
   return (c >= 0x4e00 && c <= 0x9fff) || (c >= 0x3400 && c <= 0x4dbf);
@@ -27,39 +32,34 @@ export function isCJK(ch: string): boolean {
  * 这是最窄的修复——只对 URL 生效，不动原有的切句语义（中文问号照切）。
  */
 export function splitSentences(text: string): string[] {
-  // v0.9.24：URL / 邮箱等结构化串整体保护，避免被标点切碎
+  // v0.9.25：URL / 邮箱等结构化串整体保护，避免被标点切碎。
   //
-  // ⚠️ 占位符**不能用私用区码点**——那样编辑器和 git 会把整个 .ts 当二进制文件，
-  //   diff 全废、prettier 也跳��。改用全角私用字符区的低位段 U+E000~U+E00F，
-  //   它在 UTF-8 里是 3 字节正常文本，且不与任何标点冲突。
-  //   实测：私用区 U+F0000 版本写入后 `read` 工具直接报「binary file」，已弃用。
-  const shielded: string[] = [];
-  const masked = text.replace(/(?:https?:\/\/|www\.)[!-~]+|[\w.+-]+@[\w.-]+\.\w+/g, (m) => {
-    shielded.push(m);
-    // 全角私用区低位段：不含任何标点，split 不会切开它
-    return String.fromCharCode(0xe000 + shielded.length - 1);
-  });
-  const parts = masked.split(/([。！？!?；;\n]+)/);
+  // 承载方式从「占位符 + 还原」换成 `text-shield.ts` 的**区间表**：
+  // 占位符方案只有 U+E000~U+E00F 共 16 个槽位，第 17 个结构化串会溢出成乱码并**永久丢失**
+  // （实测 `artifacts/_probe-shield-cap.ts`：40 个 URL 只剩 16 个）。区间表不改动原文本，无上限。
+  //
+  // 语义与占位符版**逐字一致**：切点仍是 `[。！？!?；;\n]+`，连续分隔符整体拼到上一句，
+  // 末尾统一 trim + 去空。区别只有「落在 URL/邮箱内部的切点被跳过」。
+  const guard = guardFor(text);
   const out: string[] = [];
-  for (let i = 0; i < parts.length; i++) {
-    const seg = parts[i];
-    if (!seg) continue;
-    if (/^[。！？!?；;\n]+$/.test(seg)) {
-      // 分隔符，拼到上一句
-      if (out.length) out[out.length - 1] += seg;
-      else out.push(seg);
-    } else {
-      out.push(seg);
+  let buf = "";
+  let i = 0;
+  while (i < text.length) {
+    if (!guard(i) && DELIM_CHARS.includes(text[i])) {
+      // 连续分隔符（……、！！、\n\n 等）整体吃掉，拼到当前句尾
+      let j = i;
+      while (j < text.length && !guard(j) && DELIM_CHARS.includes(text[j])) j++;
+      buf += text.slice(i, j);
+      out.push(buf);
+      buf = "";
+      i = j;
+      continue;
     }
+    buf += text[i];
+    i++;
   }
-  // 还原占位符
-  return out
-    .map((s) => {
-      const t = s.trim();
-      if (!/[\uE000-\uE00F]/.test(t)) return t;
-      return t.replace(/[\uE000-\uE00F]/g, (c) => shielded[c.charCodeAt(0) - 0xe000] ?? "");
-    })
-    .filter((s) => s.length > 0);
+  if (buf) out.push(buf);
+  return out.map((s) => s.trim()).filter((s) => s.length > 0);
 }
 
 export function pick<T>(rng: () => number, arr: T[]): T {

@@ -34,6 +34,7 @@ import {
   reModalDetector,
   reIdiomLike,
 } from "./zhuque-lexicon";
+import { guardFor } from "./text-shield";
 
 /* ----------------------------- 类型 ----------------------------- */
 
@@ -104,11 +105,26 @@ const IDIOM_LIKE = reIdiomLike();
 /* ----------------------------- 工具 ----------------------------- */
 
 function splitSentences(text: string): string[] {
-  return text
-    .replace(/\s+/g, " ")
-    .split(/(?<=[。！？!?；;])/)
-    .map((s) => s.trim())
-    .filter((s) => s.replace(/[。！？!?；;，,、\s]/g, "").length > 0);
+  // v0.9.25：与 humanize-text.ts 同一份「切点不得落在 URL/邮箱内部」的判据。
+  // 此前这里按 `(?<=[。！？!?；;])` 直接切，URL 里的 `?` 会造出一个假句
+  // ⇒ 句数虚高、句长分布被歪曲（实测样本1：5 句 → 4 句）。
+  //
+  // ⚠️ **端到端收益如实登记**：修复后 detectAI 该样本 17 → 16，仅 1 分——
+  // 因为切句只喂句长类特征。探针表里「原样 vs 把 URL 整体删掉」的 17 vs 23
+  // 主要来自 URL 字符本身（文本变短），**不是**切句贡献。
+  // 纯中文语料修复前后完全一致（对照 24 = 24）⇒ 不会顶红漂移棘轮。
+  const flat = text.replace(/\s+/g, " ");
+  const guard = guardFor(flat);
+  const out: string[] = [];
+  let start = 0;
+  for (let i = 0; i < flat.length; i++) {
+    if (!guard(i) && "。！？!?；;".includes(flat[i])) {
+      out.push(flat.slice(start, i + 1));
+      start = i + 1;
+    }
+  }
+  if (start < flat.length) out.push(flat.slice(start));
+  return out.map((s) => s.trim()).filter((s) => s.replace(/[。！？!?；;，,、\s]/g, "").length > 0);
 }
 
 function splitParagraphs(text: string): string[] {
