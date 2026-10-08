@@ -44,7 +44,39 @@ COVERAGE_GATE_TIMEOUT_MS=8000 npx tsx scripts/coverage-gate.ts
 
 > 对照：`taskkill` 通道实测可 spawn（返回的是「进程不存在」而不是 EBUSY），所以杀进程树不受影响。
 
-### ⑤ 本次改动面
+### ⑤ 本次 `check:release` 没跑完 —— 13 条失败是环境限制，不是代码问题（如实登记）
+
+发版停在最后一步：门禁 exit 2。逐条查明，确认**与本次改动无关**。
+
+| 失败面                                                                | 条数 | 现象                                        |
+| --------------------------------------------------------------------- | ---- | ------------------------------------------- |
+| `scripts-logic.test.ts` 的 dirty / head 检查                           | 6    | `readGitState` 返回 `dirty=null`、`head=null` |
+| `humanize-cli-docx` / `verify-quality` / `zhuque-retro-backfill` 的「真起进程」用例 | 7    | 子进程 `status=-1`，压根没起来              |
+
+根因（实测，不是推断）：**本会话 Node 的同步 spawn 全部 `EBUSY`**。
+
+```
+spawnSync(node / cmd.exe / git)  →  EBUSY     // 同步，全灭
+spawn(node / cmd.exe / git)      →  正常      // 异步，三者都起得来且结果正确
+```
+
+对照实验见 `artifacts/_spawn-probe2.cjs`：同一进程里异步 spawn `git rev-parse HEAD` 返回
+`2f9819e…`，紧随其后的 `spawnSync(node)` 立刻 EBUSY。
+顺带：`taskkill` 的同步 spawn 又是不受影响的 —— 所以别用「同步一定被拦」这种一刀切结论。
+
+另有 `coverage/.tmp` 79 个分片被批量删除守卫掐住（阈值 50）⇒ vitest 收尾 Unhandled Error
+⇒ 覆盖报告没写出来 ⇒ 覆盖率门禁**按纪律判红**（这条红是对的，不许拿半截报告当依据）。
+
+**没做的两件事**（都是为了避免「为了让灯变绿而改测试」）：
+
+- 没把 4 个测试文件的 `spawnSync` 换成异步 spawn —— 那不是修缺陷，是给环境让路；
+- 没给 vitest 降并发去绕开 `.tmp` 的 50 文件阈值 —— 同理。
+
+**产物侧 `verify-pruned` 全绿**：[3] 版本一致 0.9.26、[4] 源码指纹一致（146 文件）、
+[5] 依赖链实测通过（transformers 936 个导出、Tensor 可实例化）。
+另跑 `npx vitest run`：1674 passed / **13 failed**，失败项与上表完全重合，无第四条原因。
+
+### ⑥ 本次改动面
 
 - `scripts/coverage-gate.ts` +50/-11（v0.9.25 发布后遗留的未提交修复 + 本次的双通道清理）
 - 版本号六处落点同步 0.9.25 → 0.9.26；`check:version` 6/6 全绿；tsc / eslint 均 0
