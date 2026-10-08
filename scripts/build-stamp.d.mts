@@ -38,7 +38,7 @@ export interface GitState {
  * 读盖章时刻的 git 状态。
  * @param root 仓库根目录
  */
-export function readGitState(root: string): GitState;
+export function readGitState(root: string): Promise<GitState>;
 
 /**
  * 逃生口判定：只认精确值 "1"（typo 一律退化成「不放行」这个安全侧）。

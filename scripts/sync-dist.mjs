@@ -67,7 +67,8 @@ try {
   const { fingerprint } = require2(join(electron, "build-fingerprint.cjs"));
   const fp = fingerprint(root);
   // 判定逻辑住在 build-stamp.mjs（纯函数、可单测），这里只负责「用」它
-  const gitState = readGitState(root);
+  // readGitState 是异步的（见 build-stamp.mjs：同步 spawn 在部分环境会被整体挡下）
+  const gitState = await readGitState(root);
   const head = gitState.head;
   const dirty = gitState.dirty;
   const dirtyFiles = gitState.files;

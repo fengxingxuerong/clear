@@ -12,7 +12,7 @@
 import { describe, it, expect, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { runSimple } from "./run-async";
 import { runQualityChecks, scanOutput, LEAK_WORDS } from "../scripts/verify-quality";
 import {
   scanVocabGrammar,
@@ -96,19 +96,24 @@ describe("词表配对卫生：接宾语即崩的替换必须被抓出", () => {
 const CLI = path.resolve(__dirname, "verify-quality.ts");
 const TSX = path.resolve(__dirname, "../node_modules/tsx/dist/cli.mjs");
 
-/** 真跑一次门禁脚本：返回退出码与合并输出（stdout+stderr） */
+/**
+ * 真跑一次门禁脚本：返回退出码与合并输出（stdout+stderr）
+ *
+ * ⚠️ 异步派生而非 `spawnSync`（2026-10-09 改的）：同步派生被环境挡下时会返回
+ * `status=-1`，而这条用例断言的是"退出码 0"——于是**环境限制会伪装成门禁判红**。
+ * 门禁的红必须是质量问题，不能是"进程没起来"。
+ */
 function runGate() {
-  const r = spawnSync(process.execPath, [TSX, CLI], { encoding: "utf8", timeout: 120000 });
-  return { code: r.status ?? -1, log: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+  return runSimple(process.execPath, [TSX, CLI], { timeoutMs: 120000 });
 }
 
 describe("质量门禁 CLI 入口（verify-quality.ts 顶层）", () => {
-  it("通过路径：真起进程退出码 0，且打印零泄漏/零省略号的通过文案", () => {
+  it("通过路径：真起进程退出码 0，且打印零泄漏/零省略号的通过文案", async () => {
     // 入口不存在时下面的 spawn 会退 1，这里先说清是「没跑」而不是「没过」
     expect(fs.existsSync(TSX), "tsx CLI 缺失").toBe(true);
     expect(fs.existsSync(CLI), "门禁脚本缺失").toBe(true);
 
-    const r = runGate();
+    const r = await runGate();
     expect(r.code, r.log).toBe(0);
     expect(r.log).toContain("[强度1.0] 含字面省略号(……): ✅ 无");
     expect(r.log).toContain("[强度1.0] 黑话本体泄漏: ✅ 0（无效替身已清除）");

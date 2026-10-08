@@ -19,8 +19,35 @@
  * 二者混为一谈是危险的：`null` 若被当成 `false`，就会放行一个来路不明的产物，
  * 而这正是指纹机制要防的那类事故。测试里专门钉了这一条。
  */
-import { execSync } from "node:child_process";
+import { spawn } from "node:child_process";
 
+/**
+ * 跑一条 git 命令，成功返回 stdout（字符串），失败/起不来返回 null。
+ *
+ * ⚠️ 为什么这里**不用** `execSync` / `execFileSync`（2026-10-09 实测改的）：
+ * 某些宿主环境会把 Node 的**同步**子进程派生整体挡住，一律返回
+ * `spawnSync <exe> EBUSY`（node / cmd.exe / git 全灭），而**异步** `spawn` 完全正常。
+ * 后果是 `readGitState` 恒为 `dirty=null, head=占位串`——盖章退化成不知道，
+ * `sync-dist` 只能靠 `QUAIWEI_ALLOW_DIRTY_BUILD` 绕过，那条唯一的硬约束等于被环境关掉。
+ * 「git 被墙」和「git 说不知道」是两件事，不该被环境限制混成一个结果。
+ *
+ * @param {string} root 仓库根目录
+ * @param {string[]} args git 参数
+ * @returns {Promise<string|null>}
+ */
+function gitOut(root, args) {
+  return new Promise((resolve) => {
+    let out = "";
+    const child = spawn("git", args, { cwd: root, stdio: ["ignore", "pipe", "pipe"] });
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (d) => {
+      out += d;
+    });
+    // 派生本身失败（ENOENT / EBUSY …）也要走"取不到"这条路，不能把整段盖章炸掉
+    child.on("error", () => resolve(null));
+    child.on("close", (code) => resolve(code === 0 ? out : null));
+  });
+}
 /**
  * 读盖章时刻的 git 状态。
  *
@@ -33,28 +60,26 @@ import { execSync } from "node:child_process";
  * @property {string[]} files porcelain 清单（已滤掉 .workbuddy/ 噪音），dirty=null 时为空
  *
  * @param {string} root 仓库根目录
- * @returns {GitState}
+ * @returns {Promise<GitState>}
  */
-export function readGitState(root) {
-  let head = "(非 git 检出或取不到)";
-  try {
-    head = execSync("git rev-parse --short HEAD", { cwd: root, encoding: "utf8" }).trim();
-  } catch {
-    return { head, dirty: null, files: [] };
-  }
+export async function readGitState(root) {
+  const headRaw = await gitOut(root, ["rev-parse", "--short", "HEAD"]);
+  if (headRaw === null) return { head: "(非 git 检出或取不到)", dirty: null, files: [] };
+  const head = headRaw.trim();
   // 只问"进产物的东西脏不脏"。.workbuddy/ 是 WorkBuddy 的工具数据目录：既不进产物、
   // 也不该进提交，但它一出现就让每次打包都盖上 dirty → 「别拿去发布」变成常驻噪音，
   // 而常驻噪音最后一定被人忽略——正是本项目一直在治的那个病。
   // 其余未跟踪/已改动一律照旧算脏：那意味着产物里可能有不属于任何提交的代码。
-  let porcelain = [];
-  try {
-    porcelain = execSync("git status --porcelain", { cwd: root, encoding: "utf8" })
-      .split("\n")
-      .map((l) => l.trim())
-      .filter((l) => l && !l.includes(".workbuddy/"));
-  } catch {
-    /* git 不可用时只靠指纹，不影响盖章 */
-  }
+  const status = await gitOut(root, ["status", "--porcelain"]);
+  // status 取不到时保持 dirty=false 的**旧**行为：head 拿到了说明确实是 git 仓库，
+  // 这一步失败只影响"脏不脏"的判定粒度，不当成整段盖章不可用。
+  const porcelain =
+    status === null
+      ? []
+      : status
+          .split("\n")
+          .map((l) => l.trim())
+          .filter((l) => l && !l.includes(".workbuddy/"));
   return { head, dirty: porcelain.length > 0, files: porcelain };
 }
 

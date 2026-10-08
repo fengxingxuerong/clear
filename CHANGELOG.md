@@ -76,9 +76,54 @@ spawn(node / cmd.exe / git)      →  正常      // 异步，三者都起得来
 [5] 依赖链实测通过（transformers 936 个导出、Tensor 可实例化）。
 另跑 `npx vitest run`：1674 passed / **13 failed**，失败项与上表完全重合，无第四条原因。
 
+### ⑦ 后续：还是把同步 spawn 换成异步了 —— 并且要说明上一节的判断错在哪
+
+上一节写「没把 4 个测试文件的 `spawnSync` 换成异步 spawn —— 那不是修缺陷，是给环境让路」。
+**这个判断是错的**，本节纠正。
+
+只盯着「测试红几条」会看漏真正的代价。把影响面摊开：
+
+| 位置                                                      | 同步派生被挡下时的实际后果                                                           | 严重程度     |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------ | ------------ |
+| `build-stamp.mjs` → `readGitState`（**生产**）            | 盖章恒退化为 `head=占位串 / dirty=null` ⇒ 「工作区不干净就不许打包」这条唯一硬约束被环境关掉 | **静默失效** |
+| `check-ledger-appendonly.ts` → `gitShow` / `refExists`（**生产**） | `git show` 恒抛错 ⇒ 恒返 null ⇒ 「HEAD 侧取不到」与「历史被改过」无法区分 ⇒ **门禁永远不会红** | **静默失效** |
+| 4 个测试文件的「真起进程」用例                            | `status=-1` ⇒ 断言成「程序跑挂了」，真 bug 与假 bug 长得一模一样                     | 假信号       |
+
+前两行的关键词是**静默**：它们不报错，只是悄悄失去分辨能力。
+一道永远不会红的门禁，比没有门禁更危险——它给人假的安心。
+所以这次改不是「让环境满意」，是**拆掉一个平时就潜伏着的静默失败模式**，环境限制只是把它照出来了。
+
+### ⑧ 本次改动：派生统一走异步
+
+- 新增 `scripts/run-async.ts`（收口异步派生：超时即杀 + `timedOut` 显式标出 + 派生失败与被退非 0 分开 + 编码兜底）
+- `build-stamp.mjs`：`readGitState` 改 `async`（内部 `spawn` 版 `gitOut`）；`.d.mts` 同步改 `Promise<GitState>`；
+  `sync-dist.mjs` 顶层 `await`
+- `check-ledger-appendonly.ts`：`gitShow` / `refExists` / `main` 改异步，入口行 `process.exit(await main())`；
+  测试 22 处调用点与 `beforeEach` 一并 await 化
+- 4 个测试文件：`humanize-cli-docx` / `verify-quality` / `zhuque-retro-backfill` / `scripts-logic` 改走 `runAsync`
+- **没动** `coverage-gate.ts` 的 `taskkill`：实测它在本环境能正常派生（不受影响），别做无谓改动
+
+自检：`tsc 0`、`eslint 0`；五份受影响测试 **101/101 全绿**
+（`scripts-logic` 29 + `check-ledger-appendonly` 一组 + 三份「真起进程」用例`);
+`check-ledger` 端到端在真仓库上退出码 0。
+
+### ⑨ 顺带加固：异步/r同步漂移也会被抓
+
+原先那条「`.d.mts` 与 `.mjs` 导出同名」的守卫用 `/export function (\w+)/g` 取名字，
+`readGitState` 一改 `async` 就从这份名单里**消失了** —— 守卫自己先失明：
+它会报告「d.mts 多导出一个 readGitState」，红得莫名其妙，而真正的漂移（忘改 await）它一句不说。
+
+改成 `/export (?:async )?function/` 之外，再加一层：**逐函数比对「实现是不是 async」与
+「声明返回值是不是 `Promise<...>`」**。这一层有用是因为漏 await 不会让 tsc 红——
+Promise 对象是恒 truthy 的，谓词会永久通过。
+
+变异检验（验它是真会红，不是摆设）：把 `.d.mts` 里 `Promise<GitState>` 改回 `GitState` → 该用例立刻红；改回后绿。
+
 ### ⑥ 本次改动面
 
 - `scripts/coverage-gate.ts` +50/-11（v0.9.25 发布后遗留的未提交修复 + 本次的双通道清理）
+- `scripts/run-async.ts` 新增；`check-ledger-appendonly.ts` / `build-stamp.mjs` / `sync-dist.mjs` /
+  `build-stamp.d.mts` 改异步签名；4 份测试改走异步派生（详见 ⑦⑧）
 - 版本号六处落点同步 0.9.25 → 0.9.26；`check:version` 6/6 全绿；tsc / eslint 均 0
 
 ## v0.9.25 更新（URL 保真换承载方式：区间表替掉 16 槽位占位符 + 朱雀热路径正则预编译 + 新模块测试门禁）

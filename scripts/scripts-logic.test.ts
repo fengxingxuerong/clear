@@ -8,11 +8,11 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 import vm from "vm";
-import { spawnSync } from "child_process";
+import { readGitState, dirtyBuildAllowed } from "./build-stamp.mjs";
+import { runAsync } from "./run-async";
 import { VOCAB } from "../src/engine/humanize-vocab";
 import { FORMULAIC_EXTRA } from "../src/engine/humanize-vocab-extra";
 import { GUARD_AFTER, VERB_PHRASE_AFTER } from "../src/engine/humanize-guard";
-import { readGitState, dirtyBuildAllowed } from "./build-stamp.mjs";
 /* ---------------- 词表卫生（check-vocab-hygiene.ts 的核心规则固化） ---------------- */
 
 describe("词表卫生（check-vocab-hygiene 规则固化）", () => {
@@ -408,65 +408,73 @@ describe("humanize-cli baseUrlHasProxyPrefix", () => {
  * 所以抽成可测的纯函数，再用真 git 仓库喂它。
  */
 describe("构建产物脏检查（sync-dist.mjs 的 dirty 硬失败）", () => {
-  /** 造一个真的 git 仓库（不留 .workbuddy/ 这类噪音） */
-  function makeGitRepo(): string {
+  /**
+   * 造一个真的 git 仓库（不留 .workbuddy/ 这类噪音）
+   *
+   * ⚠️ 异步派生：原先这里用 `spawnSync("git", ...)`。某些环境下 Node 的**同步**派生会被
+   * 整体挡下（`EBUSY`），那时 `git init/commit` 全部静默失败，仓库压根没建起来，
+   * 而这组用例读到的 `dirty` 会一律变成 `null` —— **6 条全红，但红因与被测逻辑无关**。
+   * 沙箱没搭起来这件事，必须在断言之外就拦住。
+   */
+  async function makeGitRepo(): Promise<string> {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "quaiwei-dirty-"));
-    const g = (...args: string[]) => spawnSync("git", args, { cwd: dir, encoding: "utf8" });
-    g("init", "-q");
-    g("config", "user.email", "t@t.t");
-    g("config", "user.name", "t");
+    const g = (...args: string[]) =>
+      runAsync("git", args, { cwd: dir, timeoutMs: 30000 }).then((r) => r.log);
+    await g("init", "-q");
+    await g("config", "user.email", "t@t.t");
+    await g("config", "user.name", "t");
     fs.writeFileSync(path.join(dir, "a.txt"), "v1");
-    g("add", "-A");
-    g("commit", "-qm", "init");
+    await g("add", "-A");
+    await g("commit", "-qm", "init");
     return dir;
   }
 
   let repo: string;
-  beforeEach(() => {
-    repo = makeGitRepo();
+  beforeEach(async () => {
+    repo = await makeGitRepo();
   });
   afterEach(() => {
     fs.rmSync(repo, { recursive: true, force: true });
   });
 
-  it("干净工作区 → dirty=false，且 head 是短 sha", () => {
-    const s = readGitState(repo);
+  it("干净工作区 → dirty=false，且 head 是短 sha", async () => {
+    const s = await readGitState(repo);
     expect(s.dirty).toBe(false);
     expect(s.files).toEqual([]);
     expect(s.head).toMatch(/^[0-9a-f]{7,}$/);
   });
 
-  it("已改动但未提交 → dirty=true，且清单里能认出是哪个文件", () => {
+  it("已改动但未提交 → dirty=true，且清单里能认出是哪个文件", async () => {
     fs.writeFileSync(path.join(repo, "a.txt"), "v2");
-    const s = readGitState(repo);
+    const s = await readGitState(repo);
     expect(s.dirty).toBe(true);
     expect(s.files.join(" ")).toContain("a.txt");
   });
 
-  it("未跟踪的新文件也算脏（产物里可能有不属于任何提交的代码）", () => {
+  it("未跟踪的新文件也算脏（产物里可能有不属于任何提交的代码）", async () => {
     fs.writeFileSync(path.join(repo, "new.ts"), "x");
-    expect(readGitState(repo).dirty).toBe(true);
+    expect((await readGitState(repo)).dirty).toBe(true);
   });
 
-  it("已 add 未 commit 也算脏（staged 不等于已提交）", () => {
+  it("已 add 未 commit 也算脏（staged 不等于已提交）", async () => {
     fs.writeFileSync(path.join(repo, "b.ts"), "x");
-    spawnSync("git", ["add", "-A"], { cwd: repo });
-    const s = readGitState(repo);
+    await runAsync("git", ["add", "-A"], { cwd: repo });
+    const s = await readGitState(repo);
     expect(s.dirty).toBe(true);
   });
 
-  it(".workbuddy/ 噪音被排除（它是工具数据目录，不该让每次打包都报脏）", () => {
+  it(".workbuddy/ 噪音被排除（它是工具数据目录，不该让每次打包都报脏）", async () => {
     fs.mkdirSync(path.join(repo, ".workbuddy"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".workbuddy", "state.json"), "{}");
-    expect(readGitState(repo).dirty).toBe(false);
+    expect((await readGitState(repo)).dirty).toBe(false);
   });
 
-  it("非 git 目录 → dirty=null（不是 false！），head 落回占位串", () => {
+  it("非 git 目录 → dirty=null（不是 false！），head 落回占位串", async () => {
     // 语义要点：null 与 false 必须分清。false 是「确认干净、可以发」，
     // null 是「查不到、别装作干净」——后者若被当 false，会放行一个来路不明的产物。
     const plain = fs.mkdtempSync(path.join(os.tmpdir(), "quaiwei-nogit-"));
     try {
-      const s = readGitState(plain);
+      const s = await readGitState(plain);
       expect(s.dirty).toBeNull();
       expect(s.head).toContain("非 git 检出");
     } finally {
@@ -485,12 +493,12 @@ describe("构建产物脏检查（sync-dist.mjs 的 dirty 硬失败）", () => {
     expect(dirtyBuildAllowed({})).toBe(false);
   });
 
-  it("逃生口放行时不改 dirty 本身——放行不等于洗白", () => {
+  it("逃生口放行时不改 dirty 本身——放行不等于洗白", async () => {
     // 设计意图：ALLOW 只跳 exit 1，不许把章里的 dirty 改成 false。
     // 一旦洗白，verify-pruned 就不会再提示「别发布」，逃生口变成了免检通道。
     fs.writeFileSync(path.join(repo, "a.txt"), "v2");
     expect(dirtyBuildAllowed({ QUAIWEI_ALLOW_DIRTY_BUILD: "1" })).toBe(true);
-    expect(readGitState(repo).dirty).toBe(true);
+    expect((await readGitState(repo)).dirty).toBe(true);
   });
 
   /* -------- 类型声明与实现的一致性 -------- */
@@ -503,9 +511,24 @@ describe("构建产物脏检查（sync-dist.mjs 的 dirty 硬失败）", () => {
     const impl = fs.readFileSync(path.join(dir, "build-stamp.mjs"), "utf8");
     const decl = fs.readFileSync(path.join(dir, "build-stamp.d.mts"), "utf8");
 
+    // 允许 async：`export async function`（2026-10-09 readGitState 改异步后正则一度漏掉它，
+    // 结果这条"签名不漂移"的守卫自己先失明——所以它只比对名字是不够的，下面再比 async 标记）
     const names = (src: string) =>
-      [...src.matchAll(/export function (\w+)/g)].map((m) => m[1]).sort();
+      [...src.matchAll(/export (?:async )?function (\w+)/g)].map((m) => m[1]).sort();
     expect(names(decl)).toEqual(names(impl));
+
+    // 异步标记也必须对齐：impl 是 async 而 d.mts 写同步 ⇒ 调用方 `await` 一个普通值，
+    // tsc 照样全绿，但谓词拿到的是 Promise 对象（恒 truthy）——最坏的一种静默错。
+    const isAsync = (src: string, fn: string) =>
+      new RegExp(`export async function\\s+${fn}\\b`).test(src);
+    for (const fn of names(impl)) {
+      const implAsync = isAsync(impl, fn);
+      const declAsync = new RegExp(`${fn}\\s*\\([^)]*\\)\\s*:\\s*Promise<`).test(decl);
+      expect({ fn, declAsync }, `${fn} 的同步/异步必须与实现一致`).toEqual({
+        fn,
+        declAsync: implAsync,
+      });
+    }
 
     // 逃生口的精确匹配必须在两处都在（实现里写错成 truthy 判定就抓得到）
     expect(impl).toContain('QUAIWEI_ALLOW_DIRTY_BUILD === "1"');

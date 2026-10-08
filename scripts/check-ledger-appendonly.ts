@@ -24,7 +24,7 @@
 import fs from "fs";
 import path from "path";
 import { pathToFileURL } from "url";
-import { execFileSync } from "child_process";
+import { runAsync } from "./run-async";
 
 export const LEDGER_REL_DEFAULT = path.join("evidence", "zhuque", "ledger.jsonl");
 
@@ -163,16 +163,18 @@ export function parseArgs(argv: string[]): Opts {
   return o;
 }
 
-/** git show <ref>:<path>；文件/该 ref 下不存在时返回 null（不当错误） */
-function gitShow(repo: string, spec: string): string | null {
-  try {
-    return execFileSync("git", ["-C", repo, "show", spec], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-  } catch {
-    return null;
-  }
+/**
+ * git show <ref>:<path>；文件/该 ref 下不存在时返回 null（不当错误）
+ *
+ * ⚠️ 异步派生而非 execFileSync（2026-10-09 改的）：部分宿主环境会把 Node 的**同步**
+ * 子进程派生整体挡下（`spawnSync` 一律 EBUSY）。那时 gitShow 恒 throw → catch 恒返 null
+ * ⇒ 「HEAD 侧取不到」与「历史被改过」不再能区分，**这道门禁在那种环境下永远不会红**——
+ * 而它存在的唯一理由就是防这件事。宁可把整条调用链改成异步，也不能让门禁有个安静的死角。
+ */
+async function gitShow(repo: string, spec: string): Promise<string | null> {
+  const r = await runAsync("git", ["-C", repo, "show", spec], { timeoutMs: 30000 });
+  if (r.code !== 0) return null;
+  return r.stdout;
 }
 
 /**
@@ -180,18 +182,14 @@ function gitShow(repo: string, spec: string): string | null {
  * 浅克隆里 `origin/main` 不存在，若按"无历史"处理，这道门禁在 CI 上就永远不会红——
  * 而它存在的唯一理由，正是防有人绕过本地 hook 改历史行。
  */
-function refExists(repo: string, ref: string): boolean {
-  try {
-    execFileSync("git", ["-C", repo, "rev-parse", "--verify", "--quiet", `${ref}^{commit}`], {
-      stdio: "ignore",
-    });
-    return true;
-  } catch {
-    return false;
-  }
+async function refExists(repo: string, ref: string): Promise<boolean> {
+  const r = await runAsync("git", ["-C", repo, "rev-parse", "--verify", "--quiet", `${ref}^{commit}`], {
+    timeoutMs: 30000,
+  });
+  return r.code === 0;
 }
 
-export function main(argv: string[] = process.argv.slice(2)): number {
+export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
   const o = parseArgs(argv);
   if (o.usageError) {
     console.error(o.usageError);
@@ -210,19 +208,19 @@ export function main(argv: string[] = process.argv.slice(2)): number {
     // 走 git：HEAD（或 --head-ref）一侧 + 索引或工作区一侧
     const rel = o.ledgerRel.split(path.sep).join("/");
     if (o.headRef) {
-      if (!refExists(o.repo, o.headRef)) {
+      if (!(await refExists(o.repo, o.headRef))) {
         console.error(
           `❌ --head-ref ${JSON.stringify(o.headRef)} 在这个检出里解析不出来（浅克隆？ref 拼错？fetch-depth 没设 0？）。\n` +
             `   拒绝把"拿不到基准"当成"没有历史"放过去——那等于这道门禁在 CI 上永远不会红。`,
         );
         return 2;
       }
-      headText = gitShow(o.repo, `${o.headRef}:${rel}`) ?? "";
+      headText = (await gitShow(o.repo, `${o.headRef}:${rel}`)) ?? "";
     }
-    if (headText === null) headText = gitShow(o.repo, `HEAD:${rel}`) ?? "";
+    if (headText === null) headText = (await gitShow(o.repo, `HEAD:${rel}`)) ?? "";
     if (stagedText === null) {
       stagedText = o.useStagedIndex
-        ? (gitShow(o.repo, `:${rel}`) ?? "") // 索引里的待提交版本
+        ? ((await gitShow(o.repo, `:${rel}`)) ?? "") // 索引里的待提交版本
         : (() => {
             try {
               return fs.readFileSync(path.join(o.repo, o.ledgerRel), "utf8");
@@ -264,4 +262,4 @@ export function main(argv: string[] = process.argv.slice(2)): number {
 
 // 直接执行才跑；被测试 import 时不产生副作用（与 zhuque-evidence.ts 同一套入口判断）
 const entry = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : "";
-if (entry === import.meta.url) process.exit(main());
+if (entry === import.meta.url) process.exit(await main());

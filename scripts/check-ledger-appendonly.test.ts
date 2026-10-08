@@ -12,7 +12,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { runAsync } from "./run-async";
 import { fileURLToPath } from "node:url";
 import { diffLedger, main, parseArgs, LEDGER_REL_DEFAULT } from "./check-ledger-appendonly";
 
@@ -20,7 +20,7 @@ const L = (id: string, pct: number) => JSON.stringify({ id, pct, note: `记录 $
 const HEAD = [L("O1", 85), L("O2", 45), L("O3", 12)].join("\n") + "\n";
 
 describe("diffLedger：只许追加", () => {
-  it("纯追加 → 通过，且不误报行数", () => {
+  it("纯追加 → 通过，且不误报行数", async () => {
     const v = diffLedger(HEAD, HEAD + L("O4", 7) + "\n");
     expect(v.ok).toBe(true);
     expect(v.violations).toEqual([]);
@@ -28,21 +28,21 @@ describe("diffLedger：只许追加", () => {
     expect(v.stagedLines).toBe(4);
   });
 
-  it("一行都没追加（内容完全相同）→ 通过", () => {
+  it("一行都没追加（内容完全相同）→ 通过", async () => {
     expect(diffLedger(HEAD, HEAD).ok).toBe(true);
   });
 
-  it("HEAD 为空（这本账本第一次建立）→ 追加多少都算合法", () => {
+  it("HEAD 为空（这本账本第一次建立）→ 追加多少都算合法", async () => {
     expect(diffLedger("", HEAD).ok).toBe(true);
   });
 
-  it("行尾空白/CRLF/尾部空行都不该被当成篡改", () => {
+  it("行尾空白/CRLF/尾部空行都不该被当成篡改", async () => {
     const crlf = HEAD.split("\n").join("\r\n");
     expect(diffLedger(HEAD, crlf).ok).toBe(true);
     expect(diffLedger(HEAD, HEAD.replace(/\n$/, "") + "\n\n  \n").ok).toBe(true);
   });
 
-  it("改一个字节 → 拦（改写与删除在前缀断裂上不可分，故合并报一条）", () => {
+  it("改一个字节 → 拦（改写与删除在前缀断裂上不可分，故合并报一条）", async () => {
     const tampered = HEAD.replace('"pct":45', '"pct":44');
     const v = diffLedger(HEAD, tampered);
     expect(v.ok).toBe(false);
@@ -51,37 +51,37 @@ describe("diffLedger：只许追加", () => {
     expect(v.violations[0].line).toBe(2);
   });
 
-  it("只改不参与复算的自由文本字段（note）→ 照样拦（这条 audit 看不见）", () => {
+  it("只改不参与复算的自由文本字段（note）→ 照样拦（这条 audit 看不见）", async () => {
     const v = diffLedger(HEAD, HEAD.replace("记录 O2", "记录 O2-被顺手美化过"));
     expect(v.ok).toBe(false);
     expect(v.violations[0].line).toBe(2);
   });
 
-  it("删掉中间一行 → 拦", () => {
+  it("删掉中间一行 → 拦", async () => {
     const v = diffLedger(HEAD, L("O1", 85) + "\n" + L("O3", 12) + "\n");
     expect(v.ok).toBe(false);
     expect(v.violations[0].line).toBe(2);
   });
 
-  it("把最新一行挪到最前面（重排）→ 拦", () => {
+  it("把最新一行挪到最前面（重排）→ 拦", async () => {
     const v = diffLedger(HEAD, L("O3", 12) + "\n" + L("O1", 85) + "\n" + L("O2", 45) + "\n");
     expect(v.ok).toBe(false);
     expect(v.violations[0].kind).toBe("reordered");
   });
 
-  it("截断尾部（只留前两行）→ 拦，且报 truncated", () => {
+  it("截断尾部（只留前两行）→ 拦，且报 truncated", async () => {
     const v = diffLedger(HEAD, L("O1", 85) + "\n" + L("O2", 45) + "\n");
     expect(v.ok).toBe(false);
     expect(v.violations[0].kind).toBe("truncated");
   });
 
-  it("整本清空 → 拦，报 deleted-all", () => {
+  it("整本清空 → 拦，报 deleted-all", async () => {
     const v = diffLedger(HEAD, "");
     expect(v.ok).toBe(false);
     expect(v.violations[0].kind).toBe("deleted-all");
   });
 
-  it("先删一行再追加一行（最像'正常修订'的那一种）→ 仍然拦", () => {
+  it("先删一行再追加一行（最像'正常修订'的那一种）→ 仍然拦", async () => {
     const v = diffLedger(HEAD, L("O1", 85) + "\n" + L("O3", 12) + "\n" + L("O4", 7) + "\n");
     expect(v.ok).toBe(false);
     expect(v.violations[0].line).toBe(2);
@@ -101,24 +101,24 @@ describe("parseArgs / main：参数与退出码", () => {
   });
   afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
-  it("--staged-file 不给 --head-file → 用法错（退出码 2）", () => {
+  it("--staged-file 不给 --head-file → 用法错（退出码 2）", async () => {
     expect(parseArgs(["--staged-file", stagedFile]).usageError).toMatch(/--head-file/);
     fs.writeFileSync(stagedFile, HEAD);
-    expect(main(["--staged-file", stagedFile])).toBe(2);
+    expect(await main(["--staged-file", stagedFile])).toBe(2);
   });
 
-  it("文件对照：纯追加退出 0，被改过退出 1", () => {
+  it("文件对照：纯追加退出 0，被改过退出 1", async () => {
     fs.writeFileSync(stagedFile, HEAD + L("O4", 7) + "\n");
-    expect(main(["--head-file", headFile, "--staged-file", stagedFile, "--quiet"])).toBe(0);
+    expect(await main(["--head-file", headFile, "--staged-file", stagedFile, "--quiet"])).toBe(0);
     fs.writeFileSync(stagedFile, HEAD.replace('"pct":12', '"pct":13'));
-    expect(main(["--head-file", headFile, "--staged-file", stagedFile, "--quiet"])).toBe(1);
+    expect(await main(["--head-file", headFile, "--staged-file", stagedFile, "--quiet"])).toBe(1);
   });
 
-  it("head-file 不存在时按「无历史」处理，且绝不回落到真仓库的 git", () => {
+  it("head-file 不存在时按「无历史」处理，且绝不回落到真仓库的 git", async () => {
     // --repo 指到一个不存在的目录：若实现偷偷走 git，这里会拿到 null→报错或非 0
     fs.writeFileSync(stagedFile, HEAD);
     expect(
-      main([
+      await main([
         "--head-file",
         path.join(tmp, "not-there.jsonl"),
         "--staged-file",
@@ -139,48 +139,48 @@ describe("git 取数路径（临时仓库端到端）", () => {
   const LEDGER_REL = LEDGER_REL_DEFAULT.split(path.sep).join("/");
   let repo: string;
 
+  // ⚠️ 异步派生而非 execFileSync（2026-10-09 改的）：同步派生被环境挡下会整段抛错，
+  // 而这里是 beforeEach —— 抛错会让每组用例在跑之前就崩，崩因写成"临时仓库没建起来"，
+  // 完全盖掉真正的被测目标（git 取数路径）。
   const git = (...args: string[]) =>
-    execFileSync("git", ["-C", repo, ...args], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    runAsync("git", ["-C", repo, ...args], { timeoutMs: 30000 }).then((r) => r.log);
 
-  beforeEach(() => {
+  beforeEach(async () => {
     repo = fs.mkdtempSync(path.join(os.tmpdir(), "ledger-ao-repo-"));
-    git("-c", "core.autocrlf=false", "-c", "user.name=t", "-c", "user.email=t@e.st", "init", "-q");
+    await git("-c", "core.autocrlf=false", "-c", "user.name=t", "-c", "user.email=t@e.st", "init", "-q");
     fs.mkdirSync(path.join(repo, "evidence", "zhuque"), { recursive: true });
     fs.writeFileSync(path.join(repo, LEDGER_REL), HEAD);
-    git("add", "-A");
-    git("-c", "user.name=t", "-c", "user.email=t@e.st", "commit", "-q", "-m", "ledger");
+    await git("add", "-A");
+    await git("-c", "user.name=t", "-c", "user.email=t@e.st", "commit", "-q", "-m", "ledger");
   });
   afterEach(() => fs.rmSync(repo, { recursive: true, force: true }));
 
-  it("未改动 → 退出 0", () => {
-    expect(main(["--repo", repo, "--quiet"])).toBe(0);
-    expect(main(["--repo", repo, "--staged", "--quiet"])).toBe(0);
+  it("未改动 → 退出 0", async () => {
+    expect(await main(["--repo", repo, "--quiet"])).toBe(0);
+    expect(await main(["--repo", repo, "--staged", "--quiet"])).toBe(0);
   });
 
-  it("工作区追加一行 → 退出 0；--staged 模式下索引没变也算 0", () => {
+  it("工作区追加一行 → 退出 0；--staged 模式下索引没变也算 0", async () => {
     fs.appendFileSync(path.join(repo, LEDGER_REL), L("O4", 7) + "\n");
-    expect(main(["--repo", repo, "--quiet"])).toBe(0);
-    expect(main(["--repo", repo, "--staged", "--quiet"])).toBe(0);
+    expect(await main(["--repo", repo, "--quiet"])).toBe(0);
+    expect(await main(["--repo", repo, "--staged", "--quiet"])).toBe(0);
   });
 
-  it("工作区改写历史行 → 退出 1（不 --staged 时看的就是工作区那份）", () => {
+  it("工作区改写历史行 → 退出 1（不 --staged 时看的就是工作区那份）", async () => {
     fs.writeFileSync(path.join(repo, LEDGER_REL), HEAD.replace('"pct":85', '"pct":86'));
-    expect(main(["--repo", repo, "--quiet"])).toBe(1);
+    expect(await main(["--repo", repo, "--quiet"])).toBe(1);
   });
 
-  it("暂存区里删掉整行 → --staged 模式退出 1（这才是 hook 走的那条路）", () => {
+  it("暂存区里删掉整行 → --staged 模式退出 1（这才是 hook 走的那条路）", async () => {
     fs.writeFileSync(path.join(repo, LEDGER_REL), L("O1", 85) + "\n");
-    git("add", "-A");
-    expect(main(["--repo", repo, "--staged", "--quiet"])).toBe(1);
+    await git("add", "-A");
+    expect(await main(["--repo", repo, "--staged", "--quiet"])).toBe(1);
   });
 
-  it("账本还没进仓库（首次建账本）→ 退出 0", () => {
+  it("账本还没进仓库（首次建账本）→ 退出 0", async () => {
     // git show HEAD:<path> 在这条路径上必然失败 → 空历史 → 追加合法
     expect(
-      main(["--repo", repo, "--ledger", "evidence/zhuque/never-committed.jsonl", "--quiet"]),
+      await main(["--repo", repo, "--ledger", "evidence/zhuque/never-committed.jsonl", "--quiet"]),
     ).toBe(0);
   });
 
@@ -188,32 +188,32 @@ describe("git 取数路径（临时仓库端到端）", () => {
    * 默认模式比的是 HEAD vs 干净检出，在 CI 上永远相等；只有显式给基准 ref，
    * 才能抓到"绕过本地 hook 提交了改写历史行"的那一次推送。 */
 
-  it("--head-ref 指向当前提交且未改动 → 退出 0", () => {
-    const sha = git("rev-parse", "HEAD").trim();
-    expect(main(["--repo", repo, "--head-ref", sha, "--quiet"])).toBe(0);
+  it("--head-ref 指向当前提交且未改动 → 退出 0", async () => {
+    const sha = (await git("rev-parse", "HEAD")).trim();
+    expect(await main(["--repo", repo, "--head-ref", sha, "--quiet"])).toBe(0);
   });
 
-  it("--head-ref 指向旧提交 + 之后改写了历史行 → 退出 1（CI 靠这条抓 --no-verify）", () => {
-    const base = git("rev-parse", "HEAD").trim();
+  it("--head-ref 指向旧提交 + 之后改写了历史行 → 退出 1（CI 靠这条抓 --no-verify）", async () => {
+    const base = (await git("rev-parse", "HEAD")).trim();
     fs.writeFileSync(path.join(repo, LEDGER_REL), HEAD.replace('"pct":85', '"pct":86'));
-    git("add", "-A");
-    git("-c", "user.name=t", "-c", "user.email=t@e.st", "commit", "-q", "-m", "tamper");
-    expect(main(["--repo", repo, "--head-ref", base, "--quiet"])).toBe(1);
+    await git("add", "-A");
+    await git("-c", "user.name=t", "-c", "user.email=t@e.st", "commit", "-q", "-m", "tamper");
+    expect(await main(["--repo", repo, "--head-ref", base, "--quiet"])).toBe(1);
     // 同一次改动在默认模式下是**漏网**的：HEAD 已经和被改的工作区一致
-    expect(main(["--repo", repo, "--quiet"])).toBe(0);
+    expect(await main(["--repo", repo, "--quiet"])).toBe(0);
   });
 
-  it("ref 解析不出来 → 退出 2，不许退化成「无历史」而假绿", () => {
-    expect(main(["--repo", repo, "--head-ref", "no-such-ref-xyz", "--quiet"])).toBe(2);
+  it("ref 解析不出来 → 退出 2，不许退化成「无历史」而假绿", async () => {
+    expect(await main(["--repo", repo, "--head-ref", "no-such-ref-xyz", "--quiet"])).toBe(2);
   });
 
-  it("--head-ref 给了但没给值 → 用法错 2", () => {
-    expect(main(["--repo", repo, "--head-ref"])).toBe(2);
+  it("--head-ref 给了但没给值 → 用法错 2", async () => {
+    expect(await main(["--repo", repo, "--head-ref"])).toBe(2);
   });
 
-  it("--head-ref 指向账本还不存在的提交 → 按无历史处理，退出 0", () => {
+  it("--head-ref 指向账本还不存在的提交 → 按无历史处理，退出 0", async () => {
     const empty = fs.mkdtempSync(path.join(os.tmpdir(), "ledger-ao-empty-"));
-    git(
+    await git(
       "-c",
       "core.autocrlf=false",
       "-c",
@@ -227,8 +227,8 @@ describe("git 取数路径（临时仓库端到端）", () => {
     );
     fs.mkdirSync(path.join(empty, "x"), { recursive: true });
     fs.writeFileSync(path.join(empty, "x", "f"), "1");
-    git("-C", empty, "add", "-A");
-    git(
+    await git("-C", empty, "add", "-A");
+    await git(
       "-C",
       empty,
       "-c",
@@ -240,9 +240,9 @@ describe("git 取数路径（临时仓库端到端）", () => {
       "-m",
       "no ledger",
     );
-    const sha = git("-C", empty, "rev-parse", "HEAD").trim();
+    const sha = (await git("-C", empty, "rev-parse", "HEAD")).trim();
     // 仓库里账本已存在（repo 那份），基准却是"还没有账本"的提交
-    expect(main(["--repo", empty, "--head-ref", sha, "--quiet"])).toBe(0);
+    expect(await main(["--repo", empty, "--head-ref", sha, "--quiet"])).toBe(0);
     fs.rmSync(empty, { recursive: true, force: true });
   });
 });
@@ -267,37 +267,37 @@ describe("参数兜底与非 quiet 输出", () => {
     vi.restoreAllMocks();
   });
 
-  it("不带 --quiet 时打印进度与结论两行（行 231-236）", () => {
+  it("不带 --quiet 时打印进度与结论两行（行 231-236）", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    expect(main(["--head-file", headFile, "--staged-file", stagedFile])).toBe(0);
+    expect(await main(["--head-file", headFile, "--staged-file", stagedFile])).toBe(0);
     const out = log.mock.calls.map((c) => String(c[0] ?? "")).join("\n");
     expect(out).toContain("凭证账本 append-only 检查：HEAD 3 行 → 待提交 4 行");
     expect(out).toContain("✅ 只追加了 1 行，历史一字未动");
   });
 
-  it("--head-file / --staged-file 不带值 → 用法错（行 137/138）", () => {
+  it("--head-file / --staged-file 不带值 → 用法错（行 137/138）", async () => {
     expect(parseArgs(["--head-file"]).usageError).toMatch(/--head-file 需要一个文件路径/);
     expect(parseArgs(["--staged-file"]).usageError).toMatch(/--staged-file 需要一个文件路径/);
-    expect(main(["--head-file"])).toBe(2);
-    expect(main(["--staged-file"])).toBe(2);
+    expect(await main(["--head-file"])).toBe(2);
+    expect(await main(["--staged-file"])).toBe(2);
   });
 
-  it("--staged-file 指向读不出来的路径 → 用法错并给出原因（行 154）", () => {
+  it("--staged-file 指向读不出来的路径 → 用法错并给出原因（行 154）", async () => {
     const bad = path.join(tmp, "nope.jsonl");
     expect(parseArgs(["--head-file", headFile, "--staged-file", bad]).usageError).toMatch(
       /--staged-file 读不出来/,
     );
-    expect(main(["--head-file", headFile, "--staged-file", bad])).toBe(2);
+    expect(await main(["--head-file", headFile, "--staged-file", bad])).toBe(2);
   });
 
-  it("【真缺陷回归】只给 --head-file → 必须报用法错，而不是无条件通过", () => {
+  it("【真缺陷回归】只给 --head-file → 必须报用法错，而不是无条件通过", async () => {
     // 修复前：离线分支两侧都兜成 "" → diffLedger("","") 恒 ok → **head 文件里写什么
     // 都退出 0**。这道门禁的价值就是"历史不可改"，一个半配置输入就把它整个架空，
     // 是最典型的假绿。现已补上与 --staged-file 对称的校验。
     expect(parseArgs(["--head-file", headFile]).usageError).toMatch(/--head-file 必须与 --staged-file/);
 
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(main(["--head-file", headFile])).toBe(2);
+    expect(await main(["--head-file", headFile])).toBe(2);
     expect(err.mock.calls.map((c) => String(c[0] ?? "")).join("\n")).toMatch(/必须与 --staged-file/);
   });
 });

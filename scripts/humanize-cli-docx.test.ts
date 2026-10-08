@@ -4,7 +4,7 @@
  * 为什么要真起进程：CLI 的接线层（收集文件 → 读 .docx → 去味 → 按格式落盘）
  * 此前完全没被测过，而它恰恰是「批量」这个卖点的入口。纯函数测试只能证明
  * `collectInputFiles` 认识 .docx，证明不了「跑一遍真能出一份能打开的 .docx」。
- * 所以这里用 `spawnSync(process.execPath, [tsx, cli, ...])` 跑真 CLI，
+ * 所以这里真起一次 CLI 进程（异步 spawn，见 ./run-async.ts），
  * 再用 `readDocxText` 把产物读回来做 round-trip 断言。
  *
  * 断言的稳法：去味引擎会换词，所以不逐字比对改写结果，只钉三件事——
@@ -16,18 +16,20 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "fs";
 import path from "path";
 import os from "os";
-import { spawnSync } from "node:child_process";
+import { runSimple } from "./run-async";
 import { readDocxText, writeDocxText } from "../src/docx-io";
 
 const CLI = path.resolve(__dirname, "humanize-cli.ts");
 const TSX = path.resolve(__dirname, "../node_modules/tsx/dist/cli.mjs");
 
+/**
+ * ⚠️ 为什么是**异步**派生（2026-10-09 改的）：部分宿主环境会把 Node 的同步派生整体挡下
+ * （`spawnSync` 一律 EBUSY），此时 `r.status` 恒 -1 —— 看起来像"CLI 跑挂了"，
+ * 实际上是"进程压根没起来"。那是最坏的一种假信号：真 bug 和假 bug 长得一模一样。
+ * 异步通道见 ./run-async.ts。
+ */
 function runCli(args: string[]) {
-  const r = spawnSync(process.execPath, [TSX, CLI, ...args], {
-    encoding: "utf8",
-    timeout: 120000,
-  });
-  return { code: r.status ?? -1, log: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+  return runSimple(process.execPath, [TSX, CLI, ...args], { timeoutMs: 120000 });
 }
 
 /** 用引擎自己的 docx 导出器造输入（自产自销，不依赖外部样本文件） */
@@ -68,7 +70,7 @@ describe("CLI 的 .docx 输入（真起进程）", () => {
 
   it(".docx 进 → .docx 出，产物能被解析回来且内容非空", async () => {
     await makeDocx(path.join(inDir, "doc.docx"), SAMPLE);
-    const r = runCli([inDir, "--out", outDir]);
+    const r = await runCli([inDir, "--out", outDir]);
     expect(r.code, r.log).toBe(0);
 
     const dest = path.join(outDir, "doc.humanized.docx");
@@ -80,9 +82,9 @@ describe("CLI 的 .docx 输入（真起进程）", () => {
     expect(back).toContain("QuAiWei");
   });
 
-  it(".txt 仍然输出 .txt（既有行为不被这次接线改坏）", () => {
+  it(".txt 仍然输出 .txt（既有行为不被这次接线改坏）", async () => {
     fs.writeFileSync(path.join(inDir, "plain.txt"), SAMPLE);
-    const r = runCli([inDir, "--out", outDir]);
+    const r = await runCli([inDir, "--out", outDir]);
     expect(r.code, r.log).toBe(0);
     const dest = path.join(outDir, "plain.humanized.txt");
     expect(fs.existsSync(dest), r.log).toBe(true);
@@ -91,7 +93,7 @@ describe("CLI 的 .docx 输入（真起进程）", () => {
 
   it("--out-format txt：.docx 输入也落成 .txt", async () => {
     await makeDocx(path.join(inDir, "doc.docx"), SAMPLE);
-    const r = runCli([inDir, "--out", outDir, "--out-format", "txt"]);
+    const r = await runCli([inDir, "--out", outDir, "--out-format", "txt"]);
     expect(r.code, r.log).toBe(0);
     expect(fs.existsSync(path.join(outDir, "doc.humanized.txt")), r.log).toBe(true);
     expect(fs.existsSync(path.join(outDir, "doc.humanized.docx"))).toBe(false);
@@ -99,14 +101,14 @@ describe("CLI 的 .docx 输入（真起进程）", () => {
 
   it("--out-format 给非法值：退出 1 并提示可选项（不静默当成 follow）", async () => {
     await makeDocx(path.join(inDir, "doc.docx"), SAMPLE);
-    const r = runCli([inDir, "--out", outDir, "--out-format", "pdf"]);
+    const r = await runCli([inDir, "--out", outDir, "--out-format", "pdf"]);
     expect(r.code).toBe(1);
     expect(r.log).toContain("--out-format");
   });
 
-  it("坏 docx（不是 zip）：报出真实原因，不静默跳过", () => {
+  it("坏 docx（不是 zip）：报出真实原因，不静默跳过", async () => {
     fs.writeFileSync(path.join(inDir, "broken.docx"), "这不是一个 docx");
-    const r = runCli([inDir, "--out", outDir]);
+    const r = await runCli([inDir, "--out", outDir]);
     expect(r.code).toBe(1);
     expect(r.log).toMatch(/docx|zip|EOCD/i);
   });

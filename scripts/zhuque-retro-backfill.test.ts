@@ -35,7 +35,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawnSync } from "node:child_process";
+import { runAsync } from "./run-async";
 import { V2_MAP, V3_MAP, genreMismatch, build, GENRES } from "./zhuque-retro-backfill.ts";
 import { readLedger, storeFromOpts, type Store } from "./zhuque-evidence.ts";
 
@@ -338,21 +338,23 @@ describe("映射表兜底：未登记的裸 id 原样透传，不静默变 undef
  * 所以这里用一次真实的子进程跑 CLI，钉住"入口确实执行了 build、且 --dry-run 真的只读"。
  */
 describe("CLI 入口：--dry-run 走只读、不往账本追加", () => {
-  it("以真实子进程跑 CLI → 入口执行 build、--dry-run 生效（只读）", () => {
+  it("以真实子进程跑 CLI → 入口执行 build、--dry-run 生效（只读）", async () => {
     const repoRoot = path.resolve(__dirname, "..");
     const ledger = path.join(repoRoot, "evidence", "zhuque", "ledger.jsonl");
     const before = fs.existsSync(ledger) ? fs.readFileSync(ledger, "utf8") : null;
-    const r = spawnSync(
+    // ⚠️ 异步派生而非 spawnSync（2026-10-09 改的）：同步派生被环境挡下时
+    // code 为 -1，而这条用例断言的就是退出码 0 ⇒ 环境限制会伪装成"入口改坏了"。
+    const r = await runAsync(
       process.execPath,
       [
         path.join(repoRoot, "node_modules", "tsx", "dist", "cli.mjs"),
         path.join(repoRoot, "scripts", "zhuque-retro-backfill.ts"),
         "--dry-run",
       ],
-      { cwd: repoRoot, encoding: "utf8" },
+      { cwd: repoRoot, timeoutMs: 60000 },
     );
-    expect(r.status).toBe(0);
-    const out = `${r.stdout}${r.stderr}`;
+    expect(r.code, r.log).toBe(0);
+    const out = r.log;
     // 入口跑到了 build：合计行必然出现，且带 dry-run 标记
     expect(out).toMatch(/合计 18 点/);
     expect(out).toContain("dry-run，未落盘");
