@@ -62,7 +62,17 @@ function cleanReportsDir(): void {
     } catch (e) {
       // rd 对"目录不存在"也返回非零，用 existsSync 复核而不是信退出码
       if (fs.existsSync(REPORTS_DIR)) {
-        throw new Error(`清理 ${REPORTS_DIR} 失败：${(e as Error).message}`, { cause: e });
+        // 备选通道：cmd 派生被环境挡下时（实测 `spawnSync cmd.exe EBUSY`，连 `cmd /c echo` 都不通）
+        // 退回 Node 原生删除。coverage 约 90 个文件，rmSync 秒级完成；真删不掉再判红，
+        // 不让"环境不让删"伪装成"质量不达标"。
+        try {
+          fs.rmSync(REPORTS_DIR, { recursive: true, force: true });
+        } catch (e2) {
+          throw new Error(
+            `清理 ${REPORTS_DIR} 失败：cmd 与 fs.rmSync 两条通道都不通（${(e as Error).message} / ${(e2 as Error).message}）`,
+            { cause: e2 },
+          );
+        }
       }
     }
   } else {
@@ -129,8 +139,27 @@ function metricsFromReport(map: Record<string, IstanbulFileCov>): Metrics {
 
 interface RunResult {
   code: number | null;
-  signal: NodeJS.Signals | null;
+  /** "timeout" 是本门禁自己给的兜底信号（进程树杀不掉），不是操作系统信号 */
+  signal: NodeJS.Signals | "timeout" | null;
   out: string;
+}
+
+/**
+ * 杀进程树：只 `child.kill()` 杀不掉 vitest 的 worker 池，主进程没了而子进程还在，
+ * close 事件永远不来 —— 实测表现为全链 `check:release` 在覆盖率门禁这一步**静默挂死**
+ * （15 分钟超时触发后，日志 28 分钟一行未增，人只能靠猜）。故超时后走 taskkill /T /F。
+ */
+function killTree(pid: number | undefined): void {
+  if (!pid) return;
+  try {
+    if (process.platform === "win32") {
+      execFileSync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore" });
+      return;
+    }
+    process.kill(pid, "SIGKILL");
+  } catch {
+    /* 进程已退出，忽略 */
+  }
 }
 
 /** 异步 spawn：本进程不提供服务，本可用 spawnSync；但异步能拿到 signal 与超时，诊断更好 */
@@ -142,17 +171,28 @@ function runVitest(timeoutMs: number): Promise<RunResult> {
       stdio: ["ignore", "pipe", "pipe"],
     });
     let out = "";
-    const timer = setTimeout(() => child.kill(), timeoutMs);
+    let settled = false;
+    let hardTimer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (r: RunResult): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (hardTimer) clearTimeout(hardTimer);
+      done(r);
+    };
+    const timer = setTimeout(() => {
+      out += `\n[gate] 超过 ${Math.round(timeoutMs / 1000)}s 未结束 → 杀 vitest 进程树`;
+      killTree(child.pid);
+      // 兜底：进程树仍不退就直接判超时，绝不让门禁无限期挂着
+      hardTimer = setTimeout(
+        () => finish({ code: null, signal: "timeout", out: out + `\n[gate] 进程树未退出，按超时判红（不采信任何指标）` }),
+        20_000,
+      );
+    }, timeoutMs);
     child.stdout.on("data", (d: Buffer) => (out += d.toString("utf8")));
     child.stderr.on("data", (d: Buffer) => (out += d.toString("utf8")));
-    child.on("close", (code, signal) => {
-      clearTimeout(timer);
-      done({ code, signal, out });
-    });
-    child.on("error", (e) => {
-      clearTimeout(timer);
-      done({ code: null, signal: null, out: out + `\n[spawn error] ${e.message}` });
-    });
+    child.on("close", (code, signal) => finish({ code, signal, out }));
+    child.on("error", (e) => finish({ code: null, signal: null, out: out + `\n[spawn error] ${e.message}` }));
   });
 }
 
@@ -179,8 +219,17 @@ async function main(): Promise<void> {
   console.log("══════════ 覆盖率门禁（从产物派生判定）══════════");
   cleanReportsDir();
 
-  const run = await runVitest(15 * 60 * 1000);
+  // 超时可用环境变量覆盖：CI 想早点失败、或本机想验证超时分支时改成 60_000 即可
+  const overrideMs = Number(process.env.COVERAGE_GATE_TIMEOUT_MS ?? "");
+  const run = await runVitest(Number.isFinite(overrideMs) && overrideMs > 0 ? overrideMs : 15 * 60 * 1000);
   const out = stripAnsi(run.out);
+
+  // ---- 事实 ⓪：跑没跑完（旧版这里会静默挂死，见 runVitest 的注释）----
+  if (run.signal === "timeout") {
+    console.error("✗ vitest 超时且进程树未能结束 —— 本轮覆盖数据不完整，按纪律判红，不许拿半截报告当依据");
+    console.error("  输出尾部：\n" + out.split("\n").slice(-25).join("\n"));
+    process.exit(2);
+  }
 
   // ---- 事实 ①：报告是否为本轮新生成（陷阱：基准自己过期 → 假绿）----
   if (!fs.existsSync(REPORT)) {
