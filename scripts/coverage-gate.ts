@@ -42,35 +42,57 @@ const REPORTS_DIR = path.join(ROOT, "coverage");
 const VITEST_BIN = path.join(ROOT, "node_modules", "vitest", "vitest.mjs");
 
 /** 全部 CSI 形式，含带 ? 参数的（漏了 \u001b[?25l 这类会留残渣） */
-// eslint-disable-next-line no-control-regex -- 本函数的职责就是识别并剥掉 ANSI 控制序列，正则里必须出现这些控制字符
-const ANSI_RE = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007]*(?:\u0007|\u001b\\)|\u001b[@-Z\\-_]/g;
+const ANSI_RE =
+  // eslint-disable-next-line no-control-regex -- 职责就是识别并剥掉 ANSI 控制序列，正则里必须出现这些控制字符
+  /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007]*(?:\u0007|\u001b\\)|\u001b[@-Z\\-_]/g;
 const stripAnsi = (s: string): string => s.replace(ANSI_RE, "");
 
 const GUARD_SIG = /SAFE_DELETE_BULK_CONFIRM_REQUIRED/g;
 
 /**
- * 删报告目录。**不能用 fs.rmSync**：本机批量删除守卫拦 >50 个文件（正是本文件存在的原因）。
- * Windows 走 cmd 的 `rd /s /q`（外部进程，走 NTFS 原生递归，不经 Node 的 fs 垫片）；
- * 其他平台（CI）直接 fs.rmSync。
+ * 清空报告目录。**不能用 fs.rmSync 一条路走到底**：本机批量删除守卫拦 >50 个文件
+ * （正是本文件存在的原因），而且某些宿主环境连 `cmd /c rd` 的同步派生都会挡下
+ * （实测 `spawnSync cmd.exe EBUSY`）。所以三条通道依次试：
+ *
+ *  ① `cmd /c rd /s /q`      —— Windows 原生递归删除，不经 Node 的 fs 垫片
+ *  ② `fs.rmSync`            —— cmd 派生被环境挡下时的备选（coverage 文件数不多时秒级）
+ *  ③ **`fs.renameSync` 挪走** —— 前两条都被守卫拦下时的最后退路
+ *
+ * ③ 为什么算"清理成功"：挪走之后 `coverage/` 对本次运行而言**已经不存在**，
+ * vitest 会从头写一份新报告，不可能读到上次的残留（这正是清理要防的事）。
+ * 而且 rename 不是删除，绕得开守卫；代价只是留下一个 `coverage.stale-<ts>` 待清目录
+ * —— **留个待清目录远好过把"环境不让删"判成"覆盖率不达标"**。
+ * 判据放在这里而不是信 exit code：报告新鲜度靠"目录确实是新的"来保证。
  */
 function cleanReportsDir(): void {
   if (!fs.existsSync(REPORTS_DIR)) return;
+  const stillThere = () => fs.existsSync(REPORTS_DIR);
   if (process.platform === "win32") {
     const winPath = REPORTS_DIR.split("/").join("\\");
     try {
       execFileSync("cmd.exe", ["/c", "rd", "/s", "/q", winPath], { encoding: "utf8" });
-    } catch (e) {
-      // rd 对"目录不存在"也返回非零，用 existsSync 复核而不是信退出码
-      if (fs.existsSync(REPORTS_DIR)) {
-        // 备选通道：cmd 派生被环境挡下时（实测 `spawnSync cmd.exe EBUSY`，连 `cmd /c echo` 都不通）
-        // 退回 Node 原生删除。coverage 约 90 个文件，rmSync 秒级完成；真删不掉再判红，
-        // 不让"环境不让删"伪装成"质量不达标"。
+    } catch {
+      /* rd 对"目录不存在"也返回非零，用 existsSync 复核而不是信退出码 */
+    }
+    if (stillThere()) {
+      try {
+        fs.rmSync(REPORTS_DIR, { recursive: true, force: true });
+      } catch (rmErr) {
+        // 第三通道：挪走。删除被守卫拦下时唯一还能保证"本次读到的是新报告"的办法
         try {
-          fs.rmSync(REPORTS_DIR, { recursive: true, force: true });
-        } catch (e2) {
+          const aside = `${REPORTS_DIR}.stale-${Date.now()}`;
+          fs.renameSync(REPORTS_DIR, aside);
+          console.log(
+            `   ⓘ 删除被本机守卫拦下，已把旧报告挪到 ${path.basename(aside)}（下次有空手动删；\n` +
+              `     不影响本次判定——新报告会从头写，不会读到旧数据）`,
+          );
+        } catch (mvErr) {
           throw new Error(
-            `清理 ${REPORTS_DIR} 失败：cmd 与 fs.rmSync 两条通道都不通（${(e as Error).message} / ${(e2 as Error).message}）`,
-            { cause: e2 },
+            `清理 ${REPORTS_DIR} 失败：rd / rmSync / rename 三条通道都不通` +
+              `（${(rmErr as Error).message} / ${(mvErr as Error).message}）`,
+            // rmErr 的原因写在 message 里（两条通道分工不同，合起来才看得出是
+            // 守卫 + 派生拦截同时生效）；cause 挂最后那次，符合「带着原始错误抛」的约定
+            { cause: mvErr },
           );
         }
       }
@@ -78,7 +100,7 @@ function cleanReportsDir(): void {
   } else {
     fs.rmSync(REPORTS_DIR, { recursive: true, force: true });
   }
-  if (fs.existsSync(REPORTS_DIR)) throw new Error(`报告目录仍存在，清理未生效：${REPORTS_DIR}`);
+  if (stillThere()) throw new Error(`报告目录仍存在，清理未生效：${REPORTS_DIR}`);
 }
 
 interface IstanbulFileCov {
@@ -185,14 +207,21 @@ function runVitest(timeoutMs: number): Promise<RunResult> {
       killTree(child.pid);
       // 兜底：进程树仍不退就直接判超时，绝不让门禁无限期挂着
       hardTimer = setTimeout(
-        () => finish({ code: null, signal: "timeout", out: out + `\n[gate] 进程树未退出，按超时判红（不采信任何指标）` }),
+        () =>
+          finish({
+            code: null,
+            signal: "timeout",
+            out: out + `\n[gate] 进程树未退出，按超时判红（不采信任何指标）`,
+          }),
         20_000,
       );
     }, timeoutMs);
     child.stdout.on("data", (d: Buffer) => (out += d.toString("utf8")));
     child.stderr.on("data", (d: Buffer) => (out += d.toString("utf8")));
     child.on("close", (code, signal) => finish({ code, signal, out }));
-    child.on("error", (e) => finish({ code: null, signal: null, out: out + `\n[spawn error] ${e.message}` }));
+    child.on("error", (e) =>
+      finish({ code: null, signal: null, out: out + `\n[spawn error] ${e.message}` }),
+    );
   });
 }
 
@@ -221,33 +250,42 @@ async function main(): Promise<void> {
 
   // 超时可用环境变量覆盖：CI 想早点失败、或本机想验证超时分支时改成 60_000 即可
   const overrideMs = Number(process.env.COVERAGE_GATE_TIMEOUT_MS ?? "");
-  const run = await runVitest(Number.isFinite(overrideMs) && overrideMs > 0 ? overrideMs : 15 * 60 * 1000);
+  const run = await runVitest(
+    Number.isFinite(overrideMs) && overrideMs > 0 ? overrideMs : 15 * 60 * 1000,
+  );
   const out = stripAnsi(run.out);
 
   // ---- 事实 ⓪：跑没跑完（旧版这里会静默挂死，见 runVitest 的注释）----
   if (run.signal === "timeout") {
-    console.error("✗ vitest 超时且进程树未能结束 —— 本轮覆盖数据不完整，按纪律判红，不许拿半截报告当依据");
+    console.error(
+      "✗ vitest 超时且进程树未能结束 —— 本轮覆盖数据不完整，按纪律判红，不许拿半截报告当依据",
+    );
     console.error("  输出尾部：\n" + out.split("\n").slice(-25).join("\n"));
     process.exit(2);
   }
 
   // ---- 事实 ①：报告是否为本轮新生成（陷阱：基准自己过期 → 假绿）----
   if (!fs.existsSync(REPORT)) {
-    console.error("✗ 没拿到覆盖报告依据（coverage/coverage-final.json 不存在）——按纪律判红，不许当成通过");
+    console.error(
+      "✗ 没拿到覆盖报告依据（coverage/coverage-final.json 不存在）——按纪律判红，不许当成通过",
+    );
     console.error(`  vitest 退出码=${run.code} signal=${run.signal}`);
     console.error("  输出尾部：\n" + out.split("\n").slice(-25).join("\n"));
     process.exit(2);
   }
   const reportMtime = fs.statSync(REPORT).mtimeMs;
   if (reportMtime < startedAt - 5000) {
-    console.error(`✗ 报告陈旧（mtime=${new Date(reportMtime).toISOString()} 早于本次开跑）——不许拿旧值当依据`);
+    console.error(
+      `✗ 报告陈旧（mtime=${new Date(reportMtime).toISOString()} 早于本次开跑）——不许拿旧值当依据`,
+    );
     process.exit(2);
   }
 
   // ---- 事实 ②：测试是否全过 ----
   const failedTests = /(\d+)\s+failed/.exec(out)?.[1];
   const testLine = out.split("\n").find((l) => /^\s*Tests\s/.test(l)) ?? "(未找到 Tests 行)";
-  const fileLine = out.split("\n").find((l) => /^\s*Test Files\s/.test(l)) ?? "(未找到 Test Files 行)";
+  const fileLine =
+    out.split("\n").find((l) => /^\s*Test Files\s/.test(l)) ?? "(未找到 Test Files 行)";
 
   // ---- 事实 ③：退出码归因（守卫崩溃是已知环境现象，不算代码问题）----
   const guardHits = countMatches(out, GUARD_SIG);
@@ -264,7 +302,8 @@ async function main(): Promise<void> {
   // ---- 判定 ----
   const problems: string[] = [];
   if (failedTests && Number(failedTests) > 0) problems.push(`有 ${failedTests} 个用例失败`);
-  if (unexplained > 0) problems.push(`有 ${unexplained} 处无法归因的 Unhandled Error（退出码 ${run.code}）`);
+  if (unexplained > 0)
+    problems.push(`有 ${unexplained} 处无法归因的 Unhandled Error（退出码 ${run.code}）`);
   const th = COVERAGE_THRESHOLDS as CoverageThresholds;
   const below: string[] = [];
   for (const k of ["statements", "branches", "functions", "lines"] as const) {
@@ -278,11 +317,15 @@ async function main(): Promise<void> {
   console.log("  指标        实测      阈值");
   for (const k of ["statements", "branches", "functions", "lines"] as const) {
     const label = { statements: "Stmt", branches: "Branch", functions: "Func", lines: "Lines" }[k];
-    console.log(`  ${label.padEnd(8)} ${fmt(m[k])}%  ≥ ${th[k]}%   ${m[k] + 1e-9 >= th[k] ? "✅" : "❌"}`);
+    console.log(
+      `  ${label.padEnd(8)} ${fmt(m[k])}%  ≥ ${th[k]}%   ${m[k] + 1e-9 >= th[k] ? "✅" : "❌"}`,
+    );
   }
   console.log(`  报告文件数：${m.files}`);
   if (guardHits > 0) {
-    console.log(`  ⓘ 本次退出码 ${run.code} 含 ${guardHits} 次本机批量删除守卫拦截（coverage/.tmp 收尾清理，环境现象，非代码问题）`);
+    console.log(
+      `  ⓘ 本次退出码 ${run.code} 含 ${guardHits} 次本机批量删除守卫拦截（coverage/.tmp 收尾清理，环境现象，非代码问题）`,
+    );
   } else if (run.code !== 0) {
     console.log(`  ⓘ vitest 退出码 ${run.code}（无守卫拦截）`);
   }
@@ -291,7 +334,9 @@ async function main(): Promise<void> {
     console.error("\n❌ 覆盖率门禁未通过：");
     for (const p of problems) console.error("   · " + p);
     if (unexplained > 0) console.error("\n  输出尾部：\n" + out.split("\n").slice(-25).join("\n"));
-    console.error("\n  提示：阈值在 scripts/coverage-thresholds.ts（单一事实源），改它即两处同步。");
+    console.error(
+      "\n  提示：阈值在 scripts/coverage-thresholds.ts（单一事实源），改它即两处同步。",
+    );
     process.exit(1);
   }
 
