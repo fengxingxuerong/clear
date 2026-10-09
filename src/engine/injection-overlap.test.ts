@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { humanize, mechanicalShuffle } from "../engine/humanize";
+import { SELF_QA_POOLS } from "../engine/shuffle/structure";
 
 /**
  * 注入叠加类签名门禁（v0.9.24）
@@ -171,6 +172,43 @@ describe("注入叠加类签名", () => {
     expect(
       hits,
       `${hits.length} 处垫词接连接词（960 次运行）：\n  ${hits.slice(0, 8).join("\n  ")}`,
+    ).toEqual([]);
+  });
+
+  /**
+   * v0.9.27 P0：自问自答「跨调用点预算」端到端锁。
+   *
+   * 缺陷（artifacts/_probe-qa-double.ts）：
+   *   injectSelfQA 有两个调用点（applyZhuqueFeatures / structuralShuffleParagraph），
+   *   各自 budget=1 且互不共享状态 ⇒ 同一段最多被塞 2 整句模板。
+   *   146 字的「工作总结」样本 0.7 档起：2 处 / 长度比 119% / detectAI 31 → 31（零收益）。
+   *
+   * 语料选它是因为它**单段、8 句、146 字**——注入命中率最高、膨胀比例最容易被看见。
+   */
+  it("自问自答全文至多 1 处（跨调用点预算）", () => {
+    const src =
+      "2026年第三季度，团队紧紧围绕年度目标，扎实推进各项工作，取得阶段性成效。一是强化组织建设，完善工作机制，提升协同效率。二是聚焦核心业务，优化服务流程，确保交付质量。三是加强风险防控，健全应急预案，筑牢安全底线。下一步，我们将持续深化各项举措，推动工作再上新台阶，为公司高质量发展贡献力量。";
+    const srcLen = src.replace(/\s/g, "").length;
+    const hits: string[] = [];
+    let injectedRuns = 0;
+    for (const intensity of [0.7, 0.8, 0.9, 1.0]) {
+      for (let seed = 0; seed < 30; seed++) {
+        const out = humanize(src, { intensity, seed, zhuqueMode: true, style: "plain" });
+        const n = SELF_QA_POOLS.plain.filter(([q]) => out.includes(q)).length;
+        if (n > 0) injectedRuns++;
+        if (n > 1)
+          hits.push(
+            `i${intensity}/s${seed}: ${n} 处自问自答（长度比 ${((out.replace(/\s/g, "").length / srcLen) * 100).toFixed(0)}%）`,
+          );
+      }
+    }
+    // 长度只作诊断登记，不作断言：实测 1 处注入下最大 116%、修复前 2 处 119%，
+    // 差距 3 个百分点，写成硬门槛等于一条「几乎永不红」的假门禁（方法论第 19 条）。
+    // 反对照：这条断言不能是永真式——注入路径必须真的被跑到过
+    expect(injectedRuns, "120 次运行里自问自答一次都没注入，本断言形同虚设").toBeGreaterThan(0);
+    expect(
+      hits,
+      `${hits.length} 处自问自答超预算/长度膨胀（120 次运行）：\n  ${hits.slice(0, 8).join("\n  ")}`,
     ).toEqual([]);
   });
 

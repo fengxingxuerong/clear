@@ -18,7 +18,7 @@ import {
   injectSelfQA,
   preDetectHumanFingerprint,
 } from "./humanize-shuffle.ts";
-import { SELF_QA_POOLS } from "./shuffle/structure";
+import { SELF_QA_POOLS, hasSelfQA } from "./shuffle/structure";
 
 /** 固定 rng：所有概率分支都命中（0 < x < 1 的"中间"行为） */
 const rngMid = () => 0.5;
@@ -115,6 +115,26 @@ describe("injectSelfQA（自问自答注入）", () => {
     const first = injectSelfQA(base, rngMid, 0.8, "plain");
     const second = injectSelfQA(base, rngMid, 0.8, "plain");
     expect(first).toEqual(second);
+  });
+
+  // v0.9.27 P0：两个调用点（applyZhuqueFeatures / structuralShuffleParagraph）
+  // 各自 budget=1 且互不共享状态 ⇒ 同一段被塞 2 整句模板，实测长度比 119% 而 detectAI 不降。
+  // 判据放在文本上（"已经有了就不再塞"），因此第二次调用必须原样返回。
+  it("跨调用点预算：第二次调用（文本里已有模板）原样返回，不再叠加", () => {
+    const first = injectSelfQA(base, rngMid, 0.8, "plain");
+    expect(first).toHaveLength(base.length + 1);
+    expect(hasSelfQA(first.join(""), "plain")).toBe(true);
+    const second = injectSelfQA(first, rngMid, 0.8, "plain");
+    expect(second).toEqual(first);
+  });
+
+  it("hasSelfQA：源文本自带模板句时为 true（真人已用此手法，不再注入）", () => {
+    // 只认"问"那一半（答会被后续 pass 改写，认它反而会漏）
+    expect(hasSelfQA("这意味着什么？往下看会更清楚。", "plain")).toBe(true);
+    expect(hasSelfQA("这个结论对吗？往下看会更清楚。", "plain")).toBe(false);
+    expect(hasSelfQA("今天天气不错。", "plain")).toBe(false);
+    // 文风分池：casual 模板在 plain 池里查不到
+    expect(hasSelfQA("不信？那你自己试试就知道了。", "plain")).toBe(false);
   });
 });
 

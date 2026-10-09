@@ -382,6 +382,15 @@ export const SELF_QA_POOLS: Record<RewriteStyle, [string, string][]> = {
 };
 
 /**
+ * v0.9.27 P0：文本里是否已存在自问自答模板（只看"问"那一半，答可能被后续 pass 改写）。
+ * 供 injectSelfQA 做跨调用点预算用，导出是为了让测试能直接钉住这条判据。
+ */
+export function hasSelfQA(text: string, style: RewriteStyle = "casual"): boolean {
+  const pool = SELF_QA_POOLS[style] ?? [];
+  return pool.some(([q]) => text.includes(q));
+}
+
+/**
  * @param usedPairs 跨段复读抑制（可选）：调用方传入一个**共享**集合，本函数把用掉的模板记进去、
  *   并优先避开已用过的。起因是实测缺陷（2026-09-28 探针抓的）：本函数按段落逐个调用，
  *   每段各自 budget=1，段落之间没有任何记忆——plain 池只有 6 条，
@@ -409,6 +418,23 @@ export function injectSelfQA(
   // 现在有一组测试遍历本常量逐条验证"复读会被删"，池子再扩也不会漏。
   const pool = SELF_QA_POOLS[style];
   if (pool.length === 0) return sentences;
+  // v0.9.27 P0：**跨调用点**预算——同一段最多 1 处自问自答。
+  //
+  // 缺陷（artifacts/_probe-qa-double.ts 实测，强度 0.7~0.9 档）：
+  //   本函数有两个调用点且**各自 budget=1、互不共享状态**：
+  //     ① applyZhuqueFeatures（humanize.ts，强度 ≥0.7）
+  //     ② structuralShuffleParagraph（本文件，强度 ≥0.65）
+  //   主流程上 ① 先跑、② 后跑 ⇒ 同一段最多被塞进 2 整句模板。
+  //   实测「B-工作总结」146 字：0.6 档 0 处 / 长度比 100%，0.7 档起 **2 处 / 119%**，
+  //   而 detectAI 31 → 31 **一点没降** —— 纯膨胀、零收益的"加噪当去味"。
+  //
+  // 为什么不共享一个 usedPairs 集合：那要跨模块传状态（结构层在 humanize.ts 之后才跑，
+  // 且两者对"段"的切法不同）。直接看**文本里是否已经有了**更简单也更稳——
+  // 它同时覆盖"另一调用点已注入"和"原文本身就是自问自答体"两种情况。
+  //
+  // 副作用（如实登记）：源文本自带「为什么呢？」这类问句时本函数整体不再注入。
+  //   判据是"真人已经用了这个手法就不需要再塞"，与注入的初衷一致，可接受。
+  if (hasSelfQA(sentences.join(""), style)) return sentences;
   // v0.9 专家修复 P4：0.85+ 档注入 2 次改为全文 1 次——两处自问自答
   // 在短文本里已是"连珠炮"，真人频率远低于此。
   const budget = 1;
