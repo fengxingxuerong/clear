@@ -99,6 +99,7 @@ import {
 
 // P7 引擎级体裁联动：自动体裁识别 + 每体裁参数旋钮
 import { classifyGenre, AutoGenre } from "./classify-genre.ts";
+import { keepOnlyIfDetectDrops } from "./detector.ts";
 // v0.8.6 术语保护：受保护术语位置禁止替换/拆句
 import { isProtectedTerm } from "./term-protect.ts";
 
@@ -1089,6 +1090,7 @@ export function applyZhuqueFeatures(
     // 「是不是只有这一种解释？未必，但这一种最直接。」连出两遍）。
     // 现在整个 split 共享一个 usedQA 集合，逐段去重。
     const usedQA = new Set<string>();
+    const beforeQA = result;
     result = result
       .split(/\n\n+/)
       .map((p) => {
@@ -1098,6 +1100,9 @@ export function applyZhuqueFeatures(
         return injectSelfQA(sents, qrng, intensity, style, usedQA).join("");
       })
       .join("\n\n");
+    // v0.9.28 P0：效果回滚——加噪必须换来 detectAI 下降，否则把这一轮整个撤掉。
+    // 详见 detector.ts 的 keepOnlyIfDetectDrops 注释（含实测与"判据是本地检测器"的边界）。
+    result = keepOnlyIfDetectDrops(beforeQA, result);
   }
   return result;
 }

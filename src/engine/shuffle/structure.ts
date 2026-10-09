@@ -10,6 +10,7 @@ import {
   pick,
 } from "../humanize-data.ts";
 import { fragmentCanStand } from "../humanize-vocab.ts";
+import { keepOnlyIfDetectDrops } from "../detector.ts";
 import { classifyExpositionScore } from "./fingerprint.ts";
 
 /** 承接词黑名单：以这些词开头的句子「必须」等在前句之后，不能参与重排（否则出病句） */
@@ -506,7 +507,12 @@ export function structuralShuffleParagraph(
   // v0.9.1：narrative/humanHand 体裁级跳过全部自问自答（"例子呢？"不属于叙事/人写原稿）
   const sceneBlockPara = (opts.skipSceneInject ?? false) && paraHasSceneBlock(paragraph);
   if (!sceneBlockPara && style !== "academic" && !(opts.skipSelfQA ?? false)) {
-    working = injectSelfQA(working, rng, intensity, style);
+    // v0.9.28 P0：同 applyZhuqueFeatures 那一处，注入也要"换到分"才留。
+    // 只关掉朱雀模式时本处是唯一的自问自答入口，不一起加就漏掉半条路径。
+    const beforeQA = working.join("");
+    const injectedQA = injectSelfQA(working, rng, intensity, style);
+    working =
+      keepOnlyIfDetectDrops(beforeQA, injectedQA.join("")) === beforeQA ? working : injectedQA;
   }
   if (splitAfter !== undefined && splitAfter > 0 && splitAfter < working.length - 1) {
     const a = working.slice(0, splitAfter + 1).join("");

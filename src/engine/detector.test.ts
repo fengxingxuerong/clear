@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { detectAI, detectLevel } from "./detector";
+import { detectAI, detectLevel, keepOnlyIfDetectDrops } from "./detector";
 
 /** 典型 AI 议论文（套话 + 骨架词 + 均匀句长） */
 const AI_TEXT = `随着信息技术的不断发展，数字化阅读逐渐走进人们的日常生活。值得注意的是，数字化阅读不仅改变了人们获取知识的方式，还显著提升了阅读的便捷性。然而，数字化阅读也面临着一系列挑战，诸如注意力分散、深度思考能力下降等问题。因此，我们需要在享受技术便利的同时，保持对阅读质量的关注。
@@ -8,6 +8,27 @@ const AI_TEXT = `随着信息技术的不断发展，数字化阅读逐渐走进
 
 /** 口语真人稿（第一人称 + 具体细节 + 短句） */
 const HUMAN_TEXT = `我家楼下那家早餐店开了快十年了。老板娘记得我不吃香菜，每次都是提前给我挑出来。有次我出差一个月没去，回来她问我："上哪儿发财去了？"我说出差，她笑："还以为你搬走了。"那天豆浆给我多加了半勺糖，说是欢迎回来。这种小事，比什么会员卡都管用。`;
+
+describe("keepOnlyIfDetectDrops（v0.9.28 注入效果回滚判据）", () => {
+  // 三档固定分数由实测取定（artifacts/_probe-rollback-fixtures.ts）：57 / 66 / 11
+  const before = `值得注意的是，随着技术的快速发展，相关问题应运而生。综上所述，该方案不仅极大地提升了效率，而且有效地降低了成本。`;
+  const worse = before + `此外，值得注意的是，综上所述，这一举措具有十分重要的意义。`;
+  const better = `这事我干过。说白了就是把流程改一下，效率上来了，成本也降了。不过刚开始那阵子确实乱。`;
+
+  it("注入/改写后 detectAI 下降 → 保留新文本", () => {
+    expect(detectAI(better).probability).toBeLessThan(detectAI(before).probability);
+    expect(keepOnlyIfDetectDrops(before, better)).toBe(better);
+  });
+
+  it("改写后 detectAI 不降反升 → 撤回，返回注入前文本", () => {
+    expect(detectAI(worse).probability).toBeGreaterThan(detectAI(before).probability);
+    expect(keepOnlyIfDetectDrops(before, worse)).toBe(before);
+  });
+
+  it("前后相同直接短路（不白跑两次 detectAI）", () => {
+    expect(keepOnlyIfDetectDrops(before, before)).toBe(before);
+  });
+});
 
 describe("detectAI（本地 14 特征检测）", () => {
   it("AI 议论文落 high 档", () => {

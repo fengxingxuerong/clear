@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { humanize, mechanicalShuffle } from "../engine/humanize";
 import { SELF_QA_POOLS } from "../engine/shuffle/structure";
+import { detectAI } from "../engine/detector";
 
 /**
  * 注入叠加类签名门禁（v0.9.24）
@@ -210,6 +211,39 @@ describe("注入叠加类签名", () => {
       hits,
       `${hits.length} 处自问自答超预算/长度膨胀（120 次运行）：\n  ${hits.slice(0, 8).join("\n  ")}`,
     ).toEqual([]);
+  });
+
+  /**
+   * v0.9.28 P0：效果回滚端到端锁。
+   *
+   * 「两段论说」样本在 0.6 档（不注入）detectAI=26，0.7 档（注入 1 处）反而 **28**
+   * —— 塞一整句模板，本地检测概率还涨 2。回滚判据上线后必须回到 26。
+   *
+   * 判据用**固定种子的回归锁**（seed=20260905，该种子 0.7 档确实会注入），
+   * 不写成跨种子的统计断言。原因（实测，别再试别的写法）：
+   *   ① 换种子后同一样本 detectAI 在 28~40 大幅波动（结构层重排随种子变化，与注入无关），
+   *      跨种子统计只能锁住噪声；
+   *   ② 想做同一样本 A/B（"摘掉输出里那句自问自答再看分"）也**不成立**：
+   *      回滚判据发生在朱雀增强阶段，其后还有结构层 + 四五道收尾 pass，
+   *      最终文本里的那句已经被改过 —— 摘掉它得到的不是当初比较的"注入前"。
+   *      实测这条写法 90 条里 65 条假红，全是下游 pass 的账。
+   */
+  it("注入换不到降分就撤回：论说样本固定种子 0.9 档回到不注入时的 26 分", () => {
+    const src =
+      "首先，数字化转型不是简单的技术堆叠，而是组织能力的重构。其次，数据治理的难点不在工具，而在责任边界的划分。最后，评估体系必须跟着业务节奏迭代，否则指标会失真。总的来说，这三件事互为前提，缺一个都会让投入打折扣。\n\n从实践看，很多团队把预算压在平台上，却忽略了流程改造。这样一来，系统上线了，习惯没变，效率反而下降。因此，先定责任再上工具，是被反复验证过的顺序。";
+    const opts = { seed: 20260905, zhuqueMode: true, style: "plain" as const };
+    const noInject = humanize(src, { ...opts, intensity: 0.6 }); // 0.6 档两处都不注入
+    const withInject = humanize(src, { ...opts, intensity: 0.9 });
+    // 修复前：0.9 档注入 1 处 → 28（比不注入的 26 还高 2）
+    expect(detectAI(noInject).probability, "0.6 档（不注入）基线").toBe(26);
+    expect(
+      detectAI(withInject).probability,
+      "0.9 档注入后不得高于不注入档 —— 高就是注入没换到降分且没被撤回",
+    ).toBeLessThanOrEqual(detectAI(noInject).probability);
+    expect(
+      SELF_QA_POOLS.plain.some(([q]) => withInject.includes(q)),
+      "本样本 0.9 档的注入应被整轮撤回（不留自问自答）",
+    ).toBe(false);
   });
 
   /**

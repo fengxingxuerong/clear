@@ -512,3 +512,29 @@ export function detectAI(raw: string): DetectReport {
 export function detectLevel(text: string): AiLevel {
   return detectAI(text).level;
 }
+
+/**
+ * v0.9.28 P0：注入效果回滚判据——**加噪必须换来 detectAI 下降，否则撤回**。
+ *
+ * 起因（v0.9.27 修完"叠加双份"后剩下的那一半，artifacts/_probe-qa-double.ts）：
+ *   自问自答注入在部分样本上是**净负收益**——C 样本 0.6 档（0 处注入）detectAI=26，
+ *   0.7 档（1 处注入）反而 **28**。塞进一整句模板，本地检测概率还涨了 2。
+ *   v0.9.27 只把"塞几处"从 2 降到 1，没有回答"该不该塞"。
+ *
+ * 判据：注入后 detectAI 的 probability 必须**严格小于**注入前，否则返回注入前的文本。
+ *   不是"降够 X 分才留"——那需要标定 X，而本地 detector 是整数分、
+ *   1 分就是它自己的最小可分辨单位，再定阈值是自造精度。
+ *
+ * ⚠️ 边界（必须如实登记，别把它说成"官方也验证过"）：
+ *   判据是**本地 detector**，不是官方朱雀。自问自答当初的依据是"AI 极少写自问自答"
+ *   （朱雀口径），而本地 detector 未必建模了这一条 ⇒ 存在"朱雀有收益、本地判无收益"
+ *   的样本被误撤的可能。要证伪只能靠真送检，而 18 个校准点目前 **0/18 认证**。
+ *   在拿到认证数据前，以本地可复核的指标为准——它至少是"能当场验"的。
+ *
+ * 开销：detectAI 实测 16k 字约 5.8ms（artifacts/_probe-detectai-cost.ts），
+ *   本函数最多两次调用，且只在"确实注入了"时才比较（after===before 直接短路）。
+ */
+export function keepOnlyIfDetectDrops(before: string, after: string): string {
+  if (after === before) return before;
+  return detectAI(after).probability < detectAI(before).probability ? after : before;
+}
