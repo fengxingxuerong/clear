@@ -31,7 +31,42 @@
  *
  * ⚠️ 凭据只走内存（`git credential fill` 读 OAuth token），**不落盘、不打印**。
  */
-const { execFileSync } = require("child_process");
+const { spawn } = require("child_process");
+
+/* ⚠️ 为什么不用 execFileSync（2026-10-10 改的，与 _publish.cjs 同一个理由）：
+ * 本机把 Node 的**同步**子进程派生整体挡下，`spawnSync git` 一律返回 `EBUSY`
+ * （git / node / cmd.exe 全灭），异步 `spawn` 完全正常。
+ * 症状：本脚本在第一句 `git rev-parse` 上就炸退，还报成 "✗ spawnSync git EBUSY"，
+ * 看起来像仓库坏了，其实是派生方式的问题。 */
+function run(args, { input, binary } = {}) {
+  return new Promise((resolve, reject) => {
+    const stdio = [input === undefined ? "ignore" : "pipe", "pipe", "pipe"];
+    const chunks = [];
+    let err = "";
+    const child = spawn("git", ["-C", REPO_PATH, ...args], { stdio });
+    if (input !== undefined) child.stdin.end(input);
+    if (binary) {
+      child.stdout.on("data", (d) => chunks.push(d));
+    } else {
+      child.stdout.setEncoding("utf-8");
+      child.stdout.on("data", (d) => chunks.push(Buffer.from(d, "utf-8")));
+    }
+    child.stderr.setEncoding("utf-8");
+    child.stderr.on("data", (d) => (err += d));
+    child.on("error", (e) => reject(new Error(`派生 git 失败：${e.code || e.message}`)));
+    child.on("close", (code) => {
+      if (code !== 0) reject(new Error(`git ${args.join(" ")} → 退出码 ${code}\n${err.trim()}`));
+      else resolve(Buffer.concat(chunks));
+    });
+  });
+}
+
+async function git(args) {
+  return (await run(args)).toString("utf-8").trim();
+}
+async function gitBlob(args) {
+  return run(args, { binary: true });
+}
 
 const REPO = "fengxingxuerong/clear";
 const REPO_PATH = "D:/projects/quaiwei";
@@ -39,13 +74,6 @@ const BRANCH = "master";
 const DRY = process.argv.includes("--dry");
 
 process.env.NODE_USE_ENV_PROXY = "1";
-
-function git(args) {
-  return execFileSync("git", ["-C", REPO_PATH, ...args], { encoding: "utf8" }).trim();
-}
-function gitBlob(args) {
-  return execFileSync("git", ["-C", REPO_PATH, ...args], { encoding: "buffer" });
-}
 
 /**
  * 取 commit 的 message —— **必须是仓库里的精确字节**。
@@ -55,19 +83,17 @@ function gitBlob(args) {
  * tree / parents / author / committer 全对了，commit sha 照样对不上。
  * 正确做法是直接读 `git cat-file commit <sha>`，取第一个空行之后的全部字节。
  */
-function gitMessage(c) {
-  const raw = gitBlob(["cat-file", "commit", c]).toString("utf8");
+async function gitMessage(c) {
+  const raw = (await gitBlob(["cat-file", "commit", c])).toString("utf8");
   const i = raw.indexOf("\n\n");
   if (i < 0) throw new Error(`cat-file commit 结构异常：${c}`);
   return raw.slice(i + 2);
 }
 
 async function getToken() {
-  const out = execFileSync(
-    "git",
-    ["credential", "fill"],
-    { input: "protocol=https\nhost=github.com\n\n", encoding: "utf8" },
-  );
+  const out = (
+    await run(["credential", "fill"], { input: "protocol=https\nhost=github.com\n\n" })
+  ).toString("utf8");
   const m = out.match(/password=(.+)/);
   if (!m) throw new Error("credential fill 里没有 password —— 无法调用 API");
   return m[1].trim();
@@ -111,7 +137,7 @@ async function api(token, method, path, body) {
     return;
   }
 
-  const localHead = git(["rev-parse", "HEAD"]);
+  const localHead = await git(["rev-parse", "HEAD"]);
   console.log(`远端 ${BRANCH}=${remoteSha.slice(0, 7)}  本地 HEAD=${localHead.slice(0, 7)}`);
 
   if (remoteSha === localHead) {
@@ -129,20 +155,20 @@ async function api(token, method, path, body) {
     return;
   }
 
-  const commits = git(["rev-list", "--reverse", "--topo-order", `${remoteSha}..HEAD`])
+  const commits = (await git(["rev-list", "--reverse", "--topo-order", `${remoteSha}..HEAD`]))
     .split("\n")
     .filter(Boolean);
   console.log(`待推送 ${commits.length} 个 commit`);
 
   for (const c of commits) {
-    const meta = git(["log", "-1", "--format=%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI", c]).split("\0");
+    const meta = (await git(["log", "-1", "--format=%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI", c])).split("\0");
     const [an, ae, ad, cn, ce, cd] = meta;
-    const msg = gitMessage(c);
-    const parent = git(["rev-parse", `${c}^`]);
-    const baseTree = git(["rev-parse", `${parent}^{tree}`]);
+    const msg = await gitMessage(c);
+    const parent = await git(["rev-parse", `${c}^`]);
+    const baseTree = await git(["rev-parse", `${parent}^{tree}`]);
     const subj = msg.split("\n")[0].slice(0, 60);
 
-    const raw = git(["diff", "--name-status", "--no-renames", "-z", parent, c]);
+    const raw = await git(["diff", "--name-status", "--no-renames", "-z", parent, c]);
     const entries = raw
       .split("\0")
       .filter(Boolean)
@@ -158,11 +184,11 @@ async function api(token, method, path, body) {
         console.log(`   - ${e.path}`);
         continue;
       }
-      const mode = git(["ls-tree", c, "--", e.path]).split(/\s+/)[0];
+      const mode = (await git(["ls-tree", c, "--", e.path])).split(/\s+/)[0];
       if (mode !== "100644" && mode !== "100755") {
         throw new Error(`未处理的 mode=${mode}（${e.path}）：符号链接/子模块请先手工处理`);
       }
-      const buf = gitBlob(["cat-file", "blob", `${c}:${e.path}`]);
+      const buf = await gitBlob(["cat-file", "blob", `${c}:${e.path}`]);
       let blobSha;
       if (!DRY) {
         const bres = await api(token, "POST", `/repos/${REPO}/git/blobs`, {
