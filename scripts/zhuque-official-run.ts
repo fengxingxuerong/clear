@@ -23,6 +23,7 @@
  *
  * 用法：
  *   ZHUQUE_API_KEY=xxx npx tsx scripts/zhuque-official-run.ts [--recheck] [--v4] [--dry-run]
+ *   ZHUQUE_API_KEY=xxx npx tsx scripts/zhuque-official-run.ts --only O1,N1,D0,H0   # 只送这几个点
  *
  * Key 只从环境变量读：写进命令行会留在 shell 历史，写进文件会被 git 看见，贴进对话会明文落盘。
  * 幂等：账本里已有 api-response 记录的 id 直接跳过（凭证不可覆盖，重复跑不会重复入账）。
@@ -71,6 +72,25 @@ function rebuild(src: string, intensity: number, zhuqueMode: boolean, seed: numb
 const argv = process.argv.slice(2);
 const DRY = argv.includes("--dry-run");
 const DO_V4 = argv.includes("--v4");
+/**
+ * --only <id1,id2,…>：只送这几个点。
+ *
+ * 为什么需要：官方额度不是无限的（网页版游客档实测每天约 5 次；API 档虽然按 token 计，
+ * 但同源服务也可能有每日调用上限）。有限的额度要花在**最值钱的锚点**上，而不是每次都全量重跑。
+ * 幂等保证重复跑不重复烧额度（已有 api-response 的 id 会跳过），所以分批送不会浪费。
+ */
+const ONLY = (() => {
+  const i = argv.indexOf("--only");
+  if (i < 0) return null;
+  const v = argv[i + 1];
+  if (!v || v.startsWith("--")) throw new Error("--only 需要逗号分隔的 id 列表，如 --only O1,N1,D0");
+  return new Set(
+    v
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
+})();
 
 interface Job {
   id: string;
@@ -147,12 +167,21 @@ async function main(): Promise<number> {
   const jobs: Job[] = [...recheckJobs()];
   if (DO_V4) jobs.push(...v4Jobs());
 
+  // --only：先按 id 筛，再走幂等跳过 —— 顺序反了会把"已认证"也算进 unknown 提示里
+  let selected = jobs;
+  if (ONLY) {
+    const unknown = [...ONLY].filter((id) => !jobs.some((j) => j.id === id));
+    if (unknown.length) console.error(`⚠️ --only 里有未知 id：${unknown.join(", ")}`);
+    selected = jobs.filter((j) => ONLY.has(j.id));
+  }
+
   // 幂等：已有 api-response 凭证的 id 跳过
   const already = new Set(readLedger().filter((e) => e.proof === "api-response").map((e) => e.id));
-  const todo = jobs.filter((j) => !already.has(j.id));
+  const todo = selected.filter((j) => !already.has(j.id));
 
   console.log(`═══════════ 官方 API 一键送检（${DO_V4 ? "recheck + v4" : "recheck"}）═══════════`);
-  console.log(`待送检 ${todo.length} 篇（跳过已认证 ${jobs.length - todo.length} 篇）\n`);
+  // 分母用 selected 而不是 jobs：--only 时未选中的点不算"因已认证而跳过"
+  console.log(`待送检 ${todo.length} 篇（跳过已认证 ${selected.length - todo.length} 篇）\n`);
   for (const j of todo) {
     const chars = countChars(j.text);
     const x = aiScore(j.text).score;
