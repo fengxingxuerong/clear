@@ -3,7 +3,7 @@ name: qu-ai-wei
 description: 去 AI 味（简体中文）——调用本仓库自带的本地离线引擎（零成本、不联网）或可选 LLM 深度闭环，把 AI 写的中文改得更像人写的，并输出前后 AI 味评分与逐条痕迹报告。当用户要求「降 AI 率 / 去 AI 味 / 去 AIGC 痕迹 / 让这段更像人写的 / 自检朱雀类检测」时使用。
 license: MIT
 metadata:
-  version: 0.9.29
+  version: 0.9.30
   repo: https://github.com/fengxingxuerong/clear
 ---
 
@@ -47,6 +47,7 @@ QUAIWEI_API_KEY=sk-xxx npx tsx scripts/humanize-cli.ts ./in --out ./out --api \
 | `--suffix <s>` | 默认 `.humanized` | 输出文件后缀 |
 | `--out-format` | `follow` \| `txt` \| `docx` | 强制输出格式 |
 | `--report <file>` | JSON 路径 | 逐篇运行报告 |
+| `--explain` | 开关 | 附「为什么这么改」清单：逐条标注属于哪类规则、依据哪张表（事后反查，判不准的标「推断」） |
 | `--api` | 开关 | 走 LLM 深度闭环（否则纯本地引擎） |
 | `--base-url <url>` | 绝对地址 | 网关地址；**不要**填 UI 里的 `/sensenova/v1` 相对路径 |
 | `--model` / `--judge-model` / `--alt-model` | 模型名 | 主改写 / 交叉评判 / 备选改写 |

@@ -18,10 +18,11 @@
  *       [--api [--base-url <url>] [--model <name>] [--api-key <key>] [--judge-model <name>]]
  *       [--alt-model <name>] [--no-deep] [--contest <n>] [--max-calls <n>] [--max-wait <sec>]
  *       [--strict] [--persona default|netgen|classic] [--report <file.json>]
- *       [--out-format follow|txt|docx]
+ *       [--out-format follow|txt|docx] [--explain]
  *
  * 示例：
  *   npx tsx scripts/humanize-cli.ts ./docs-txt --out ./out --intensity 0.9 --zhuque
+ *   npx tsx scripts/humanize-cli.ts ./docs-txt --explain   # 每篇改完附「为什么这么改」清单
  *   npx tsx scripts/humanize-cli.ts ./word-docs --out ./out          # .docx 进 .docx 出
  *   npx tsx scripts/humanize-cli.ts ./word-docs --out-format txt     # 强制落成 .txt
  *   # LLM 深度模式（Key 走环境变量，别写进命令行历史）：
@@ -40,6 +41,7 @@ import path from "path";
 import { humanize, adviceFor } from "../src/engine/humanize";
 import { aiScore } from "../src/engine/humanize-metrics.ts";
 import { detectAI } from "../src/engine/detector";
+import { explainChanges, formatExplain, type ExplainItem } from "../src/engine/explain";
 import { runHumanize } from "../src/api/llm";
 import { DEFAULT_API, loadPresetKeys, type ApiConfig } from "../src/api/llm-config";
 import { readDocxText, writeDocxText } from "../src/docx-io";
@@ -99,6 +101,8 @@ interface Args {
   report: string;
   /** v0.9.17：输出格式。follow = 跟随输入扩展名（.docx 进 → .docx 出） */
   outFormat: "follow" | "txt" | "docx";
+  /** v0.9.30：改完附「为什么这么改」清单（句级 diff 反查规则表，事后归因） */
+  explain: boolean;
 }
 
 const USAGE =
@@ -107,7 +111,7 @@ const USAGE =
   " [--api [--base-url <url>] [--model <name>] [--api-key <key>] [--judge-model <name>]]" +
   " [--alt-model <name>] [--no-deep] [--contest <n>] [--max-calls <n>] [--max-wait <sec>]" +
   " [--strict] [--persona default|netgen|classic] [--report <file.json>]" +
-  " [--out-format follow|txt|docx]\n" +
+  " [--out-format follow|txt|docx] [--explain]\n" +
   "  --base-url 填网关绝对地址（如 https://token.sensenova.cn/v1）。UI 设置里的 /sensenova/v1" +
   " 是同源代理专用写法（代理会剥掉 /sensenova 前缀再转发），CLI 直连勿带这段前缀。";
 
@@ -134,6 +138,7 @@ function parseArgs(argv: string[]): Args {
     persona: "default",
     report: "",
     outFormat: "follow",
+    explain: false,
   };
   const a = argv.slice(2);
   if (!a[0] || a[0].startsWith("--")) {
@@ -175,6 +180,7 @@ function parseArgs(argv: string[]): Args {
         }
         break;
       }
+      case "--explain": args.explain = true; break;
       default:
         console.error(`未知参数: ${a[i]}\n${USAGE}`);
         process.exit(1);
@@ -283,6 +289,8 @@ interface FileReport {
   roundScores?: number[];
   note?: string;
   degrade?: string[];
+  /* 仅 --explain 模式有 */
+  explain?: ExplainItem[];
 }
 
 async function main() {
@@ -392,6 +400,17 @@ async function main() {
       // 不自动跳过——批量场景里静默不产出比多产出一版更难排查。
       const advice = adviceFor(raw, aiScore(raw).score);
       if (advice.code !== "ok") console.log(`   ⓘ ${advice.message}`);
+      if (args.explain) {
+        const items = explainChanges(raw, out);
+        rep.explain = items;
+        // 缩进两格对齐本篇其他行首的 `   `
+        console.log(
+          formatExplain(items)
+            .split("\n")
+            .map((l) => `   ${l}`)
+            .join("\n"),
+        );
+      }
       if (cfg) {
         const tag = rep.engine === "llm" ? "LLM" : rep.engine === "mixed" ? "混拼" : "本地回退";
         const rounds = rep.roundScores?.length ? ` 轮次分 [${rep.roundScores.join(", ")}]` : "";

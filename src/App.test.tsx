@@ -10,7 +10,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
 import App from "./App";
-import { aiScore } from "./engine/humanize";
+import { aiScore, humanize } from "./engine/humanize";
 import { loadHistory } from "./store-history";
 import { loadIntensity, saveDraft, loadDraft, loadZhuqueMode, loadDetector } from "./store";
 import { DEFAULT_API } from "./api/llm-config";
@@ -653,6 +653,80 @@ describe("App 集成：评分 / 检测闭环 / 设置 / 历史 / 草稿 / 面板
       { timeout: 1500 },
     );
     expect(loadDraft()?.output ?? "").toBe("");
+  });
+});
+
+/**
+ * App 接线：把 v0.9.29 的 explain.ts 接到界面上。
+ *
+ * 面板自身渲染的断言在 explain-panel.test.tsx，这里只锁「按得动、看得见、会因改稿而失效」——
+ * 后者是接线最容易漏的一半：清单是拿点击那一刻的两稿算的，稿一改就成了说谎的结果。
+ */
+describe("App 「为什么这么改」接线（v0.9.30）", () => {
+  const setPanes = (utils: ReturnType<typeof render>, before: string, after: string) => {
+    fireEvent.change(utils.getByPlaceholderText(/把 AI 写的文章粘进来/), {
+      target: { value: before },
+    });
+    fireEvent.change(utils.getByPlaceholderText(/点击「去味」生成/), { target: { value: after } });
+  };
+
+  it("两稿都为空时按钮禁用：点了也不出面板", () => {
+    const utils = render(<App />);
+    const btn = utils.getByText("为什么这么改") as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    fireEvent.click(btn);
+    expect(utils.queryByText(/句级 diff 反查规则表/)).toBeNull();
+  });
+
+  it("只有原文没有产出时仍禁用：没有改后稿就无从比对", () => {
+    const utils = render(<App />);
+    fireEvent.change(utils.getByPlaceholderText(/把 AI 写的文章粘进来/), {
+      target: { value: INPUT_TEXT },
+    });
+    expect((utils.getByText("为什么这么改") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("真引擎产出：面板出现并给出确定归因与依据出处", async () => {
+    // 不 mock runHumanize —— 用真实引擎跑一次，这样清单里的"确定归因"不是硬凑的假数据
+    const utils = render(<App />);
+    setPanes(utils, INPUT_TEXT, humanize(INPUT_TEXT, { intensity: 0.9, seed: 20260905 }));
+    fireEvent.click(utils.getByText("为什么这么改"));
+    await waitFor(() => {
+      expect(utils.getByText(/句级 diff 反查规则表/)).toBeTruthy();
+    });
+    expect(utils.getByText(/确定归因/)).toBeTruthy();
+    // 依据必须指到具体文件，不许只说"规则如此"（多条同款 basis，故用容器匹配）
+    expect(utils.container.textContent).toMatch(/humanize-(vocab|text)\.ts/);
+  });
+
+  it("改了原文后面板自动收起：旧清单是拿上一版两稿算的，留着就是错的", async () => {
+    const utils = render(<App />);
+    setPanes(utils, INPUT_TEXT, OUTPUT_TEXT);
+    fireEvent.click(utils.getByText("为什么这么改"));
+    expect(utils.queryByText(/句级 diff 反查规则表/)).toBeTruthy();
+    fireEvent.change(utils.getByPlaceholderText(/把 AI 写的文章粘进来/), {
+      target: { value: INPUT_TEXT + "再加一句试试。" },
+    });
+    expect(utils.queryByText(/句级 diff 反查规则表/)).toBeNull();
+  });
+
+  it("手工润色产出的正文后面板同样失效（去味稿也不是那一份了）", () => {
+    const utils = render(<App />);
+    setPanes(utils, INPUT_TEXT, OUTPUT_TEXT);
+    fireEvent.click(utils.getByText("为什么这么改"));
+    expect(utils.queryByText(/句级 diff 反查规则表/)).toBeTruthy();
+    fireEvent.change(utils.getByPlaceholderText(/点击「去味」生成/), {
+      target: { value: OUTPUT_TEXT + "我改了一句。" },
+    });
+    expect(utils.queryByText(/句级 diff 反查规则表/)).toBeNull();
+  });
+
+  it("「收起」按钮关面板", () => {
+    const utils = render(<App />);
+    setPanes(utils, INPUT_TEXT, OUTPUT_TEXT);
+    fireEvent.click(utils.getByText("为什么这么改"));
+    fireEvent.click(utils.getByText("收起"));
+    expect(utils.queryByText(/句级 diff 反查规则表/)).toBeNull();
   });
 });
 

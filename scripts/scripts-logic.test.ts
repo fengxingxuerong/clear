@@ -207,6 +207,7 @@ interface CliArgs {
   deep: boolean;
   contest: number;
   outFormat: string;
+  explain: boolean;
 }
 
 function loadCliFns(): {
@@ -331,6 +332,17 @@ describe("humanize-cli parseArgs", () => {
     expect(parseArgs(base(["./in"])).outFormat).toBe("follow");
     expect(parseArgs(base(["./in", "--out-format", "docx"])).outFormat).toBe("docx");
     expect(parseArgs(base(["./in", "--out-format", "TXT"])).outFormat).toBe("txt");
+  });
+
+  // v0.9.30：explain.ts 的出口之一。默认必须关——它是 O(句数) 的额外 diff，
+  // 批量几百篇时不该悄悄付这个代价。
+  it("--explain：默认关闭，显式给出为开；不影响其它默认值", () => {
+    const off = parseArgs(base(["./in"]));
+    expect(off.explain).toBe(false);
+    const on = parseArgs(base(["./in", "--explain"]));
+    expect(on.explain).toBe(true);
+    expect(on.intensity).toBe(0.9);
+    expect(on.outFormat).toBe("follow");
   });
 });
 

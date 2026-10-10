@@ -36,6 +36,7 @@ import {
   type LocalSettings,
 } from "./store";
 import { setProtectedTerms } from "./engine/term-protect";
+import { explainChanges, type ExplainItem } from "./engine/explain";
 import { copyText } from "./api/zhuque";
 import { SettingsModal } from "./components/SettingsModal";
 import { ScoreBadge } from "./components/ScoreBadge";
@@ -47,6 +48,7 @@ import { BenchmarkPanel } from "./components/BenchmarkPanel";
 import { ZhuquePanel } from "./components/ZhuquePanel";
 import { CalibLabModal } from "./components/CalibLabModal";
 import { LocalDetectPanel } from "./components/LocalDetectPanel";
+import { ExplainPanel } from "./components/ExplainPanel";
 import {
   loadHistory,
   saveHistory,
@@ -115,6 +117,8 @@ export default function App({
   const [detectIn, setDetectIn] = useState<DetectReport | null>(null);
   const [detectOut, setDetectOut] = useState<DetectReport | null>(null);
   const [showDetectFeatures, setShowDetectFeatures] = useState(false);
+  // ---- 「为什么这么改」清单（事后比对，随任一稿更新而失效） ----
+  const [explainItems, setExplainItems] = useState<ExplainItem[] | null>(null);
   const [local, setLocal] = useState<LocalSettings>(() => loadLocal());
   // 自定义保护术语（原文）。term-protect 的保护集是模块级全局，挂载时注入一次；
   // 设置里改完由 handleSaveSettings 再注入。
@@ -221,6 +225,7 @@ export default function App({
         local.bestOf ? { bestOf: true, candidates: local.candidates } : undefined,
       );
       setOutput(r.text);
+      setExplainItems(null);
       setBefore(r.before);
       setAfter(r.after);
       setJudgeScore(null);
@@ -391,14 +396,21 @@ export default function App({
   const handleInputHotkey = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") hotkeyRef.current();
   }, []);
-  const handleInputChange = useCallback((v: string) => setInput(v), []);
-  const handleOutputChange = useCallback((v: string) => setOutput(v), []);
+  const handleInputChange = useCallback((v: string) => {
+    setInput(v);
+    setExplainItems(null); // 原文一改，旧的 diff 归因就作废了
+  }, []);
+  const handleOutputChange = useCallback((v: string) => {
+    setOutput(v);
+    setExplainItems(null); // 手工润色后，清单对不上新输出
+  }, []);
   const openSettings = useCallback(() => setShowSettings(true), []);
 
   function handleClear() {
     setInput("");
     setOutput("");
     setNote("");
+    setExplainItems(null);
     setBefore(null);
     setAfter(null);
     setJudgeScore(null);
@@ -418,7 +430,15 @@ export default function App({
   function handleSample() {
     setInput(SAMPLE_TEXT);
     setOutput("");
+    setExplainItems(null);
     setNote("已载入示例文本，点「去味」试一把。");
+  }
+
+  /* 「为什么这么改」：引擎没有 trace，这里是事后比对，
+   * 所以每次都要拿当前的两稿重算，没有缓存态。 */
+  function handleExplain() {
+    if (!input.trim() || !output.trim()) return;
+    setExplainItems(explainChanges(input, output));
   }
 
   /* ---------------- 文件导入 / 导出（v0.9.15） ----------------
@@ -586,6 +606,14 @@ export default function App({
         >
           对比
         </button>
+        <button
+          className="ghost"
+          onClick={handleExplain}
+          disabled={!inputHasText || !outputHasText}
+          title="逐条列出这次改动属于哪类规则、依据是哪张表"
+        >
+          为什么这么改
+        </button>
         <button className="ghost" onClick={handleClear}>
           清空
         </button>
@@ -658,6 +686,8 @@ export default function App({
         onGenreChange={setGenreOverride}
         onNote={setNote}
       />
+
+      {explainItems && <ExplainPanel items={explainItems} onClose={() => setExplainItems(null)} />}
 
       {(detectIn || detectOut) && (
         <LocalDetectPanel
