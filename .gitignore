@@ -64,6 +64,7 @@ coverage/
 # 整目录挪到这里。它同样不是源、也不进产物——不忽略的话，sync-dist 的 dirty 判定
 # 会因为一个「删不掉的临时目录」天天报脏，最后必然被人用逃生口绕过。
 coverage.stale-*/
+.covtmp-regex-*/
 
 # 构建期盖章产物（npm run build 生成），不是源
 electron-app/build-info.json

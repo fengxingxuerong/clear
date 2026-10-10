@@ -58,10 +58,32 @@
 
 ⇒ 后两条不是"测试写得好"，是"这个分支当前不可观测"。记下来免得以后误以为它被锁住了。
 
-### ⑥ 本次改动面
+### ⑦ 顺带修掉：覆盖率模式下的**随机**超时（逐条修是打地鼠）
+
+连跑三次 `check:release`，红的分别是**不同的用例**：verify-quality 的「词表扫描」→
+「真起进程 CLI」→ 两者同时。逐条加 timeout 是打地鼠，必须系统性看。
+
+| 事实 | 实测值 |
+| --- | --- |
+| 这些用例本来就有多重 | 单文件跑 16 条共 **4.57s**，此类用例占大头 ≈4s |
+| 默认超时 | 5000ms —— 单文件下贴着过，全量 + 插桩后必炸 |
+| 分片数 | `coverage/.tmp` **= 测试文件数**（实测 80） |
+
+**失败会连锁**，把"1 条超时"伪装成"覆盖率不达标"：
+用例失败 → v8 provider 走 `onTestFailure` → **强制** `cleanAfterRun`（`clean: false` 只挡正常路径，
+挡不住异常路径）→ 删 `coverage/.tmp`（86 分片）被本机守卫（>50 文件）拦下 → 抛
+`SAFE_DELETE_BULK_CONFIRM_REQUIRED` → 覆盖报告写不出来 → 门禁判红。
+
+修法：`vite.config.ts` 的 `test.testTimeout` 全局放宽到 30s，另给两条已知最重的用例单独
+30s / 60s。**放宽的是等待时间，判据一条没动**（该为空的仍必须为空、退出码仍必须是 0）。
+⇒ 治本还是别让用例超时：测试全绿时 `cleanAfterRun` 根本不触发，`.tmp` 那道清理就不会炸。
+
+### ⑧ 本次改动面
 
 - 新增 `src/engine/explain.ts` + `src/engine/explain.test.ts`（11 条）
+- `vite.config.ts`：`test.testTimeout` 30s；`scripts/verify-quality.test.ts`：两条重用例单独放宽
 - 全量 `vitest run`：**1705 passed / 80 文件**（1694 + 本次 11）
+- `check:release`：**80 文件 / 1705 passed / 覆盖率门禁通过 / CHECK_EXIT=0**
 - tsc / eslint / prettier 均 0
 
 ## v0.9.28 更新（注入效果回滚：加噪必须换来 detectAI 下降，否则整轮撤回）
