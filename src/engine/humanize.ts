@@ -70,7 +70,7 @@ import {
   clampAvgSentenceLenUnder25,
 } from "./humanize-shuffle.ts";
 
-import { countPadHeads, PAD_INJECT_CAP } from "./humanize-primitives.ts";
+import { countPadHeads, PAD_INJECT_CAP, REPORTING_DAO_RE } from "./humanize-primitives.ts";
 
 import {
   aiScore,
@@ -1317,6 +1317,18 @@ function humanizeSingle(text: string, opts: HumanizeOptions = {}): string {
     //   注意用 opts.genre 而非 effectiveGenre：humanizeSingle 作用域内只有 opts，
     //   调用方 humanize 已把 effectiveGenre 注入 opts.genre（见 humanize 内两处调用）。
     const mergeForbiddenGenre = opts.genre === "narrative" || opts.genre === "humanHand";
+    // v0.9.36：纯标点段（切句残余的闭引号/闭括号）**不参与"短句合并"**，原样附回前句尾。
+    //
+    // 实证（2026-10-13 对话体语料人眼审查）：`"好，我这就去准备。"` 被切句后残余一个
+    // 独立引号段，走进下面的合并模板「剥句尾标点 + ，+ s」⇒ 产出 `"好，我这就去准备，"`——
+    // **句末句号被换成逗号、引号还在外面**，标点损坏（全种子复现）。
+    // 引号不是"短句"，附回时不该动任何标点。
+    const sHasWordChar = /[\u4e00-\u9fa5a-zA-Z0-9]/.test(s);
+    if (!sHasWordChar) {
+      if (out.length > 0) out[out.length - 1] += s;
+      else out.push(s);
+      continue;
+    }
     if (
       !mergeForbiddenGenre &&
       out.length > 0 &&
@@ -1358,7 +1370,11 @@ function humanizeSingle(text: string, opts: HumanizeOptions = {}): string {
       //   但那是在 humanizeSingle 单层测的；全文级（含朱雀层）复测推翻了该结论。
       //   对 casual 的论说/对话体裁仍保留——那里「嘛」「吧」是有效的人味信号。
       const tailForbiddenGenre = opts.genre === "humanHand" || opts.genre === "narrative";
-      if (!formalityGuard && !tailForbiddenGenre) {
+      // v0.9.36：引述标记「X道」（说道/问道/答道…）收尾不加语气词——「说道吧。」「问道呢。」
+      // 是引述标记与口语气词的错位组合（对话体语料实测全种子复现，min repro: artifacts/_repro-v8.ts）。
+      // 与 scan-bugs v8.0 探针「引述动词+语气词」共用 REPORTING_DAO_RE，判据天然对齐。
+      const reportingTail = REPORTING_DAO_RE.test(stripped);
+      if (!formalityGuard && !tailForbiddenGenre && !reportingTail) {
         // v0.9.8 P0 收敛（五）：废除 SOFT_TAIL_VARIANTS 句尾收束分支。
         //
         // 证据（A/B 实验，scripts/_ab_driver.ts）：单独关掉本分支，

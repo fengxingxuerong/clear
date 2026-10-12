@@ -32,6 +32,30 @@ describe("本地引擎输出质量（v0.8.4 反指纹回归）", () => {
     }
   });
 
+  it("v0.9.36：引述标记「X道」后不撒语气词（说道吧/问道呢）——30 种子", () => {
+    // 实证（2026-10-13 对话体语料）：修复前 seed=0 即产出「语气坚定地说道吧。」。
+    // 守卫与 scan-bugs v8.0 探针「引述动词+语气词」共用 REPORTING_DAO_RE。
+    const src = '"我们必须尽快做出决定。"张总放下手里的茶杯，语气坚定地说道。';
+    for (let seed = 0; seed < 30; seed++) {
+      const out = humanize(src, { intensity: 0.9, seed });
+      const m = out.match(/[说道问答喊答应笑叹]道[吧嘛呢呀哈哦啊嗯]/);
+      expect(m, `seed=${seed} 引述标记+语气词：${out}`).toBeNull();
+    }
+  });
+
+  it("对照组：普通句尾照常可软化（守卫只挡「X道」，软化分支未被关掉）", () => {
+    // 若哪天有人图省事把 SOFT_ENDINGS 分支整个关掉，上面的用例会假绿——这条防它。
+    let hit = false;
+    for (let seed = 0; seed < 30; seed++) {
+      const out = humanize("他放下手里的茶杯，语气很坚定。", { intensity: 0.9, seed });
+      if (/[吧嘛呢呀哈][。！？]/.test(out)) {
+        hit = true;
+        break;
+      }
+    }
+    expect(hit).toBe(true);
+  });
+
   it("「通过对N」不再产出「借对/靠对/用对」病句", () => {
     const src = "通过对海量数据的深度分析，企业优化了资源配置。";
     for (let seed = 0; seed < 15; seed++) {

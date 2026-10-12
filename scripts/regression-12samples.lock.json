@@ -69,11 +69,11 @@
       "note": "seed=20260826, intensity=0.9, zhuque=true, genre=纯人写稿"
     },
     "O2": {
-      "score": 1,
+      "score": 2,
       "note": "seed=20260826, intensity=0.7, zhuque=false, genre=论说文"
     },
     "O3": {
-      "score": 1,
+      "score": 2,
       "note": "seed=20260826, intensity=0.9, zhuque=true, genre=论说文"
     }
   },
@@ -113,6 +113,14 @@
       "reason": "E/O2 实测已稳定压到 1（原基线 2）—— 2026-10-05 全面优化验证轮，仅追紧棘轮、不放行任何恶化",
       "changes": [
         "E/O2:2→1"
+      ]
+    },
+    {
+      "at": "2026-10-12",
+      "reason": "【接受恶化 O2/O3】v0.9.36 切点守卫拦下「只有那些…方面。」残句（两侧输出已逐字 diff，唯一差异），文本更完整但 avgLen 弱信号项 1→2 分",
+      "changes": [
+        "E/O2:1→2",
+        "E/O3:1→2"
       ]
     }
   ]

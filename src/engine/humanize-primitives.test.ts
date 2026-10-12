@@ -111,6 +111,24 @@ describe("fragmentFrontCanStand —— 必须拒绝的（残句防线）", () =>
     expect(fragmentFrontCanStand("显示出明显的改善")).toBe(true);
     expect(fragmentFrontCanStand("数据显示增长")).toBe(true);
   });
+
+  it("v0.9.36：从属连词开头且从句未闭合（「如果…」被句号化是残句）", () => {
+    // 实证：营销语料「如果你也在为选台灯发愁，不妨试试这一款」曾被切成
+    // 「如果你也在为选台灯发愁。不妨试试这一款」，全种子复现。
+    expect(fragmentFrontCanStand("如果你也在为选台灯发愁")).toBe(false);
+    expect(fragmentFrontCanStand("虽然天气很冷")).toBe(false);
+    expect(fragmentFrontCanStand("只要企业加大研发投入")).toBe(false);
+    // 含标点 = 从句已闭合（「如果 A，B」的 front）→ 放行，切出的是完整复合句
+    expect(fragmentFrontCanStand("如果你在职场混，就要记住先做人再做事")).toBe(true);
+  });
+
+  it("v0.9.36：引述动词收尾（引述内容缺失是残句）", () => {
+    // 实证：news 语料「记者从相关部门了解到，我市近期将启动…」曾被切成
+    // 「记者从相关部门了解到。我市近期将启动…」，全种子复现。
+    expect(fragmentFrontCanStand("记者从相关部门了解到")).toBe(false);
+    expect(fragmentFrontCanStand("有关负责人表示")).toBe(false);
+    expect(fragmentFrontCanStand("他在会上强调")).toBe(false);
+  });
 });
 
 describe("fragmentFrontCanStand —— 必须放行的（别把守卫写死）", () => {
@@ -134,6 +152,13 @@ describe("fragmentFrontCanStand —— 必须放行的（别把守卫写死）",
     expect(fragmentFrontCanStand("方法论升级，数据增长明显")).toBe(true);
     // 而「方法论升级，数据」按「数据」判定 → 拒绝
     expect(fragmentFrontCanStand("方法论升级，数据")).toBe(false);
+  });
+
+  it("v0.9.36：引述动词的否定式是自足的「表态」义，不拦", () => {
+    // 「我不这么认为。」「他没明确表示。」是完整句（= 没有表态），
+    // 由 REPORTING_TAIL_RE 的双 lookbehind 放行（排除「否定词 + 0~2 字 + 尾词」）。
+    expect(fragmentFrontCanStand("我不这么认为")).toBe(true);
+    expect(fragmentFrontCanStand("他没明确表示")).toBe(true);
   });
 });
 

@@ -70,6 +70,16 @@ export function shuffleSentencesSafe(
 ): string[] {
   if (intensity < 0.55) return sentences;
   if (sentences.length < 4) return sentences;
+  // v0.9.36：引语碎片守卫——任一段的引号计数为奇数，说明切句层把带引号的文本拆碎了
+  // （`。"` 被拆成 `…。` + `"`，引号与它的配对体分居两段）。
+  // 此时"相邻互换"会把引语碎片搬过引号边界：实测（2026-10-13 对话体语料）
+  // 「错过就再也不会有了。」从第二段引语被换进第一段——**台词搬家，语义错位**。
+  // 判据：任一段引号计数为奇 ⇒ 整段跳过重排。少一次去味手段 vs 语义破坏，取其轻。
+  // （引号成对，被拆碎后必然留下奇数段；全偶数段说明每段自带完整引号对，不属于碎片。）
+  const QUOTE_RE = /["“”「」『』]/g;
+  for (const s of sentences) {
+    if (((s.match(QUOTE_RE) || []).length & 1) === 1) return sentences;
+  }
   const out = sentences.slice();
   // v0.9 专家修复 P1（句序）：原实现允许任意两个"自由句"远距离互换，
   // 实测把「28nm 背景→7nm 转折→3nm 引入」的因果链打乱成不可读乱序。

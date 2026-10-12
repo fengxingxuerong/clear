@@ -320,6 +320,27 @@ describe("shuffleSentencesSafe（P0-1 段内句序安全重排）", () => {
     const sents = ["第一句内容。", "第二句内容。", "第三句内容。", "第四句内容。"];
     expect(shuffleSentencesSafe(sents, rngMid, 0.5)).toEqual(sents);
   });
+
+  it("v0.9.36：引号被拆碎的句数组整体跳过重排（防引语碎片搬过引号边界）", () => {
+    // 实证：`"责任我来扛。"张总…，"市场窗口期只有三个月，错过就再也不会有了。"`
+    // 被切分后得到含**奇数引号**的碎片（`"责任我来扛。` 只剩开引号、配对体在别段），
+    // 相邻互换把「错过就再也不会有了。」从第二段引语搬进了第一段——台词搬家，语义错位。
+    // 判定：任一段引号计数为奇 ⇒ 整组跳过。
+    const quoted = [
+      '"责任我来扛。',
+      "张总站起身来，走到窗边，",
+      '"市场窗口期只有三个月，',
+      "错过就再也不会有了。",
+    ];
+    expect(shuffleSentencesSafe(quoted, rngMid, 0.9)).toEqual(quoted);
+  });
+
+  it("对照组：无引号的句子数组照常参与重排（守卫不是全拦）", () => {
+    const sents = ["阳光很好。", "他笑了笑。", "树叶落了。", "路上没人。"];
+    const out = shuffleSentencesSafe(sents, rngMid, 0.9);
+    expect(out).not.toEqual(sents); // 固定 rng 下至少发生一次相邻交换
+    expect([...out].sort()).toEqual([...sents].sort()); // 只是换位，不增删
+  });
 });
 
 describe("breakEnumerationStructure（P0-2 列举结构打散）", () => {

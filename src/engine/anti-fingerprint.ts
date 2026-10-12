@@ -336,8 +336,16 @@ export function fixOrphanConnectiveLeads(text: string): string {
     .reduce<string[]>((acc, s) => {
       const trimmed = s.trim();
       if (!trimmed) return acc;
+      // v0.9.36：纯标点段（切分残余的闭引号/闭括号，如 `。"` 拆出的 `"`）**不参与合并**。
+      //
+      // 实证（2026-10-13 对话体语料人眼审查）：`"好，我这就去准备。"` 在这里被 split 成
+      // [`"好，我这就去准备。`, `"`]，引号段长度 1 < MERGE_MIN_CHARS ⇒ 走合并模板
+      // 「剥句尾标点 + ，」⇒ `"好，我这就去准备，"`——句号被吞、引号被隔在外面，
+      // 标点损坏（全种子复现）。跳过合并 = join 时原样拼回，标点无损。
+      const hasWordChar = /[\u4e00-\u9fa5a-zA-Z0-9]/.test(trimmed);
       if (
         acc.length > 0 &&
+        hasWordChar &&
         trimmed.length < MERGE_MIN_CHARS &&
         !PARTICLE_SHORT_RE.test(trimmed) &&
         /[。…]$/.test(acc[acc.length - 1])
