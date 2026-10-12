@@ -6,6 +6,9 @@ import {
   collapseIssues,
 } from "../src/engine/humanize.ts";
 import { humanizeBestOf } from "../src/engine/humanize-bestof.ts";
+// v0.9.31：方向修饰语探针与引擎守卫**共用同一条正则**（见 humanize.ts 的注释），
+// 免得出现"守卫否掉的比签名抓的多/少"这类两边对不齐。
+import { DIR_MODIFIER_VERB_CLASH_RE } from "../src/engine/humanize.ts";
 import { reportAll, type Violation } from "./violation-report.ts";
 declare const process: { exit(code?: number): never; env: Record<string, string | undefined> };
 
@@ -1093,6 +1096,16 @@ const V8_COUNT = { n: 0 };
       /(?:^|[\u3002\uff01\uff1f\n])(?:\u964d\u4f4e|\u63d0\u9ad8|\u63d0\u5347|\u589e\u5f3a|\u6539\u5584|\u51cf\u5c11|\u6269\u5927|\u63a8\u52a8|\u4fc3\u8fdb|\u5b9e\u73b0|\u4fdd\u969c|\u786e\u4fdd|\u52a0\u5f3a|\u4f18\u5316|\u5b8c\u5584|\u6784\u5efa|\u5efa\u7acb|\u5065\u5168|\u6ee1\u8db3|\u4fdd\u62a4|\u63a7\u5236|\u89c4\u907f|\u9632\u8303)[^\u3002\uff01\uff1f\uff1b\uff0c\u3001]{2,8}[\u3002\uff1b]/,
       "类别级：并列谓语被切句劈成无主孤句",
     ],
+    [
+      "方向修饰语+行为动词",
+      // 「正向拥抱」「正向构建」——`积极→正向` 这条替身（v0.9.22 特意保留，原注释写"可搭配"）
+      // 在**接动词**时不成立，实测 150 次运行命中 56 次。
+      // ⚠️ 别误读成"正向这个词不能用"：同一批运行里「正向作用/正向影响/正向反馈」有 27 次
+      //   且全部成立。所以引擎侧做的是**位置守卫**（接动词才拦），不是删词条——
+      //   删了会连那 27 次合法替换一起废掉。本条正则与守卫共用，判据天然对齐。
+      DIR_MODIFIER_VERB_CLASH_RE,
+      "类别级：方向/性质修饰语作状语接行为动词（接名词合法，不在本条范围内）",
+    ],
   ];
 
   const V8_BASELINE: Record<string, number> = {
@@ -1102,6 +1115,7 @@ const V8_COUNT = { n: 0 };
     代词主语悬空: 0,
     "口语动词+制度法规宾语": 0,
     并列谓语孤句: 0,
+    "方向修饰语+行为动词": 0,
   };
 
   const v8Measured: Record<string, number> = {};

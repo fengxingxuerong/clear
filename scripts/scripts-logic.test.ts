@@ -208,11 +208,17 @@ interface CliArgs {
   contest: number;
   outFormat: string;
   explain: boolean;
+  recursive: boolean;
+  jobs: number;
+  dryRun: boolean;
 }
 
 function loadCliFns(): {
   parseArgs: (argv: string[]) => CliArgs;
-  collectInputFiles: (input: string) => string[];
+  collectInputFiles: (
+    input: string,
+    opts?: { recursive?: boolean; skipSuffix?: string },
+  ) => { files: string[]; skipped: number };
   baseUrlHasProxyPrefix: (baseUrl: string) => boolean;
 } {
   const src = readFileSync(path.resolve(__dirname, "humanize-cli.ts"), "utf-8");
@@ -232,10 +238,20 @@ function loadCliFns(): {
   const sandbox: {
     fs: typeof fs;
     path: typeof path;
+    console: { error: (...a: unknown[]) => void };
+    process: { exit: (code: number) => never };
     module: { exports: Record<string, unknown> };
   } = {
     fs,
     path,
+    // v0.9.32：parseArgs 的错误路径（未知参数/非法 out-format）走 console.error + process.exit，
+    // 沙箱里注入可断言的替身——process.exit 抛出而非真退出，测试才能钉住"报错后没继续解析"。
+    console: { error: () => {} },
+    process: {
+      exit: (code: number) => {
+        throw new Error(`__CLI_EXIT__:${code}`);
+      },
+    },
     module: { exports: {} },
   };
   vm.runInNewContext(
@@ -344,6 +360,35 @@ describe("humanize-cli parseArgs", () => {
     expect(on.intensity).toBe(0.9);
     expect(on.outFormat).toBe("follow");
   });
+
+  // v0.9.32：全方位优化轮的三个新开关
+  it("--recursive / --jobs / --dry-run：默认全关，显式给出为开", () => {
+    const off = parseArgs(base(["./in"]));
+    expect(off.recursive).toBe(false);
+    expect(off.jobs).toBe(1);
+    expect(off.dryRun).toBe(false);
+    const on = parseArgs(base(["./in", "--recursive", "--jobs", "4", "--dry-run"]));
+    expect(on.recursive).toBe(true);
+    expect(on.jobs).toBe(4);
+    expect(on.dryRun).toBe(true);
+  });
+
+  it("--jobs 越界夹取：0/负数/非数字回落 1（并发路数至少 1，不许静默变 0 死锁）", () => {
+    expect(parseArgs(base(["./in", "--jobs", "0"])).jobs).toBe(1);
+    expect(parseArgs(base(["./in", "--jobs", "-3"])).jobs).toBe(1);
+    expect(parseArgs(base(["./in", "--jobs", "abc"])).jobs).toBe(1);
+    expect(parseArgs(base(["./in", "--jobs", "2.7"])).jobs).toBe(2);
+  });
+
+  // v0.9.32：错误路径此前在沙箱里测不了（process 未注入，跑就是 ReferenceError）。
+  // 注入替身后钉住语义：报错 + 退出，绝不静默吞掉继续解析。
+  it("未知参数：console.error 用法说明并 process.exit(1)，不产出半解析的 args", () => {
+    expect(() => parseArgs(base(["./in", "--bogus-flag"]))).toThrow("__CLI_EXIT__:1");
+  });
+
+  it("--out-format 非法值：exit(1)，不静默当成 follow", () => {
+    expect(() => parseArgs(base(["./in", "--out-format", "pdf"]))).toThrow("__CLI_EXIT__:1");
+  });
 });
 
 describe("humanize-cli collectInputFiles", () => {
@@ -358,13 +403,13 @@ describe("humanize-cli collectInputFiles", () => {
   it("单文件输入直接返回该文件", () => {
     const f = path.join(tmpDir, "a.txt");
     fs.writeFileSync(f, "内容");
-    expect(collectInputFiles(f)).toEqual([f]);
+    expect(collectInputFiles(f)).toEqual({ files: [f], skipped: 0 });
   });
 
   it("单文件但扩展名不支持 → 不收（交给上层报「未找到可处理的文件」）", () => {
     const f = path.join(tmpDir, "a.pdf");
     fs.writeFileSync(f, "%PDF-1.7");
-    expect(collectInputFiles(f)).toEqual([]);
+    expect(collectInputFiles(f)).toEqual({ files: [], skipped: 0 });
   });
 
   it("目录输入：收 .txt/.md/.docx（大小写不敏感），按名称排序，忽略子目录与不支持的扩展名", () => {
@@ -375,12 +420,58 @@ describe("humanize-cli collectInputFiles", () => {
     fs.writeFileSync(path.join(tmpDir, "e.pdf"), "不支持");
     fs.mkdirSync(path.join(tmpDir, "sub"));
     fs.writeFileSync(path.join(tmpDir, "sub", "f.txt"), "子目录不算");
-    expect(collectInputFiles(tmpDir)).toEqual([
-      path.join(tmpDir, "a.TXT"),
-      path.join(tmpDir, "b.txt"),
-      path.join(tmpDir, "c.md"),
-      path.join(tmpDir, "d.DOCX"),
+    expect(collectInputFiles(tmpDir)).toEqual({
+      files: [
+        path.join(tmpDir, "a.TXT"),
+        path.join(tmpDir, "b.txt"),
+        path.join(tmpDir, "c.md"),
+        path.join(tmpDir, "d.DOCX"),
+      ],
+      skipped: 0,
+    });
+  });
+
+  // v0.9.32：递归开关。默认关（上面的用例钉住旧行为），给了才进子目录；隐藏目录不进。
+  it("--recursive：进子目录收集；隐藏目录一律跳过（.git/.covtmp 不该混进批量）", () => {
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    fs.mkdirSync(path.join(tmpDir, "sub"));
+    fs.writeFileSync(path.join(tmpDir, "sub", "f.txt"), "f");
+    fs.mkdirSync(path.join(tmpDir, ".hidden"));
+    fs.writeFileSync(path.join(tmpDir, ".hidden", "h.txt"), "h");
+    expect(collectInputFiles(tmpDir).files).toEqual([path.join(tmpDir, "a.txt")]);
+    const r = collectInputFiles(tmpDir, { recursive: true });
+    expect(r.files).toEqual([path.join(tmpDir, "a.txt"), path.join(tmpDir, "sub", "f.txt")]);
+  });
+
+  // v0.9.32：回环防护。out=输入目录时二轮会把产物 *.humanized.txt 再吃一遍，
+  // 产出 *.humanized.humanized.txt 层层叠加（cli-fulltest F7b 实测）。现在默认跳过。
+  it("回环防护：目录扫描跳过带输出后缀的既有产物并计数（重跑幂等）", () => {
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    fs.writeFileSync(path.join(tmpDir, "a.humanized.txt"), "上轮产物");
+    fs.writeFileSync(path.join(tmpDir, "b.humanized.md"), "上轮产物md");
+    const r = collectInputFiles(tmpDir, { skipSuffix: ".humanized" });
+    expect(r.files).toEqual([path.join(tmpDir, "a.txt")]);
+    expect(r.skipped).toBe(2);
+    // 大小写不敏感：产物后缀判定不该被 .HUMANIZED 绕过
+    fs.writeFileSync(path.join(tmpDir, "c.Humanized.TXT"), "大写后缀");
+    expect(collectInputFiles(tmpDir, { skipSuffix: ".humanized" }).skipped).toBe(3);
+  });
+
+  it("回环防护只作用于目录扫描：单文件指名输入照单全收（用户说了算）", () => {
+    const f = path.join(tmpDir, "a.humanized.txt");
+    fs.writeFileSync(f, "就是这份");
+    expect(collectInputFiles(f, { skipSuffix: ".humanized" })).toEqual({ files: [f], skipped: 0 });
+  });
+
+  it("回环防护：空后缀不许误伤全部文件（skip 落空时退化为不过滤）", () => {
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    fs.writeFileSync(path.join(tmpDir, "a.humanized.txt"), "产物");
+    // 用户显式 --suffix "" 时，endsWith("") 恒真会把所有文件吞掉——必须挡住
+    expect(collectInputFiles(tmpDir, { skipSuffix: "" }).files).toEqual([
+      path.join(tmpDir, "a.humanized.txt"),
+      path.join(tmpDir, "a.txt"),
     ]);
+    expect(collectInputFiles(tmpDir, { skipSuffix: "" }).skipped).toBe(0);
   });
 });
 

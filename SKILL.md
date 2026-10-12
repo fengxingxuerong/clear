@@ -3,7 +3,7 @@ name: qu-ai-wei
 description: 去 AI 味（简体中文）——调用本仓库自带的本地离线引擎（零成本、不联网）或可选 LLM 深度闭环，把 AI 写的中文改得更像人写的，并输出前后 AI 味评分与逐条痕迹报告。当用户要求「降 AI 率 / 去 AI 味 / 去 AIGC 痕迹 / 让这段更像人写的 / 自检朱雀类检测」时使用。
 license: MIT
 metadata:
-  version: 0.9.31
+  version: 0.9.32
   repo: https://github.com/fengxingxuerong/clear
 ---
 
@@ -33,6 +33,7 @@ QUAIWEI_API_KEY=sk-xxx npx tsx scripts/humanize-cli.ts ./in --out ./out --api \
 ```
 
 - 输入可以是文件或目录；输出扩展名默认跟随输入（`.docx` 进 `.docx` 出）。
+- 文本编码自动识别（UTF-8 / UTF-8 BOM / UTF-16 / GBK，产物统一落 UTF-8）；目录批量默认跳过已带输出后缀的产物，重跑幂等。
 - 需要留证据时加 `--report out.json`：每篇的耗时/字数/引擎/轮次分/降级原因都会落进去。
 
 ## 参数（与 `scripts/humanize-cli.ts` 一一对应）
@@ -57,6 +58,9 @@ QUAIWEI_API_KEY=sk-xxx npx tsx scripts/humanize-cli.ts ./in --out ./out --api \
 | `--max-calls <n>` / `--max-wait <sec>` | 预算 | 整篇调用预算 / 轮间最长等待 |
 | `--strict` | 开关 | 严格保真：发现编造事实即拒绝交付并回退 |
 | `--persona` | `default` \| `netgen` \| `classic` | 人味人格分档 |
+| `--recursive` | 开关 | 目录扫描进子目录（默认不进；隐藏目录一律跳过） |
+| `--jobs <n>` | ≥1 | `--api` 模式并发路数（本地引擎单线程，给了也只提示忽略） |
+| `--dry-run` | 开关 | 只列出将处理哪些文件（含跳过原因），不建目录不落盘 |
 
 ## 边界（**不要越界承诺**）
 

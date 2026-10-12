@@ -369,6 +369,24 @@ const COLLOQUIAL_RESULT_VERBS = new Set([
   "弄起",
 ]);
 
+/**
+ * v0.9.31：方向/性质类修饰语（正向/逆向/良性/负向）**接行为动词** = 搭配不当。
+ *
+ * 实测：`积极→正向`（v0.9.22 特意保留的替身，原注释写"可搭配"）产出
+ * 「我们应当**正向拥抱**人工智能技术」「各家企业都在**正向构建**自身的技术护城河」
+ * ——150 次运行命中 56 次。而同一批运行里「正向作用/正向影响/正向反馈」有 27 次且都成立。
+ *
+ * ⇒ 结论不是"这个词不能用"，是**位置**：正向 + 名词（作用/影响/反馈/情绪）成立，
+ *   正向 + 行为动词（拥抱/构建/推动/参与…）不成立。所以做位置守卫，不删词条
+ *   ——删掉会连那 27 次合法替换一起废掉，白丢去味机会。
+ *
+ * ⚠️ 守卫与探针（`scan-bugs` v8.0「方向修饰语+行为动词」）**共用这一条正则**：
+ *   守卫侧测 `rep + 右邻2字`，探针侧测整段输出。同表才不会出现
+ *   "守卫否掉的比签名抓的多/少"这类对不齐（NP_TAIL_RE 的教训）。
+ */
+export const DIR_MODIFIER_VERB_CLASH_RE =
+  /(?:\u6b63\u5411|\u9006\u5411|\u8d1f\u5411|\u826f\u6027|\u6076\u6027)(?:\u62e5\u62b1|\u63a8\u52a8|\u53c2\u4e0e|\u54cd\u5e94|\u63a8\u8fdb|\u5e94\u5bf9|\u5f00\u5c55|\u53d1\u6325|\u843d\u5b9e|\u6539\u8fdb|\u8c03\u6574|\u63a2\u7d22|\u5c1d\u8bd5|\u914d\u5408|\u534f\u8c03|\u5bf9\u63a5|\u5f15\u5bfc|\u5e26\u52a8|\u4fc3\u8fdb|\u5021\u5bfc|\u5b66\u4e60|\u501f\u9274|\u5e03\u5c40|\u8ddf\u8fdb|\u4e89\u53d6|\u91c7\u7eb3|\u6c9f\u901a|\u5ba3\u4f20|\u57f9\u80b2|\u6276\u6301|\u6784\u5efa|\u5efa\u7acb|\u5b8c\u5584|\u4f18\u5316|\u63d0\u5347|\u63d0\u9ad8|\u5b9e\u73b0|\u4fdd\u969c|\u52a0\u5f3a|\u90e8\u7f72|\u843d\u5730|\u53d1\u529b|\u53c2\u52a0)/;
+
 /** 抽象名词宾语（8 字窗口内出现即判为抽象宾语位）
  *
  *  v0.9.31：补**制度法规类**（法律/法规/法令/条例/规章/纪律/规矩/公约/条约）。
@@ -489,7 +507,18 @@ function replaceVocab(
         const clashParticle =
           "了地得着".includes(nextCh) &&
           ("了地得着".includes(rep[rep.length - 1]) || "了地得着".includes(rep[rep.length - 2]));
-        if (rep && !cascade && !clashRight && !clashLeft && !clashAbstract && !clashParticle)
+        // v0.9.31：方向修饰语 + 行为动词 = 搭配不当（见 DIR_MODIFIER_VERB_CLASH_RE 注释）。
+        // 只测 `替身 + 右邻 2 字`：够判定"正向"后面接的是不是行为动词。
+        const clashDirVerb = DIR_MODIFIER_VERB_CLASH_RE.test(rep + base.slice(end, end + 2));
+        if (
+          rep &&
+          !cascade &&
+          !clashRight &&
+          !clashLeft &&
+          !clashAbstract &&
+          !clashParticle &&
+          !clashDirVerb
+        )
           hits.push({ at: idx, rep });
       }
       idx = base.indexOf(from, end);

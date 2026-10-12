@@ -19,16 +19,33 @@
  *       [--alt-model <name>] [--no-deep] [--contest <n>] [--max-calls <n>] [--max-wait <sec>]
  *       [--strict] [--persona default|netgen|classic] [--report <file.json>]
  *       [--out-format follow|txt|docx] [--explain]
+ *       [--recursive] [--jobs <n>] [--dry-run]
  *
  * 示例：
  *   npx tsx scripts/humanize-cli.ts ./docs-txt --out ./out --intensity 0.9 --zhuque
  *   npx tsx scripts/humanize-cli.ts ./docs-txt --explain   # 每篇改完附「为什么这么改」清单
  *   npx tsx scripts/humanize-cli.ts ./word-docs --out ./out          # .docx 进 .docx 出
  *   npx tsx scripts/humanize-cli.ts ./word-docs --out-format txt     # 强制落成 .txt
+ *   npx tsx scripts/humanize-cli.ts ./稿箱 --recursive --dry-run      # 递归预览，不落盘
  *   # LLM 深度模式（Key 走环境变量，别写进命令行历史）：
  *   QUAIWEI_API_KEY=sk-xxx npx tsx scripts/humanize-cli.ts ./in --api --model deepseek-v4-flash
  *
- * 支持输入：.txt / .md（按 UTF-8 文本读）与 .docx（零依赖 OOXML 解析，只取段落纯文本）。
+ * 支持输入：.txt / .md（按 UTF-8 文本读；v0.9.32 起自动识别 UTF-8 BOM / UTF-16 / GBK 并转码）
+ * 与 .docx（零依赖 OOXML 解析，只取段落纯文本）。
+ *
+ * v0.9.32（全方位优化轮，依据 cli-fulltest 26+11 场景实战测试的发现）：
+ *   1) 编码检测：Windows 记事本老文件常见 GBK/UTF-16，此前按 UTF-8 硬读直接变乱码稿
+ *      （去味引擎再怎么改也是乱码——最坏的是用户看不出来）。现在 BOM 优先，
+ *      无 BOM 先严格 UTF-8、失败落 GBK，并在控制台明说转码了哪个文件；产物一律 UTF-8。
+ *   2) 回环防护：out=输入目录时，二轮会把上一轮产物 *.humanized.txt 再吃一遍，
+ *      产出 *.humanized.humanized.txt 且层层叠加。现在目录批量默认跳过带输出后缀的文件
+ *      （单文件显式指名不受限），重跑幂等。
+ *   3) --recursive：目录默认仍不递归（旧行为），给了开关才走进子目录（隐藏目录一律跳过）。
+ *   4) --jobs：--api 模式按 N 路并发处理文件（网络等待型，加速明显）；本地引擎单线程，
+ *      给了也只提示不生效。
+ *   5) --dry-run：只列出将处理哪些文件（含跳过原因），不建目录不落盘，随时可跑。
+ *   6) 输出增强：批量行加 [k/n] 进度前缀；收尾加耗时/字数/AI 味代理分均值汇总；
+ *      report 增加 outPath 与 totals 段。输入路径不存在时给一句话错误而非 ENOENT 堆栈。
  *
  * Key 来源优先级（CLI 专用，与 UI 设置面板无关）：
  *   1) --api-key
@@ -51,10 +68,45 @@ function toArrayBuffer(b: Buffer): ArrayBuffer {
   return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
 }
 
-/** 输入文件 → 纯文本。.docx 解析失败时把真实部件名抛给上层（与 UI 一致，不吞根因） */
+/**
+ * 输入文件 → 纯文本。.docx 解析失败时把真实部件名抛给上层（与 UI 一致，不吞根因）。
+ *
+ * v0.9.32：txt/md 的编码检测。此前一律按 UTF-8 硬读，GBK 老文件会变成整篇乱码
+ * 且**看不出来**（乱码照样能"去味"，产出一份谁也用不了的稿子）。
+ * 顺序：BOM（UTF-8/UTF-16LE/UTF-16BE）→ 严格 UTF-8 → GBK → lenient UTF-8 兜底。
+ * 产物侧无条件落 UTF-8（writeOutput 的 encoding 参数固定 "utf-8"）。
+ */
 async function readInputText(f: string): Promise<string> {
-  if (!f.toLowerCase().endsWith(".docx")) return fs.readFileSync(f, "utf-8");
+  if (!f.toLowerCase().endsWith(".docx")) return decodeTextBuffer(fs.readFileSync(f), f);
   return readDocxText(toArrayBuffer(fs.readFileSync(f)));
+}
+
+/** BOM / GBK 检测 + 转码（纯函数语义，便于单独推理；console.warn 说明转码了谁） */
+function decodeTextBuffer(buf: Buffer, f: string): string {
+  const name = path.basename(f);
+  if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
+    return new TextDecoder("utf-8").decode(buf.subarray(3)); // UTF-8 BOM：剥掉再读
+  }
+  if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) {
+    console.warn(`⚠ ${name}：UTF-16LE 编码，已转码为 UTF-8 读取`);
+    return new TextDecoder("utf-16le").decode(buf.subarray(2));
+  }
+  if (buf.length >= 2 && buf[0] === 0xfe && buf[1] === 0xff) {
+    console.warn(`⚠ ${name}：UTF-16BE 编码，已转码为 UTF-8 读取`);
+    return new TextDecoder("utf-16be").decode(buf.subarray(2));
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(buf);
+  } catch {
+    /* 非法 UTF-8 字节序列 → 落 GBK 试一次 */
+  }
+  try {
+    const gbk = new TextDecoder("gbk").decode(buf);
+    console.warn(`⚠ ${name}：不是合法 UTF-8，已按 GBK 转码读取（产物统一落 UTF-8）`);
+    return gbk;
+  } catch {
+    return new TextDecoder("utf-8").decode(buf); // lenient 兜底：宁可有稿也不吞文件
+  }
 }
 
 /**
@@ -103,6 +155,12 @@ interface Args {
   outFormat: "follow" | "txt" | "docx";
   /** v0.9.30：改完附「为什么这么改」清单（句级 diff 反查规则表，事后归因） */
   explain: boolean;
+  /** v0.9.32：目录扫描递归子目录（默认关，与旧行为一致；隐藏目录一律跳过） */
+  recursive: boolean;
+  /** v0.9.32：--api 模式并发路数（本地引擎单线程，>1 只提示不生效） */
+  jobs: number;
+  /** v0.9.32：只列出将处理的文件，不建目录不落盘 */
+  dryRun: boolean;
 }
 
 const USAGE =
@@ -111,9 +169,12 @@ const USAGE =
   " [--api [--base-url <url>] [--model <name>] [--api-key <key>] [--judge-model <name>]]" +
   " [--alt-model <name>] [--no-deep] [--contest <n>] [--max-calls <n>] [--max-wait <sec>]" +
   " [--strict] [--persona default|netgen|classic] [--report <file.json>]" +
-  " [--out-format follow|txt|docx] [--explain]\n" +
+  " [--out-format follow|txt|docx] [--explain]" +
+  " [--recursive] [--jobs <n>] [--dry-run]\n" +
   "  --base-url 填网关绝对地址（如 https://token.sensenova.cn/v1）。UI 设置里的 /sensenova/v1" +
-  " 是同源代理专用写法（代理会剥掉 /sensenova 前缀再转发），CLI 直连勿带这段前缀。";
+  " 是同源代理专用写法（代理会剥掉 /sensenova 前缀再转发），CLI 直连勿带这段前缀。\n" +
+  "  --recursive 目录扫描进子目录（默认不进）；--jobs 仅 --api 模式生效（并发路数）；" +
+  "  --dry-run 只列出将处理的文件不落盘。目录批量默认跳过已带输出后缀的产物（重跑幂等）。";
 
 function parseArgs(argv: string[]): Args {
   const args: Args = {
@@ -139,6 +200,9 @@ function parseArgs(argv: string[]): Args {
     report: "",
     outFormat: "follow",
     explain: false,
+    recursive: false,
+    jobs: 1,
+    dryRun: false,
   };
   const a = argv.slice(2);
   if (!a[0] || a[0].startsWith("--")) {
@@ -181,6 +245,9 @@ function parseArgs(argv: string[]): Args {
         break;
       }
       case "--explain": args.explain = true; break;
+      case "--recursive": args.recursive = true; break;
+      case "--jobs": args.jobs = Math.max(1, Math.floor(num(a[++i], 1))); break;
+      case "--dry-run": args.dryRun = true; break;
       default:
         console.error(`未知参数: ${a[i]}\n${USAGE}`);
         process.exit(1);
@@ -246,16 +313,38 @@ function isSupportedInput(f: string): boolean {
 /**
  * 收集待处理文件：.txt / .md / .docx。
  * （v0.9.17 前只认 .txt，名字也叫 collectTxtFiles——改名是因为它现在不止收 txt。）
+ *
+ * v0.9.32 返回 { files, skipped }：skipped 统计「已带输出后缀、按回环防护规则跳过」的个数，
+ * 供 main 打印。回环防护只作用于**目录扫描**——单文件是用户显式指名的，照单全收。
  */
-function collectInputFiles(input: string): string[] {
+function collectInputFiles(
+  input: string,
+  opts: { recursive?: boolean; skipSuffix?: string } = {},
+): { files: string[]; skipped: number } {
   const st = fs.statSync(input);
-  if (st.isFile()) return isSupportedInput(input) ? [input] : [];
-  const out: string[] = [];
-  for (const f of fs.readdirSync(input)) {
-    const p = path.join(input, f);
-    if (fs.statSync(p).isFile() && isSupportedInput(f)) out.push(p);
-  }
-  return out.sort();
+  if (st.isFile()) return { files: isSupportedInput(input) ? [input] : [], skipped: 0 };
+  const files: string[] = [];
+  let skipped = 0;
+  const skip = (opts.skipSuffix ?? "").trim().toLowerCase();
+  const walk = (dir: string) => {
+    for (const f of fs.readdirSync(dir)) {
+      if (f.startsWith(".")) continue; // 隐藏项一律不进批量（.git/.covtmp 这类）
+      const p = path.join(dir, f);
+      if (fs.statSync(p).isDirectory()) {
+        if (opts.recursive) walk(p);
+        continue;
+      }
+      if (!isSupportedInput(f)) continue;
+      // 回环防护：*.humanized.txt 这类上一轮产物不再吃回去（--suffix 可自定义判定词）
+      if (skip && INPUT_EXTS.some((e) => f.toLowerCase().endsWith(skip + e))) {
+        skipped++;
+        continue;
+      }
+      files.push(p);
+    }
+  };
+  walk(input);
+  return { files: files.sort(), skipped };
 }
 
 /**
@@ -283,6 +372,8 @@ interface FileReport {
   detectAfter: number;
   ok: boolean;
   error?: string;
+  /** v0.9.32：产物落盘路径（并发/嵌套目录场景里 basename 不足以定位） */
+  outPath?: string;
   /* 以下仅 --api 模式有 */
   engine?: string;
   usedApi?: boolean;
@@ -293,12 +384,52 @@ interface FileReport {
   explain?: ExplainItem[];
 }
 
+/** v0.9.32：report totals 的求和（对全部条目求和，含失败篇目——失败也是花了时间的） */
+function sum0(reps: FileReport[], g: (r: FileReport) => number): number {
+  return reps.reduce((s, r) => s + g(r), 0);
+}
+
+/** v0.9.32：简单 worker 池（--api 并发；本地引擎单线程不走这里） */
+async function runPool<T>(items: T[], jobs: number, fn: (item: T, i: number) => Promise<void>): Promise<void> {
+  let next = 0;
+  const workers = Array.from({ length: Math.max(1, Math.min(jobs, items.length)) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      await fn(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+}
+
 async function main() {
   const args = parseArgs(process.argv);
-  const files = collectInputFiles(args.input);
+
+  // v0.9.32：读不到输入路径时给一句话错误，而不是甩 ENOENT 堆栈
+  let collected: { files: string[]; skipped: number };
+  try {
+    collected = collectInputFiles(args.input, {
+      recursive: args.recursive,
+      skipSuffix: args.suffix,
+    });
+  } catch (e) {
+    console.error(`✗ 读不到输入路径：${args.input}\n  ${(e as Error).message}`);
+    process.exit(1);
+  }
+  const files = collected.files;
   if (!files.length) {
     console.error(`未找到可处理的文件（支持 ${INPUT_EXTS_LABEL}）:`, args.input);
     process.exit(1);
+  }
+
+  // v0.9.32：--dry-run 在 Key 校验/建目录之前返回——预览不该被网关配置挡住，也不该留下空目录
+  if (args.dryRun) {
+    console.log(
+      `试运行（--dry-run）：将处理 ${files.length} 个文件 | 强度 ${args.intensity} | ` +
+        `${args.api ? "LLM 通道" : "本地引擎"}${args.recursive ? " | 递归" : ""}（不落盘）`,
+    );
+    for (const f of files) console.log(`  · ${f}`);
+    if (collected.skipped) console.log(`（另跳过 ${collected.skipped} 个已带输出后缀「${args.suffix}」的既有产物）`);
+    return;
   }
   fs.mkdirSync(args.out, { recursive: true });
 
@@ -332,24 +463,29 @@ async function main() {
     console.log(
       `批量去味（LLM 通道）：${files.length} 个文件 | 强度 ${args.intensity} | ` +
         `${args.deep ? "深度闭环" : "单轮"} | 模型 ${cfg.model}` +
-        `${cfg.judgeModel ? ` + 评判 ${cfg.judgeModel}` : ""} | 文风 ${args.style}`,
+        `${cfg.judgeModel ? ` + 评判 ${cfg.judgeModel}` : ""} | 文风 ${args.style}` +
+        `${args.jobs > 1 ? ` | 并发 ${args.jobs}` : ""}`,
     );
   } else {
     console.log(
       `批量去味：${files.length} 个文件 | 强度 ${args.intensity} | 朱雀增强 ${args.zhuque ? "开" : "关"} | 文风 ${args.style}`,
     );
+    if (args.jobs > 1) console.log("   ⓘ 本地引擎是单线程 CPU 模式，--jobs 仅对 --api 生效，已忽略");
   }
+  if (collected.skipped) console.log(`   ⓘ 已跳过 ${collected.skipped} 个带输出后缀「${args.suffix}」的既有产物（重跑幂等；单文件指名输入不受限）`);
   console.log("─".repeat(64));
 
-  const reports: FileReport[] = [];
+  const multi = files.length > 1;
+  const reports: FileReport[] = new Array(files.length);
   let ok = 0, fail = 0;
-  for (const f of files) {
+  const processOne = async (f: string, idx: number) => {
     const name = path.basename(f);
+    const step = multi ? `[${idx + 1}/${files.length}] ` : "";
     try {
       const raw = await readInputText(f);
       if (!raw.trim()) {
-        console.log(`⏭  ${name}：空文件，跳过`);
-        continue;
+        console.log(`${step}⏭  ${name}：空文件，跳过`);
+        return;
       }
       const t0 = Date.now();
       const rep: FileReport = {
@@ -368,7 +504,7 @@ async function main() {
           args.intensity,
           cfg,
           (round, score, stage) => {
-            console.log(`   ${name} ${stage ?? ""}第 ${round} 轮${score === null ? "" : ` 评分 ${score}`}`);
+            console.log(`   ${step}${name} ${stage ?? ""}第 ${round} 轮${score === null ? "" : ` 评分 ${score}`}`);
           },
           args.zhuque,
           undefined, // genre 交给引擎自动判定，与 UI「自动」一致
@@ -393,8 +529,9 @@ async function main() {
       const ext = outExtOf(f, args.outFormat);
       const dest = path.join(args.out, name.replace(/\.(txt|md|docx)$/i, "") + args.suffix + ext);
       await writeOutput(dest, out, ext === ".docx");
+      rep.outPath = dest;
       console.log(
-        `✅ ${name}：${rep.detectBefore}→${rep.detectAfter}（${rep.ms}ms，${raw.length}→${out.length} 字）→ ${path.basename(dest)}`,
+        `${step}✅ ${name}：${rep.detectBefore}→${rep.detectAfter}（${rep.ms}ms，${raw.length}→${out.length} 字）→ ${path.basename(dest)}`,
       );
       // v0.9.22：低风险输入照常出稿，但把"其实不用去味"说出来。
       // 不自动跳过——批量场景里静默不产出比多产出一版更难排查。
@@ -417,25 +554,63 @@ async function main() {
         console.log(`   ${tag}${rounds}${rep.note ? ` · ${rep.note}` : ""}`);
         for (const d of rep.degrade ?? []) console.log(`   ⚠ ${d}`);
       }
-      reports.push(rep);
+      reports[idx] = rep;
       ok++;
     } catch (e) {
       const msg = (e as Error).message;
-      console.error(`❌ ${name}：${msg}`);
-      reports.push({
+      console.error(`${step}❌ ${name}：${msg}`);
+      reports[idx] = {
         file: name, ms: 0, charsIn: 0, charsOut: 0,
         detectBefore: 0, detectAfter: 0, ok: false, error: msg,
-      });
+      };
       fail++;
     }
-  }
+  };
+  // v0.9.32：--api（网络等待型）可并发提速；本地引擎是同步 CPU 活，串行即可
+  if (cfg && args.jobs > 1) await runPool(files, args.jobs, processOne);
+  else for (let i = 0; i < files.length; i++) await processOne(files[i], i);
+  const reps = reports.filter((r): r is FileReport => !!r);
+
   console.log("─".repeat(64));
   console.log(`完成：${ok} 成功 / ${fail} 失败 → ${args.out}`);
+  // v0.9.32：收尾汇总。detect 是**本地代理分**（与引擎同源词表），只作趋势参考——
+  // SKILL.md 里"同源指标非外部真值"的边界同样适用于这行。
+  const done = reps.filter((r) => r.ok);
+  if (done.length) {
+    const sum = (g: (r: FileReport) => number) => done.reduce((s, r) => s + g(r), 0);
+    const avg = (g: (r: FileReport) => number) => Math.round(sum(g) / done.length);
+    console.log(
+      `汇总：${done.length} 篇 | 引擎耗时 ${sum((r) => r.ms)}ms | ` +
+        `字数 ${sum((r) => r.charsIn)}→${sum((r) => r.charsOut)} | ` +
+        `AI 味代理分（均值）${avg((r) => r.detectBefore)}→${avg((r) => r.detectAfter)}`,
+    );
+  }
 
   if (args.report) {
     const rp = path.resolve(args.report);
     fs.mkdirSync(path.dirname(rp), { recursive: true });
-    fs.writeFileSync(rp, JSON.stringify({ ts: new Date().toISOString(), args, reports }, null, 2), "utf-8");
+    fs.writeFileSync(
+      rp,
+      JSON.stringify(
+        {
+          ts: new Date().toISOString(),
+          args,
+          totals: {
+            files: reps.length,
+            ok,
+            fail,
+            skippedSuffix: collected.skipped,
+            charsIn: sum0(reps, (r) => r.charsIn),
+            charsOut: sum0(reps, (r) => r.charsOut),
+            msTotal: sum0(reps, (r) => r.ms),
+          },
+          reports: reps,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
     console.log(`报告：${rp}`);
   }
   if (fail > 0) process.exit(1);
