@@ -1,7 +1,7 @@
 {
   "name": "ai-humanizer",
   "private": true,
-  "version": "0.9.34",
+  "version": "0.9.35",
   "type": "module",
   "description": "趣AI味 · 本地离线可用、可选接 LLM 的中文 AI 文本拟人化工具，对标朱雀",
   "scripts": {
@@ -12,6 +12,7 @@
     "test:regress": "tsx scripts/scan-bugs.ts",
     "test:regress12": "tsx scripts/regression-12samples.ts",
     "test:quality": "tsx scripts/verify-quality.ts",
+    "test:improve": "tsx scripts/regression-improve.ts --samples scripts/regression-improve.samples.json",
     "test:calib": "tsx scripts/calib-sanity.ts",
     "test:evidence": "tsx scripts/zhuque-evidence.ts audit",
     "seal:api": "tsx scripts/zhuque-evidence.ts sealApi",
@@ -19,7 +20,7 @@
     "check:ledger": "tsx scripts/check-ledger-appendonly.ts",
     "check:version": "tsx scripts/check-version-sync.ts",
     "check:regex": "tsx scripts/check-regex-defects.ts",
-    "check:release": "npm run check:version && npm run check:regex && npm run test:cov && npm run test:regress && npm run test:regress12 && npm run test:quality && npm run test:calib && npm run test:evidence && npm run check:ledger",
+    "check:release": "npm run check:version && npm run check:regex && npm run test:cov && npm run test:regress && npm run test:regress12 && npm run test:quality && npm run test:improve && npm run test:calib && npm run test:evidence && npm run check:ledger",
     "check:publish": "tsx scripts/zhuque-evidence.ts audit --strict",
     "bench": "tsx scripts/bench.ts",
     "test": "vitest run",

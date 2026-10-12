@@ -82,6 +82,11 @@ jobs:
       - name: Quality gate (verify-quality)
         run: npx tsx scripts/verify-quality.ts
 
+      # 零外部 key 的自证门禁：同一把本地尺下「改写稿比原文更不像 AI」（相对改善率）。
+      # 与朱雀官方送检无关、不依赖任何 Key —— 官方送检卡住时它是唯一还在跑的能力自证。
+      - name: Relative improvement (相对改善自证 · 零 key)
+        run: npx tsx scripts/regression-improve.ts --samples scripts/regression-improve.samples.json
+
       - name: Calibration sanity (标定数据源/参数/漂移自检)
         run: npx tsx scripts/calib-sanity.ts
 
