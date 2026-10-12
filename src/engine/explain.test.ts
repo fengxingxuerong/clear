@@ -1,6 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { humanize } from "./humanize";
-import { explainChanges, explainSummary, formatExplain, lookupVocab } from "./explain";
+import {
+  explainChanges,
+  explainSummary,
+  formatExplain,
+  lookupVocab,
+  matchInjection,
+  INJECTION_MARKERS,
+} from "./explain";
 
 /**
  * 这些用例全部走**真引擎真输出**，不手搓改写对：
@@ -77,9 +84,53 @@ describe("边界", () => {
     expect(items.some((i) => i.kind === "structure" && i.certain === false)).toBe(true);
   });
 
-  it("凭空多出来的内容 → inject，且标不确定", () => {
+  it("未命中注入表的纯新增句 → structure 推断，不谎报成 inject（v0.9.34）", () => {
+    // 修前这里一律归 inject：「另外补了一整句话」会被说成"加入口语化成分"——
+    // 实测 _cap-probe 6/11 的"新增句"其实是改写/切分残余，不是注入。
     const items = explainChanges("短句。", "短句。另外补了一整句话进来，原文并没有这句。");
-    expect(items.some((i) => i.kind === "inject" && i.certain === false)).toBe(true);
+    expect(items.some((i) => i.kind === "structure" && i.certain === false)).toBe(true);
+    expect(items.some((i) => i.kind === "inject")).toBe(false);
+  });
+
+  it("命中注入登记表的纯新增句 → inject 确定归因（v0.9.34）", () => {
+    const items = explainChanges(
+      "短句。",
+      "短句。按我的经验，另外补了一整句话进来，原文并没有这句。",
+    );
+    const inj = items.filter((i) => i.kind === "inject");
+    expect(inj.length).toBe(1);
+    expect(inj[0].certain).toBe(true);
+    expect(inj[0].after).toBe("按我的经验");
+  });
+});
+
+describe("matchInjection 注入登记表（v0.9.34）", () => {
+  it("三张引擎表都聚合进来：观点短语 / 口语垫词 / 括号自语", () => {
+    // OPINION_PHRASES 取样
+    expect(matchInjection("按我的经验，先看数据再下结论。")).toEqual({
+      kind: "inject",
+      word: "按我的经验",
+    });
+    // INTERJECTIONS 取样（humanize-vocab.ts）
+    expect(matchInjection("说白了，问题出在接口上。")?.word).toBe("说白了");
+    // PAD_WORDS 取样（humanize-text.ts，删除侧与注入侧共用一张表）
+    expect(matchInjection("平心而论，两边都有责任。")?.word).toBe("平心而论");
+    // PARENTHETIC_NOTES 在句尾，用 includes
+    expect(matchInjection("这个结论先记着。（你懂的）")?.word).toBe("你懂的");
+  });
+
+  it("长词先命中 ——「不瞒你说」不许被短词抢（防御性，当前表无相互包含条目）", () => {
+    expect(matchInjection("不瞒你说，我试过。")?.word).toBe("不瞒你说");
+  });
+
+  it("不在表里的开头 → null（宁可判不出，不硬归）", () => {
+    expect(matchInjection("另外补了一整句话。")).toBeNull();
+    expect(matchInjection("")).toBeNull();
+  });
+
+  it("登记表无重复且非空 —— 聚合逻辑坏掉会静默降级成全部推断", () => {
+    expect(INJECTION_MARKERS.length).toBeGreaterThan(20);
+    expect(new Set(INJECTION_MARKERS).size).toBe(INJECTION_MARKERS.length);
   });
 });
 

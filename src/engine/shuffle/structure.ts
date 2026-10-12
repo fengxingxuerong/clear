@@ -98,12 +98,28 @@ export function breakEnumerationStructure(
 ): string[] {
   if (sentences.length < 2) return sentences;
   if (intensity < 0.5) return sentences;
-  const enumStart =
-    /^(?:首先|第一[点条个]?|一方面|头一件|一来|先说|头一个|一上来|头一条)(?:[，、]|$)/;
+  // v0.9.34：补「一、二、三、」顿号编号与「1. 2.」阿拉伯编号。
+  // 实测（artifacts/_probe-enum-dunhao.ts）：政务公文最常见的枚举格式此前
+  // **完全不打散**（顿号编号匹配不上，序列骨架原样保留 = 强 AI 指纹），
+  // 而 relaxDunhao 又会把「二、」换成「二以及」——两层叠加出畸形输出。
+  // 现在 breakEnumeration 认它，序列标记清除归这里管；relaxDunhao 的编号
+  // 守卫（primitives.ts）则保证并列顿号串不被误伤，两层各司其职。
+  // ⚠️ 阿拉伯编号要带 (?!\d) 负向前瞻：「1.5 个百分点」不是枚举头。
+  // ⚠️ 顿号/数字编号分支**不能**套 (?:[，、]|$) 后缀——「一、加强」的
+  //    顿号后直接跟内容，没有第二个标点，套了永远匹配不上。
+  const NUM_HEAD = "(?:[一二三四五六七八九十]+、|\\d+[.、](?!\\d))";
+  const enumStart = new RegExp(
+    "^(?:首先|第一[点条个]?|一方面|头一件|一来|先说|头一个|一上来|头一条)(?:[，、]|$)" +
+      "|^" +
+      NUM_HEAD,
+  );
   const startIdx = sentences.findIndex((s) => enumStart.test(s));
   if (startIdx === -1) return sentences;
-  const memberRe =
-    /^(?:其次|再者|此外|另外|而且|并且|最后|末了|收个尾|最后说一句|二来|再说|接着|第二[点条个]?|第三[点条个]?|另一方面|再一头|那头|从另一头|还有)(?:[，、]|$)/;
+  const memberRe = new RegExp(
+    "^(?:其次|再者|此外|另外|而且|并且|最后|末了|收个尾|最后说一句|二来|再说|接着|第二[点条个]?|第三[点条个]?|另一方面|再一头|那头|从另一头|还有)(?:[，、]|$)" +
+      "|^" +
+      NUM_HEAD,
+  );
   const members: number[] = [startIdx];
   for (let i = startIdx + 1; i < sentences.length; i++) {
     if (memberRe.test(sentences[i])) members.push(i);
@@ -112,6 +128,8 @@ export function breakEnumerationStructure(
   }
   if (members.length < 2) return sentences;
   const out = sentences.slice();
+  // v0.9.34：已用承接头（见下方 pick 处的注释：纯随机会连出两个「再者，」）
+  const usedHeads = new Set<string>();
   // (a) 去序列标记：显式切片 + 换为非序列承接头
   // v0.9 专家修复 P5：academic 文风禁用口语承接头（哦对了/然后呢），用书面过渡词
   const HEADS_BY_STYLE: Record<RewriteStyle, string[]> = {
@@ -135,7 +153,16 @@ export function breakEnumerationStructure(
         const cut = m[0].length;
         const rest = out[mi].slice(cut).replace(/^[，、]/, "");
         if (rng() < 0.4 + 0.3 * intensity) {
-          const head = pick(rng, HEADS_BY_STYLE[style]);
+          // v0.9.34：承接头去重。pick(rng) 纯随机会连出两个「再者，」
+          // （实测 enum.txt plain 0.9：`再者，完善制度体系。再者，强化监督考核`）——
+          // 编号剥掉后重复承接头比原来的「首先/其次」骨架更显眼，是新的机器指纹。
+          // 与 injectOpinion 的 used 同款模式：试 3 次仍撞已用就退回"无接头"
+          // （bare rest 也是合法形态，v0.9.14 起 blank 分支就在表里）。
+          const heads = HEADS_BY_STYLE[style];
+          let head = pick(rng, heads);
+          let guard = 0;
+          while (usedHeads.has(head) && guard++ < 3) head = pick(rng, heads);
+          usedHeads.add(head);
           out[mi] = head + rest;
         } else {
           out[mi] = rest;

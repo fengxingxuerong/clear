@@ -1178,6 +1178,110 @@ const V8_COUNT = { n: 0 };
 }
 
 // ============================================================
+// v9.0 顿号枚举组（v0.9.34 补）
+//
+// 来源：2026-10-12 深夜实测（artifacts/_probe-enum-dunhao.ts / _probe-dunhao-min.ts）。
+// 政务公文最常见的枚举格式「一、二、三、」存在**两层叠加缺陷**：
+//   ① breakEnumerationStructure 的 enumStart/memberRe 只认「首先/第一点」式引导词，
+//      不认顿号编号 ⇒ 序列骨架原样保留（强 AI 指纹，且 enumerate 是公文体的标志结构）；
+//   ② relaxDunhao 把编号后的顿号当并列顿号换掉 ⇒「二、完善制度体系」变成
+//      「二以及完善制度体系」「二，完善制度体系」（min repro：修前 5 个 seed 4 个畸形）。
+// 两层互不知情，结果是"编号去了一半、结构没打散"——比不处理更怪。
+//
+// v0.9.34 修法（两层各司其职，不互相越权）：
+//   · relaxDunhao 加编号守卫：紧邻最后一个顿号的前一片段是纯编号 ⇒ 整个 run 不动
+//     （primitives.ts，守卫与①的拆分逻辑独立，改动面最小）；
+//   · breakEnumerationStructure 的 enumStart/memberRe 补 NUM_HEAD 分支
+//     （[一二三四五六七八九十]+、|\d+[.、](?!\\d)），序列标记清除归它管。
+//
+// 判定纪律：
+//   · 探针 A「编号+连接词畸形」负向，全档基线 0 = 硬拦；
+//   · 探针 B「连续编号保留」正向——但只在 intensity ≥ 0.5 有效：
+//     breakEnumerationStructure 开头就有 `if (intensity < 0.5) return`（既有设计，
+//     低强度不动结构），0.4 档枚举保留是**预期行为不是缺陷**。故本组网格
+//     取 [0.6, 0.9]，不跟 v8.0 的 [0.4, 0.6, 0.9]——否则 0.4 档会让正向断言假红。
+//     （这条差异必须写清楚，否则后来人"统一网格"时会踩坑。）
+//   · 语料 2 段：公文枚举（修复的核心场景）+ 政务短章（v0.9.33 同款，无顿号编号，
+//     管 A 探针的误报面——它含「以及」「和」，能验证 A 不误伤人写文本）。
+//
+// ⚠️ 敏感度（2026-10-12 缺陷注入复验，别把"零命中"当"探针有效"）：
+//   · A：删掉 primitives.ts 的编号守卫 ⇒ min repro 畸形复现，A 变红（敏感）；
+//   · B：把 NUM_HEAD 从 structure.ts 两条正则里删掉 ⇒ 枚举不打散，B 变红（敏感）。
+//   两条都做过"改坏 → 变红 → 改回 → 归零"才登记基线。
+// ============================================================
+const V9_COUNT = { n: 0 };
+{
+  // 编号+连接词畸形：「二以及完善」「三和落实」。句首锚定防误报——
+  // 「二和三个人」「三和寺」这类非句首组合不进签名。
+  const NUM_JOINT_BAD =
+    /(?:^|[\u3002\uff01\uff1f\n])(?:[一二三四五六七八九十]+|\d+)(?:\u4ee5\u53ca|\u548c)[\u4e00-\u9fa5]/;
+  // 连续两个顿号编号句：句首编号句 + 下一句还是句首编号句 = 序列骨架没被打散。
+  const NUM_SEQ_KEPT =
+    /(?:^|[\u3002\uff01\uff1f\n])[一二三四五六七八九十]+、[^\u3002\uff01\uff1f\n]{2,60}[\u3002\uff01\uff1f\n]\s*[一二三四五六七八九十]+、/;
+  // v9.0 语料：公文枚举是修复目标；政务短章管误报面（v0.9.33 现跑样本）。
+  const V9_CORPUS: [string, string][] = [
+    [
+      "公文枚举",
+      "为进一步做好安全生产工作，现提出以下要求。一、加强组织领导，明确责任分工。二、完善制度体系，夯实管理基础。三、强化监督考核，确保工作实效。四、加大宣传力度，营造良好氛围。各地区各部门要结合实际，认真抓好贯彻落实。",
+    ],
+    [
+      "政务短章",
+      "随着人工智能技术的不断发展，其在各个领域的应用日益广泛。首先，人工智能技术能够有效提升生产效率，降低企业运营成本；其次，它可以帮助人们从繁琐的重复性劳动中解放出来，从而专注于更具创造性的工作；最后，值得注意的是，人工智能的普及也带来了一些挑战，例如数据安全和隐私保护等问题。综上所述，我们应当积极拥抱人工智能技术，同时也要建立健全相关的法律法规，以确保其在健康有序的轨道上稳步推进。总而言之，人工智能的发展具有十分重要的意义，值得社会各界给予高度关注。",
+    ],
+  ];
+  const V9_INTENSITIES = [0.6, 0.9]; // ≥0.5：breakEnumeration 才动结构（见组注释）
+  const V9_SEEDS = Array.from({ length: 10 }, (_, i) => i);
+  const V9_RUNS = V9_CORPUS.length * V9_INTENSITIES.length * V9_SEEDS.length;
+
+  const v9Measured: Record<string, number> = {};
+  for (const [name, bad] of [
+    ["编号+连接词畸形", NUM_JOINT_BAD],
+    ["连续编号未打散", NUM_SEQ_KEPT],
+  ] as [string, RegExp][]) {
+    let hits = 0;
+    let firstHit = "";
+    for (const [corpusName, input] of V9_CORPUS) {
+      for (const it of V9_INTENSITIES) {
+        for (const seed of V9_SEEDS) {
+          const out = humanize(input, { intensity: it, seed });
+          if (bad.test(out)) {
+            hits++;
+            if (!firstHit) {
+              const at = out.search(bad);
+              firstHit = `${corpusName} 强度${it} seed${seed}: …${out.slice(
+                Math.max(0, at - 20),
+                at + 30,
+              )}…（命中「${out.match(bad)?.[0] ?? "?"}」）`;
+            }
+          }
+        }
+      }
+    }
+    v9Measured[name] = hits;
+    if (hits > 0) {
+      logDetail(`❌ v9.0[${name}] 基线 0 被击穿 ${hits} 次 ｜ ${firstHit}`);
+      V9_COUNT.n += hits;
+      pushV("v9.0", name, V9_INTENSITIES[0], V9_SEEDS[0], {
+        pattern: bad.source,
+        snippet: `${hits} 次 > 基线 0 ｜ ${firstHit}`,
+        input: V9_CORPUS[0][1].slice(0, 200),
+      });
+    }
+  }
+  console.log(
+    V9_COUNT.n === 0
+      ? `✅ v9.0 顿号枚举探针 2 条 × ${V9_CORPUS.length} 语料 × ${V9_INTENSITIES.length} 档 × ${V9_SEEDS.length} 种子 = ${V9_RUNS} 次/探针，全部达标（${Object.entries(
+          v9Measured,
+        )
+          .map(([k, v]) => `${k}=${v}/0`)
+          .join(" ")}）`
+      : `v9.0 共 ${V9_COUNT.n} 次违规（${Object.entries(v9Measured)
+          .map(([k, v]) => `${k}=${v}`)
+          .join(" ")}）`,
+  );
+}
+
+// ============================================================
 // v0.4.4 本地忠实度校验自检
 // ============================================================
 {
@@ -1210,13 +1314,13 @@ const V8_COUNT = { n: 0 };
 // ============================================================
 reportAll(violations, { summaryOnly: VERBOSE });
 
-const total = fails + dfFails + v4 + fp + v43 + v52 + v6 + bo + zq + f44 + v7 + V8_COUNT.n;
+const total = fails + dfFails + v4 + fp + v43 + v52 + v6 + bo + zq + f44 + v7 + V8_COUNT.n + V9_COUNT.n;
 if (total > 0) {
   console.error(
-    `\n❌ 回归测试共 ${total} 次违规（fails=${fails} dfFails=${dfFails} v4=${v4} fp=${fp} v43=${v43} v52=${v52} v6=${v6} bo=${bo} zq=${zq} f44=${f44} v7=${v7} v8=${V8_COUNT.n}）`,
+    `\n❌ 回归测试共 ${total} 次违规（fails=${fails} dfFails=${dfFails} v4=${v4} fp=${fp} v43=${v43} v52=${v52} v6=${v6} bo=${bo} zq=${zq} f44=${f44} v7=${v7} v8=${V8_COUNT.n} v9=${V9_COUNT.n}）`,
   );
   process.exit(1);
 }
 console.log(
-  `\n✅ 全部回归通过（fails=${fails} dfFails=${dfFails} v4=${v4} fp=${fp} v43=${v43} v52=${v52} v6=${v6} bo=${bo} zq=${zq} f44=${f44} v7=${v7} v8=${V8_COUNT.n}）`,
+  `\n✅ 全部回归通过（fails=${fails} dfFails=${dfFails} v4=${v4} fp=${fp} v43=${v43} v52=${v52} v6=${v6} bo=${bo} zq=${zq} f44=${f44} v7=${v7} v8=${V8_COUNT.n} v9=${V9_COUNT.n}）`,
 );

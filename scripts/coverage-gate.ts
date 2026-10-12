@@ -31,12 +31,20 @@
  * 用法：npx tsx scripts/coverage-gate.ts [--keep]   （--keep 保留上次报告，仍会清）
  */
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, execFileSync } from "node:child_process";
 import { COVERAGE_THRESHOLDS, type CoverageThresholds } from "./coverage-thresholds";
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const ROOT_RAW = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+// v0.9.34：盘符大写化。本机 MSYS/Git Bash 链路会把盘符规范化成小写
+// （import.meta.url 推出 d://projects//...），而宿主 LiteSandbox broker 对
+// 派生进程的路径匹配大小写敏感：小写盘符下 vitest worker 加载异常 →
+// 82 文件全红「0 test」（`reading 'config'`，与沙箱/反斜杠症状一模一样）。
+// 实测：大写 D:/ 与 D:// 全过（1735 passed），小写 d: 全挂。FS 层大小写
+// 无关，本 gate 自己的 fs 操作两种都正常——坏的只有 broker 匹配那一跳。
+const ROOT = ROOT_RAW.replace(/^([a-z]):/, (_m, c: string) => c.toUpperCase() + ":");
 const REPORT = path.join(ROOT, "coverage", "coverage-final.json");
 const REPORTS_DIR = path.join(ROOT, "coverage");
 const VITEST_BIN = path.join(ROOT, "node_modules", "vitest", "vitest.mjs");
@@ -187,11 +195,41 @@ function killTree(pid: number | undefined): void {
 /** 异步 spawn：本进程不提供服务，本可用 spawnSync；但异步能拿到 signal 与超时，诊断更好 */
 function runVitest(timeoutMs: number): Promise<RunResult> {
   return new Promise((done) => {
-    const child = spawn(process.execPath, [VITEST_BIN, "run", "--coverage"], {
-      cwd: ROOT,
-      env: { ...process.env, NODE_ENV: "test" },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    // v0.9.34：spawn 的 cwd 从 ROOT 挪到 os.tmpdir()，args 同步带 `--root`。
+    //
+    // 根因（2026-10-12 深夜实测，与项目代码无关——最小测试文件也复现）：
+    // 本机宿主（WorkBuddy 5.7.7）通过 NODE_OPTIONS 注入 language shim，
+    // 且 LiteSandbox 对「**工作区目录内**派生的子进程」做 broker 代理。
+    // 两者叠加使 vitest 的 tinypool worker 加载不到完整的 @vitest/runner 状态
+    // → 测试文件在 collection 阶段就抛
+    // `TypeError: Cannot read properties of undefined (reading 'config')`
+    // → 82 个文件全红「0 test」→ onTestFailure 触发 cleanAfterRun →
+    // 撞 SAFE_DELETE_BULK_CONFIRM_REQUIRED（覆盖率门禁的经典伪装形态）。
+    // 对照组（全过，1734 passed / 82 文件实测）：cwd 在工作区之外
+    // （/tmp、D:/projects 均可）+ 剥掉 NODE_OPTIONS + `--root`。
+    // 22:33 宿主切换前无此问题；此前 cwd=ROOT 且带 shim 也能跑是运气。
+    //
+    // ⚠️ 坑中坑（本次实测第二个形态）：`--root` 必须传**正斜杠**路径。
+    // path.resolve 产物是反斜杠（d:\projects\quaiwei），作为 CLI arg 进
+    // vitest 的 cac 解析器会被当转义序列吞掉字符 → root 解析错位 →
+    // 同样的 `reading 'config'`（82 文件全红，与沙箱症状一模一样）。
+    // 对照实验：`--root D:/projects/quaiwei` 过 / `--root d:\projects\quaiwei` 挂。
+    //
+    // 判据一个字没动：root 仍是仓库根，config 解析、include 范围、
+    // coverage 报告目录（相对 root）全部照旧；变的只有 worker 的派生位置
+    // 与继承的 env。门禁不需要宿主 language shim（那是 Bash 工具的中文处理）。
+    const childEnv: NodeJS.ProcessEnv = { ...process.env, NODE_ENV: "test" };
+    delete childEnv.NODE_OPTIONS;
+    // root 参数用正斜杠（反斜杠进 cac 解析器会被当转义吞字符，实测同挂），
+    // 盘符已在 ROOT 定义处大写化（见那里的注释：小写盘符 broker 匹配失败）。
+    const rootArg = ROOT.split(path.sep).join("/");
+    const child = spawn(process.execPath, [VITEST_BIN, "run", "--coverage", "--root", rootArg],
+      {
+        cwd: os.tmpdir(),
+        env: childEnv,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
     let out = "";
     let settled = false;
     let hardTimer: ReturnType<typeof setTimeout> | undefined;

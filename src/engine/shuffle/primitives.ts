@@ -29,7 +29,16 @@ export function relaxDunhao(text: string, rng: () => number, p: number): string 
     const hasConj = /[与和及]/.test(run);
     const verbish = /[推干办做化走抓建拉提打治整修铺]/.test(run);
     const last = run.lastIndexOf("、");
-    const joint = hasConj || verbish ? "，" : pick(rng, ["以及", "和", "，"]); // v0.8.5 去掉"跟"：「X拓宽跟搭台子」式连读拗口且命中接跟探针
+    // v0.9.34 编号守卫：紧邻最后一个顿号的前一个片段若是纯编号
+    // （「一、二、三、」或「1. 2.」），这个顿号是**枚举序列标记**不是并列顿号，
+    // 换掉会出「二以及完善制度体系」畸形（实测 _probe-dunhao-min.ts：
+    // 修前「二、」被换成「二以及」/「二，」）。
+    // 枚举骨架的打散归 breakEnumerationStructure 管（它 v0.9.34 起也认顿号编号），
+    // 两层各司其职，不在这里越权。
+    const prevSeg = run.slice(0, last).split("、").pop() ?? "";
+    if (/^(?:[一二三四五六七八九十]+|\d+)$/.test(prevSeg)) return run;
+    // v0.8.5 去掉"跟"：「X拓宽跟搭台子」式连读拗口且命中接跟探针
+    const joint = hasConj || verbish ? "，" : pick(rng, ["以及", "和", "，"]);
     return run.slice(0, last) + joint + run.slice(last + 1);
   });
 }

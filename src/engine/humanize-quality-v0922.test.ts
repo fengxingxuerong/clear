@@ -34,7 +34,7 @@
  */
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
-import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { humanize, wouldCascade } from "./humanize";
 import { VOCAB } from "./humanize-vocab";
 import { GUARD_BEFORE } from "./humanize-guard";
@@ -86,8 +86,14 @@ describe("v0.9.22 类别级语言质量守卫", () => {
   });
 
   it("③字符级一致：探针正则与 scan-bugs.ts 登记的逐字相同", () => {
-    // cwd 即仓库根（vitest 从根启动）；用 __dirname 在 ESM 下不可用
-    const src = fs.readFileSync(path.resolve(process.cwd(), "scripts/scan-bugs.ts"), "utf-8");
+    // v0.9.34：路径从 process.cwd() 改为相对测试文件自身。
+    // 原写法依赖「vitest 从仓库根启动」这一隐含假设——coverage-gate 为绕开
+    // 宿主 LiteSandbox 对工作区内派生 worker 的限制，spawn 时 cwd 改到了
+    // os.tmpdir()（args 带 --root ROOT，判据不变），测试进程的 cwd 不再
+    // 是仓库根。用 import.meta.url 解析不依赖任何运行方式假设，也更稳。
+    // 比对逻辑一字未动：仍是 src.includes(re.source) 逐字包含。
+    const scanBugsPath = fileURLToPath(new URL("../../scripts/scan-bugs.ts", import.meta.url));
+    const src = fs.readFileSync(scanBugsPath, "utf-8");
     for (const [name, re] of PROBES) {
       expect(
         src.includes(re.source),

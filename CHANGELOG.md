@@ -2,6 +2,74 @@
 
 > 完整版本历史，细节以对应 Git 提交为准。
 
+## v0.9.34 更新（顿号枚举盲区 + explain 注入归因 + 门禁环境回归修复）
+
+### ① 引擎：公文「一、二、三、」枚举是覆盖盲区，且叠加出畸形
+
+政务/公文最常见的枚举格式 —— **顿号编号**（「一、…二、…三、…」）—— 此前是**两层互不知情的缺陷**：
+
+| 层 | 缺陷 | 实测 |
+|---|---|---|
+| `breakEnumerationStructure` | `enumStart`/`memberRe` 只认引导词式（首先/第一点/其次），**不认顿号编号** ⇒ 序列骨架原样保留 = 强 AI 指纹 | 5 seed × 1 公文样本：**4 次编号残留** |
+| `relaxDunhao` | 把编号后的顿号当并列顿号换掉 ⇒「二、完善制度体系」→「**二以及**完善制度体系」 | 同类 5 seed：**4 次畸形** |
+
+结果是「编号去了一半、结构没打散」——比不处理更怪。
+
+修法（两层各司其职，不互相越权）：
+
+1. `relaxDunhao` 加编号守卫：紧邻最后一个顿号的前一片段是纯编号（`[一二三四五六七八九十]+` 或 `\d+`）⇒ 这个 run 不动。并列顿号的正常改写不受影响。
+2. `breakEnumerationStructure` 的两条正则补 `NUM_HEAD` 分支：`[一二三四五六七八九十]+、` 与 `\d+[.、](?!\d)`。
+   - ⚠️ `(?!\d)` 负向前瞻必须有：「1.5 个百分点」不是枚举头。
+   - ⚠️ 顿号/数字分支**不能**套 `(?:[，、]|$)` 后缀：「一、加强」的顿号后直接跟内容，套了永远匹配不上（第一版就是这么写废的）。
+3. 顺带修**承接头重复**：去编号后同一篇连出两个「再者，」（`enum.txt` plain 0.9 实测），比原来的「首先/其次」骨架更显眼——是新引入的机器指纹。`pick` 改成带 `used` 去重（与 `injectOpinion` 同款），撞已用最多试 3 次，仍撞就退回"无接头"（bare rest 本就是合法形态）。
+
+对照组：同输入「第一点/第二点」旧路径仍正常打散，无回归。
+
+### ② explain：注入侧从「一律推断」升级为可归因
+
+`explainChanges` 只登记了**删除侧**的规则表，注入侧没有可反查的登记 ⇒ 实测 casual 0.9 一篇 11 条归因里 **7 条全是整句 inject 且一律标「推断」**。其中大部分其实是**改写/切分残余**（diff 句级配对时原句被重写就配不上，被判成纯新增），把它说成"加入口语化成分"是**谎报**。
+
+改动：
+
+- 新增导出 `INJECTION_MARKERS`（`INTERJECTIONS` ∪ `OPINION_PHRASES` ∪ `PAD_WORDS` 去重）与 `matchInjection()`：
+  句首命中登记表的（观点短语/口语垫词）⇒ **确定**归因；括号自语在句尾，用 `includes`。
+- 未命中登记表的纯新增 ⇒ 从 `inject` 改归 **`structure`（推断）**。按本模块「不瞎编依据」的原则，不再把"改了"谎报成"加了口语气"。
+- 实测：确定归因数 4 → 5，其余 6 条诚实标推断。
+
+### ③ 门禁：`npm run test:cov` 在本机环境回归，已修复
+
+现象：22:33 宿主切换后，`npm run test:cov` 变成 **82 文件全红「0 test」**，collection 阶段抛
+`TypeError: Cannot read properties of undefined (reading 'config')` → 触发 `onTestFailure →
+cleanAfterRun` → 撞 `SAFE_DELETE_BULK_CONFIRM_REQUIRED`（覆盖率门禁的经典伪装形态）。
+对照组：最小测试文件（只 `import { describe } from "vitest"`）同样复现 ⇒ 与项目代码无关。
+
+三个独立成因，逐个实测确认：
+
+| # | 成因 | 处置 |
+|---|---|---|
+| 1 | LiteSandbox broker 对**工作区目录内**派生的 vitest worker 做代理，worker 加载不到完整 @vitest/runner 状态 | spawn `cwd` 从 `ROOT` 挪到 `os.tmpdir()` |
+| 2 | 宿主经 `NODE_OPTIONS` 注入的 language shim 污染 worker | spawn env 显式 `delete NODE_OPTIONS` |
+| 3 | **`--root` 传反斜杠路径会被 cac 解析器当转义吞字符**（最反直觉） | 统一转成正斜杠传参 |
+
+⚠️ 第 3 条是坑中坑：反斜杠形式与沙箱形式**症状一模一样**（都是 82 文件全红 `reading 'config'`），
+极易误判成"沙箱问题没修好"。单因子对照：大写 `D:/` 与 `D:\` 都过，小写 `d:/` 全挂——
+Windows 盘符本该大小写无关，坏的是 MSYS + broker 链路里那一跳。
+
+配套：`humanize-quality-v0922.test.ts` ③不再依赖 `process.cwd()`
+（原写法隐含"vitest 从仓库根启动"，spawn cwd 挪走后必然红），改为相对测试文件自身解析。
+
+### ④ 阴性结果（实测过了，不值得改）
+
+**「垫词叠加」不是缺陷**：探针 `artifacts/_probe-pad-stack.ts` 初测 casual 0.9 × 20 seed
+有 3 篇出现 ≥2 个不同垫词，看起来像"机器在努力表现随意"；但把口径收紧到**同一句内叠加**
+(`artifacts/_probe-pad-same.ts`) 只有 **1/40**。227 字的 casual 稿里跨句出现 2 个垫词属正常口语节奏，
+不构成可观测缺陷 —— 故不为此动引擎。
+
+### ⑤ 门禁
+
+- `tsc` ✅｜`lint` ✅｜`test:cov` 1735 passed / 82 文件｜Stmt 99.0% / Branch 95.5% / Func 99.1% / Lines 99.5% ✅
+- `test:regress` 0 违规（v8.0 八条 + v9.0 两条，40 次/探针全零）✅
+
 ## v0.9.33 更新（未然从句不补「了」：时态错不是语感问题）
 
 ### ① 缺陷

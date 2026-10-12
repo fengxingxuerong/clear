@@ -24,8 +24,31 @@
  * - 结构性调整（切句、重排、整句重写）只能归到 `structure` —— 反查不出它是哪条 pass 干的。
  */
 import { diffSentences } from "./diff";
-import { VOCAB, VOCAB_ENTRIES, LEADING_CONNECTORS, FORMULAIC } from "./humanize-vocab";
+import {
+  VOCAB,
+  VOCAB_ENTRIES,
+  LEADING_CONNECTORS,
+  FORMULAIC,
+  INTERJECTIONS,
+} from "./humanize-vocab";
 import { MECH_CLICHE_REWRITE, PAD_WORDS } from "./humanize-text";
+import { OPINION_PHRASES, PARENTHETIC_NOTES } from "./humanize-zhuque";
+
+/**
+ * v0.9.34：注入登记表 —— 把引擎**注入侧**的三张表聚合过来，让反查层能归因。
+ *
+ * 修前实测（_cap-probe casual 0.9）：11 条归因只有 4 条确定，7 条全是整句 inject
+ * 且一律标「推断」——不是 explain 偷懒，是注入侧压根没有可反查的登记：
+ * 引擎 `injectOpinion`（句首观点短语）/ `INTERJECTIONS`（句首垫词）/
+ * `injectParentheticNotes`（句尾括号自语）三张表都在引擎内部，explain 看不见。
+ *
+ * 纪律与删除侧一致：这里只做聚合 import，不改引擎任何行为（零漂移）。
+ * 判据用 startsWith（观点/垫词都插在句首，见 humanize.ts 的 `op + "，" + s`），
+ * 括号自语在句尾，用 includes。
+ */
+export const INJECTION_MARKERS: string[] = Array.from(
+  new Set([...OPINION_PHRASES, ...INTERJECTIONS, ...PAD_WORDS]),
+).sort((a, b) => b.length - a.length); // 长词先命中，防「说真的」被「说」抢（本表无单词，防御性）
 
 /** 改动类别。排序即"归因可信度从高到低"的尝试顺序。 */
 export type ExplainKind =
@@ -81,7 +104,8 @@ const REASON: Record<ExplainKind, { reason: string; basis: string }> = {
   },
   inject: {
     reason: "加入口语化成分，打断机器那种均匀节奏",
-    basis: "由 diff 得出：改后稿新增，且未命中任何规则表（推断）",
+    basis:
+      "humanize-zhuque.ts 的 OPINION_PHRASES / humanize-vocab.ts 的 INTERJECTIONS（句首注入表）；命中登记表的为确定归因，未命中的仍是形态推断",
   },
   structure: {
     reason: "整句重写或结构调整（切句/重排）—— 具体是哪道流程做的，反查不出来",
@@ -151,6 +175,24 @@ function matchRemoval(del: string): { kind: ExplainKind; word: string } | null {
 }
 
 /**
+ * 注入类（v0.9.34）：新增句命中了引擎注入登记表 → 这条 inject 是**确定**归因。
+ *
+ * 两类位置：
+ *   · 句首 —— 观点短语 / 口语垫词（`injectOpinion` / `INTERJECTIONS` 都是
+ *     `marker + "，" + 原句`，见 humanize.ts），用 startsWith；
+ *   · 句尾 —— 括号自语（`injectParentheticNotes` 是 `s + （note）`），用 includes。
+ */
+export function matchInjection(ins: string): { kind: "inject"; word: string } | null {
+  for (const m of INJECTION_MARKERS) {
+    if (m && ins.startsWith(m)) return { kind: "inject", word: m };
+  }
+  for (const n of PARENTHETIC_NOTES) {
+    if (n && ins.includes(n)) return { kind: "inject", word: n };
+  }
+  return null;
+}
+
+/**
  * 生成「为什么这么改」清单。
  *
  * @param before 原文
@@ -167,7 +209,7 @@ export function explainChanges(before: string, after: string): ExplainItem[] {
   const pairs = Math.max(dels.length, inss.length);
 
   const out: ExplainItem[] = [];
-  const push = (kind: ExplainKind, b: string, a: string): void => {
+  const push = (kind: ExplainKind, b: string, a: string, certainOverride?: boolean): void => {
     const r = REASON[kind];
     out.push({
       kind,
@@ -175,13 +217,15 @@ export function explainChanges(before: string, after: string): ExplainItem[] {
       after: a,
       reason: r.reason,
       basis: r.basis,
-      // 命中明确规则表的才敢标确定；trim / inject / structure / other 都是形态推断
+      // 命中明确规则表的才敢标确定；trim / structure / other 都是形态推断。
+      // v0.9.34：inject 命中注入登记表时由调用方显式置 true（见 matchInjection）。
       certain:
-        kind === "cliche" ||
-        kind === "vocab" ||
-        kind === "connector" ||
-        kind === "pad" ||
-        kind === "formulaic",
+        certainOverride ??
+        (kind === "cliche" ||
+          kind === "vocab" ||
+          kind === "connector" ||
+          kind === "pad" ||
+          kind === "formulaic"),
     });
   };
 
@@ -210,7 +254,17 @@ export function explainChanges(before: string, after: string): ExplainItem[] {
       continue;
     }
     if (ins) {
-      push("inject", "", ins);
+      // v0.9.34：先查注入登记表（命中 = 确定归因）。
+      // 未命中的纯新增句**不再一律叫 inject**——实测（_cap-probe）6/11 的"新增句"
+      // 其实是改写/切分残余（「总的来看，…」「一句话概括，…」是原文句子被改写后
+      // 与原句对不上，diff 判成纯新增），叫 inject 是把"改了"谎报成"加了口语气"。
+      // 按本模块「不瞎编依据」的原则归 structure（推断），注入表能命中的才叫 inject。
+      const im = matchInjection(ins);
+      if (im) {
+        push(im.kind, "", im.word, true);
+      } else {
+        push("structure", "", ins);
+      }
     }
   }
 
