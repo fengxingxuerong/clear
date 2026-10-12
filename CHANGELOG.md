@@ -53,6 +53,9 @@
   （由 `artifacts/_gen-improve-samples.cjs` 生成，避免两处维护漂移）。
 - `scripts/regression-improve.test.ts`：9 条用例（阈值边界、skip 语义、确定性、drop 公式）。
 - 接进 `npm run test:improve` → `check:release`，并进 CI。
+- 顺带修掉测试环境噪音：`zhuque-retro-backfill.test.ts` 各组 `afterEach` 清理临时目录时撞
+  本机 safe-delete 守卫——**挂住不返回**（不抛错），vitest 报 `Hook timed out in 10000ms`，
+  20 条用例成片假红。改为刻意不清理（mkdtemp 建在系统 temp、名字唯一），文件头写明原因。
 
 ### ④ 变异检验（证明它真会红）
 

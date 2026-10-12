@@ -15,6 +15,13 @@
  *
  * 后半部分（第二～五组）再补三类真实故障：官分对不上、账本重复、档案本身缺失/抄漏。
  *
+ * ---- 临时目录刻意不清理（2026-10-13）----
+ * 各组 afterEach 原来 `fs.rmSync(tmp, {recursive:true, force:true})`。本机 safe-delete 守卫
+ * 在批量删除时**挂住不返回**（不抛错，try/catch 与 force 都无效）⇒ vitest 报
+ * `Hook timed out in 10000ms`，20 条用例成片变红——看着像用例坏了，其实是环境噪音。
+ * 目录由 mkdtempSync 建在 os.tmpdir()、名字唯一、用例间互不干扰，残留交系统回收。
+ * **别改成"加长 hookTimeout 继续删"**：它是挂住，不是慢，加多长都会超时。
+ *
  * ---- 覆盖率上"够不着"的那几处，成因在这里，不去改源码凑数字 ----
  * 本文件把可测的分支基本都走到了；剩下这几条从测试面**结构上够不着**，
  * 它们要么是防御性死代码，要么只在"本文件就是进程入口"时才会发生。列在这里备查：
@@ -91,7 +98,9 @@ describe("真档案的映射：18 个点逐条自证", () => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "retro-map-"));
     store = storeFromOpts({ base: tmp });
   });
-  afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  afterEach(() => {
+    void tmp;
+  });
 
   it("dry-run 不写任何文件", () => {
     expect(build(store, true)).toBe(0);
@@ -188,7 +197,9 @@ describe("官分互证与 append-only 幂等", () => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "retro-gate-"));
     store = storeFromOpts({ base: tmp });
   });
-  afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  afterEach(() => {
+    void tmp;
+  });
 
   /**
    * 行 230-233：档案官分与正本 y 不符 → 当场拒收、退出 1。
@@ -260,7 +271,9 @@ describe("映射表兜底：未登记的裸 id 原样透传，不静默变 undef
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "retro-fallback-"));
     store = storeFromOpts({ base: tmp });
   });
-  afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  afterEach(() => {
+    void tmp;
+  });
 
   /**
    * 行 93 与行 116：删掉 V2_MAP.N1 后，v2 档案块头与回传行两处的 `?? m[1]` 都要走兜底。
@@ -384,7 +397,9 @@ describe("档案故障：字数对不上 / O1 原文档缺失", () => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "retro-fault-"));
     store = storeFromOpts({ base: tmp });
   });
-  afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  afterEach(() => {
+    void tmp;
+  });
 
   it("v2 档案字数与正文不符 → 该点拒收、退出 1，并点名是抄漏", () => {
     const real = fs.readFileSync;
@@ -486,7 +501,9 @@ describe("档案畸形：缺列 / 多余键的兜底", () => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "retro-malformed-"));
     store = storeFromOpts({ base: tmp });
   });
-  afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  afterEach(() => {
+    void tmp;
+  });
 
   /** 把 fs.readFileSync 包一层，对命中 suffix 的文件做 transform */
   function withPatchedFile(
