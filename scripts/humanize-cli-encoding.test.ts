@@ -40,7 +40,9 @@ describe("CLI 编码检测（真起进程）", () => {
   });
 
   afterEach(() => {
-    fs.rmSync(tmp, { recursive: true, force: true });
+    // 临时目录刻意不清理（2026-10-13，同 humanize-cli-docx.test.ts：全量并行下
+    // rmSync 会抛 ENOTEMPTY 或撞 safe-delete 挂住）⇒ 统一不删，残留交系统回收。
+    void tmp;
   });
 
   it("tsx 入口存在（否则用例静默变假绿）", () => {

@@ -53,15 +53,36 @@
   （由 `artifacts/_gen-improve-samples.cjs` 生成，避免两处维护漂移）。
 - `scripts/regression-improve.test.ts`：9 条用例（阈值边界、skip 语义、确定性、drop 公式）。
 - 接进 `npm run test:improve` → `check:release`，并进 CI。
-- 顺带修掉测试环境噪音：`zhuque-retro-backfill.test.ts` 各组 `afterEach` 清理临时目录时撞
-  本机 safe-delete 守卫——**挂住不返回**（不抛错），vitest 报 `Hook timed out in 10000ms`，
-  20 条用例成片假红。改为刻意不清理（mkdtemp 建在系统 temp、名字唯一），文件头写明原因。
+- 测试环境噪音修复（成因与实验见 ⑤）：`zhuque-retro-backfill` / `zhuque-evidence` /
+  `humanize-cli-docx` / `humanize-cli-encoding` 四个测试文件的 `afterEach` 清理临时目录，
+  在全量并行下撞本机 safe-delete——**实测两种形态：抛 `ENOTEMPTY` / 挂住不返回报 hook 超时**。
+  统一改为刻意不清理（mkdtemp 目录在系统 temp、名字唯一、用例互不干扰）。
 
 ### ④ 变异检验（证明它真会红）
 
 把 `measureImprove` 的 intensity 从 0.9 改成 0（= 引擎不改写）→
 **4 条判定样本全部 0.0% 判红、EXIT=1**；改回后复绿。见文件注释。
 不做这步的话，"全绿"有可能只是恒真式。
+
+### ⑤ 发布前抓到：两处「从未生效」的 vitest 配置（本次最大意外）
+
+发版前跑 `check:release` 稳定红在覆盖率门禁，真凶是两条重负载用例**超时**——可
+`vite.config.ts` 里明明写着 `testTimeout: 30_000`（v0.9.29 加的，注释写着"已放宽到 30s"）。
+不信注释、做实验：临时塞一个 7s sleep 的探针用例（不传第三参数），**报 `Test timed out in 5000ms`**
+⇒ 那行配置**从未生效过**。
+
+| 原写法 | 问题 | 修正 |
+|---|---|---|
+| `test.coverage.testTimeout` | 层级错——写进了 coverage 子树，静默忽略 | 移到 `test.testTimeout`（合法位置） |
+| `test.coverage.cleanAfterRun` | **不是合法字段**（vitest 只有 `clean` / `cleanOnRerun`），静默忽略 | 换成 `reportOnFailure: true` |
+
+`reportOnFailure` 才是"门禁伪装"的真正开关（`coverage.DM_a_rWm.js:790`）：
+默认 false 时 `onTestFailure()` 先删 `.tmp` ⇒ 报告写不出来 ⇒ 门禁把"测试失败"误报成
+"覆盖率不达标"（10-12 那两轮的真凶就在这里）。置 true 后失败时照常出报告 —— **判据没放水**：
+测试计数由 gate 独立解析（必须显示 0 failed 才算过），失败照样判红、只是理由说真话。
+
+两处都是"改过 → 被认为已修 → 其实静默无效"的案例。教训：**配置类修复必须用"故意触发"的
+实验验证**（探针 sleep 超默认值），与用例级的变异检验同等级别。
 
 ## v0.9.34 更新（顿号枚举盲区 + explain 注入归因 + 门禁环境回归修复）
 

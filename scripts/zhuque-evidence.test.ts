@@ -60,7 +60,11 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  fs.rmSync(tmp, { recursive: true, force: true });
+  // 临时目录刻意不清理（2026-10-13，与 zhuque-retro-backfill.test.ts 同因）：
+  // 全量并行跑时 rmSync 撞本机 safe-delete 守卫**挂住不返回**（不抛错），
+  // vitest 报 Hook timed out in 10000ms 假红。目录由 mkdtemp 建在系统 temp、
+  // 名字唯一、用例间互不干扰，残留交系统回收。别加长 hookTimeout——它是挂住不是慢。
+  void tmp;
   vi.restoreAllMocks(); // 用例中途失败也不把 console/process.exit 的桩泄漏给下一条
 });
 

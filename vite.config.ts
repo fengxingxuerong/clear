@@ -43,6 +43,18 @@ export default defineConfig({
   test: {
     include: ["src/**/*.test.ts", "src/**/*.test.tsx", "scripts/**/*.test.ts"],
     exclude: ["node_modules"],
+    // v0.9.29 想放宽单条用例的默认等待（5s → 30s），但**写错了层级**：写进了下面的
+    // `coverage` 子树 ⇒ 非法位置、静默被忽略，实测仍是 5000ms（2026-10-13 用「7s sleep
+    // 探针」实证：报 Test timed out in 5000ms）。现移回 test 级（vitest 的合法位置）。
+    //
+    // 症状（逐条修是打地鼠，必须系统性看）：全量 + 覆盖率插桩下，**哪条红是随机的** ——
+    // 实测三连跑分别红在 verify-quality 的「词表扫描」/「真起进程 CLI」/ 两者同时。
+    // 根因不是这些用例坏了，是它们本来就重：单文件跑 16 条共 4.57s（此类用例占大头 ≈4s），
+    // 已经贴着 5000ms；80 文件并发 + v8 插桩后负载一高就超时。
+    //
+    // 放宽的是**等待时间**，判据一条没动：该为空的仍必须为空、退出码仍必须是 0。
+    // 代价：真死循环要多等 25 秒才暴露 —— 可接受，且 coverage-gate 的杀进程树兜底仍在。
+    testTimeout: 30_000,
     // 覆盖率阈值从 scripts/coverage-thresholds.ts 取（**唯一事实源**）。
     // 此前阈值在本文件与 `test:cov` 的命令行参数里各写了一份，两份会各自漂移；
     // 2026-10-03 核实发现本机覆盖率门禁从未真正生效（结构性假红，详见
@@ -52,31 +64,26 @@ export default defineConfig({
     // 真实覆盖略低于报告值，差值 <1pt。不为它们追数字 —— 那是入口层测试的课题。
     coverage: {
       thresholds: { ...COVERAGE_THRESHOLDS },
-      // v0.9.29：单条用例的默认等待从 5s 放宽到 30s。
+      // v0.9.28 的意图：关掉 vitest 自己的清理，避免"收尾删 coverage/.tmp（实测 85 个
+      // 分片）撞本机守卫（禁止一次删 >50 文件）→ SAFE_DELETE_BULK_CONFIRM_REQUIRED →
+      // 报告流程中断"。跑前那道更早就炸：目标是整个 `coverage/`（80+ 文件），同样 >50。
       //
-      // 症状（逐条修是打地鼠，必须系统性看）：全量 + 覆盖率插桩下，**哪条红是随机的** ——
-      // 实测三连跑分别红在 verify-quality 的「词表扫描」/「真起进程 CLI」/ 两者同时。
-      // 根因不是这些用例坏了，是它们本来就重：单文件跑 16 条共 4.57s（此类用例占大头 ≈4s），
-      // 已经贴着 5000ms；80 文件并发 + v8 插桩后负载一高就超时。
+      // ⚠️ 2026-10-13 修正：原写的 `cleanAfterRun: false` **不是合法字段**（vitest 只有
+      // coverage.clean 与 coverage.cleanOnRerun，后者只管 watch 重跑）⇒ 静默忽略、
+      // 从未生效。真正的开关是 `reportOnFailure`（coverage.DM_a_rWm.js:790）：
+      //   onTestFailure() { if (!options.reportOnFailure) await cleanAfterRun(); }
+      // 默认 false ⇒ 有**任一用例失败**就先删 .tmp ⇒ 报告写不出来 ⇒ 门禁把"测试失败"
+      // 误报成"覆盖率不达标"（真凶被伪装）。置 true：失败时也保留分片、照常出报告。
       //
-      // 放宽的是**等待时间**，判据一条没动：该为空的仍必须为空、退出码仍必须是 0。
-      // 代价：真死循环要多等 25 秒才暴露 —— 可接受，且 coverage-gate 的杀进程树兜底仍在。
-      testTimeout: 30_000,
-      // v0.9.28：关掉 vitest 自己的两道清理（跑前 `clean` / 跑后 `cleanAfterRun`）。
-      //
-      // 症状：79 个测试文件**全部通过**，但 vitest 退出码仍是 1，`coverage-final.json`
-      // 写出来了、门禁却判红 —— 因为收尾时 v8 provider 要 `rm -rf coverage/.tmp`
-      // （实测 85 个分片），而本机守卫**禁止一次删 >50 文件**，直接抛
-      // SAFE_DELETE_BULK_CONFIRM_REQUIRED，报告流程中断在"删临时文件"这一步。
-      // 跑前那道更早就炸：目标是整个 `coverage/`（80+ 文件），同样是 >50。
-      //
-      // 不是放水：新鲜度由**门禁自己的 rename 通道**保证 ——
-      // `scripts/coverage-gate.ts` 的 cleanReportsDir() 每轮先把 `coverage/` 整个
-      // 改名成 `coverage.stale-<ts>`（rename 不是删除，绕得开守卫），
-      // 新报告从头写，不可能读到旧数据。日志里那行
-      // "ⓘ 删除被本机守卫拦下，已把旧报告挪到 coverage.stale-…" 就是证据。
+      // 两者都不放水：
+      //   · 新鲜度由**门禁自己的 rename 通道**保证 —— `scripts/coverage-gate.ts` 的
+      //     cleanReportsDir() 每轮先把 `coverage/` 整个改名成 `coverage.stale-<ts>`
+      //     （rename 不是删除，绕得开守卫），新报告从头写，读到旧数据不可能。
+      //     日志里 "ⓘ 删除被本机守卫拦下，已把旧报告挪到 coverage.stale-…" 就是证据。
+      //   · 测试计数由 gate **独立**从输出解析（显示 0 failed 才算过），失败照样判红，
+      //     只是理由说真话。
       clean: false,
-      cleanAfterRun: false,
+      reportOnFailure: true,
     },
   },
 });

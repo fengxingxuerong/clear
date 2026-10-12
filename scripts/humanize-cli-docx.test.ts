@@ -60,7 +60,10 @@ describe("CLI 的 .docx 输入（真起进程）", () => {
   });
 
   afterEach(() => {
-    fs.rmSync(tmp, { recursive: true, force: true });
+    // 临时目录刻意不清理（2026-10-13）：全量并行跑时 rmSync recursive 抛 ENOTEMPTY
+    // （CLI 子进程刚写完产物、句柄未释放）；同批次文件上还实测过"撞 safe-delete
+    // 守卫挂住不返回"。清理只是卫生，不该判用例死刑 ⇒ 统一不删，残留交系统回收。
+    void tmp;
   });
 
   it("tsx 入口存在（否则下面的用例会静默变成「CLI 没跑」的假绿）", () => {
