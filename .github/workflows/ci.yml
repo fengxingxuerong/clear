@@ -65,6 +65,16 @@ jobs:
         # 详见 scripts/check-regex-defects.ts。
         run: npm run check:regex
 
+      - name: Version consistency (版本号落点)
+        # 2026-10-13 补：版本号有 6+1 处落点（根/electron-app 两处 package.json、README 标题行、
+        # README 文末"当前版本"、CHANGELOG 本版章节、产物 resources/app/package.json；
+        # 第七处 SKILL.md metadata.version 是手动的，由 skill-md.test.ts 守）。
+        # 此前只在本机 check:release 里跑，CI 链独缺它 —— 结果就是"漏改一处在 CI 上完全看不见",
+        # 历史上 README 落点漏过三次（v0.9.16/18/19），才攒出这条门禁。
+        # 干净检出下没有 electron-dist 产物 ⇒ 产物落点自动跳过（check-version-sync.ts 的设计），
+        # 本地发布流程里那处照常校验。
+        run: npm run check:version
+
       - name: Unit tests (vitest, with coverage gate)
         # coverage 阈值在 scripts/coverage-thresholds.ts（**唯一事实源**，v0.9.16 起收拢），
         # 2026-10-05 从 75×4 收紧到 93/87/94/94——阈值贴着实际值（实测 97.4/91.6/98.8/98.2）
