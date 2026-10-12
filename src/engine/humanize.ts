@@ -630,17 +630,47 @@ function relaxIntensifierVerb(text: string, rng: () => number, p: number): strin
   return text.replace(re, (_m, _adv: string, verb: string) => (rng() < p ? verb : _m));
 }
 
+/**
+ * v0.9.33：目的/未然从句里的完成态动词**不许补「了」**。
+ *
+ * 实测：政务短章 30 次运行命中 16 次「以保证其在健康有序的轨道上踏实推进了。」
+ * ——「以确保/为了/需要/应当」引导的从句，动作**尚未发生**，补上「了」就把它标成
+ * 已完成，是时态错误（不是语感问题，是语法错误）。
+ *
+ * 守卫与探针（`scan-bugs` v8.0「未然从句补了」）**共用这一条正则**：
+ *   守卫侧测 `从句头…动词 + 句末标点`，探针侧测整段输出——同一形态、同一条判据。
+ * ⚠️ 不含「使得」：「这使得效率提升了。」是**合法**完成态，人写也这么说。
+ */
+export const PURPOSE_LE_RE =
+  /(?:\u4ee5\u786e\u4fdd|\u4ee5\u4fdd\u8bc1|\u4e3a\u4e86|\u4ee5\u4fbf|\u65e8\u5728|\u529b\u6c42|\u4ee5\u671f|\u624d\u80fd|\u9700\u8981|\u5e94\u5f53|\u5e94\u8be5|\u5fc5\u9808|\u6709\u5f85|\u5373\u5c06|\u5c06\u8981)[^\u3002\uff01\uff1f\n]{2,40}\u4e86[\u3002\uff01\uff1f]/;
+
 /** 预编译：补"了"口语化正则（依赖导入的 LE_VERBS） */
 const LE_RE = new RegExp(
-  "(?<!的[\\u4e00-\\u9fa5]{0,3})(?<!了[\\u4e00-\\u9fa5]{0,3})(" +
+  "(?<!\u7684[\\u4e00-\\u9fa5]{0,3})(?<!\u4e86[\\u4e00-\\u9fa5]{0,3})(" +
     LE_VERBS.join("|") +
-    ")([。！？!?])",
+    ")([\u3002\uff01\uff1f!?])",
   "g",
 );
 
 function relaxLe(text: string, rng: () => number, p: number): string {
   const re = LE_RE;
-  return text.replace(re, (m, verb: string, end: string) => (rng() < p ? verb + "了" + end : m));
+  return text.replace(re, (m: string, verb: string, end: string, offset: number, str: string) => {
+    // v0.9.33：从句头到动词之间若出现过目的/未然引导词，这一句整体不补「了」。
+    // 测的形态是"补了之后"的样子（clause + verb + 了 + end）——PURPOSE_LE_RE 要的正是
+    // "引导词…了。"这个完整形态，少了「了」永远匹配不上（第一版就这么漏的，一条不减）。
+    const clauseStart = Math.max(
+      str.lastIndexOf("\u3002", offset),
+      str.lastIndexOf("\uff01", offset),
+      str.lastIndexOf("\uff1f", offset),
+      str.lastIndexOf("\n", offset),
+      -1,
+    );
+    if (PURPOSE_LE_RE.test(str.slice(clauseStart + 1, offset) + verb + "\u4e86" + end)) {
+      rng(); // 守卫命中也抽一次：少抽会让后续随机序列整体错位（同 replaceWithDevelopment 的做法）
+      return m;
+    }
+    return rng() < p ? verb + "\u4e86" + end : m;
+  });
 }
 
 /** 结构级去味：句/段首过渡词直接删除 */

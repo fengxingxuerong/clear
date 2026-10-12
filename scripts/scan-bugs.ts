@@ -9,6 +9,8 @@ import { humanizeBestOf } from "../src/engine/humanize-bestof.ts";
 // v0.9.31：方向修饰语探针与引擎守卫**共用同一条正则**（见 humanize.ts 的注释），
 // 免得出现"守卫否掉的比签名抓的多/少"这类两边对不齐。
 import { DIR_MODIFIER_VERB_CLASH_RE } from "../src/engine/humanize.ts";
+// v0.9.33：未然从句补「了」探针与引擎守卫共用同一条正则（见 humanize.ts 的注释）
+import { PURPOSE_LE_RE } from "../src/engine/humanize.ts";
 import { reportAll, type Violation } from "./violation-report.ts";
 declare const process: { exit(code?: number): never; env: Record<string, string | undefined> };
 
@@ -1106,6 +1108,16 @@ const V8_COUNT = { n: 0 };
       DIR_MODIFIER_VERB_CLASH_RE,
       "类别级：方向/性质修饰语作状语接行为动词（接名词合法，不在本条范围内）",
     ],
+    [
+      "未然从句补了",
+      // 「以保证其在健康有序的轨道上踏实推进了。」——`relaxLe` 给句末完成态动词补「了」，
+      // 但「以确保/为了/需要/应当」引导的从句动作**尚未发生**，补了就是时态错。
+      // 实测政务短章 30 次运行命中 16 次（其它 4 段语料 0 —— 又是体裁盲区，
+      // 只有带目的从句的论说体碰得到）。
+      // ⚠️ 不含「使得」：「这使得效率提升了。」是合法完成态。
+      PURPOSE_LE_RE,
+      "类别级：目的/未然从句里的完成态动词被补上「了」",
+    ],
   ];
 
   const V8_BASELINE: Record<string, number> = {
@@ -1116,6 +1128,7 @@ const V8_COUNT = { n: 0 };
     "口语动词+制度法规宾语": 0,
     并列谓语孤句: 0,
     "方向修饰语+行为动词": 0,
+    "未然从句补了": 0,
   };
 
   const v8Measured: Record<string, number> = {};
