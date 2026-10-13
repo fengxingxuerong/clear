@@ -1,4 +1,4 @@
-# 趣AI味 · QuAiWei v0.9.41
+# 趣AI味 · QuAiWei v0.9.42
 
 [![CI](https://github.com/fengxingxuerong/clear/actions/workflows/ci.yml/badge.svg)](https://github.com/fengxingxuerong/clear/actions/workflows/ci.yml)
 
@@ -79,7 +79,7 @@ npm run dev          # 打开 http://localhost:5173
 文档里的参数表 ↔ `scripts/humanize-cli.ts` 的参数由 `scripts/skill-md.test.ts` **双向锁死**：
 改了 CLI 忘改文档、或文档凭空多写一个参数，测试直接红。
 
-### 去 AI 味规则 skill（零安装，v0.9.41）
+### 去 AI 味规则 skill（零安装，v0.9.42）
 
 不想装桌面版/CLI，只想让自己在用的 agent（Claude Code / Cursor / Windsurf / Cline）**直接按规则改**？
 [`skills/humanizer-rules/`](skills/humanizer-rules/) 是一份独立 skill：50+ 组套话替换表、
@@ -640,5 +640,5 @@ MIT（见 LICENSE）。
 
 ## 更新日志
 
-完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。当前版本 **v0.9.41**（以 `package.json` 的 `version` 为准）。
+完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。当前版本 **v0.9.42**（以 `package.json` 的 `version` 为准）。
 

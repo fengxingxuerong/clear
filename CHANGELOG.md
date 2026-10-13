@@ -2,6 +2,37 @@
 
 > 完整版本历史，细节以对应 Git 提交为准。
 
+## v0.9.42 更新（npm 分发就绪 + CLI 第一印象修正）
+
+v0.9.41 之后本仓库进入「分发冲刺」：npm 包从「能打包」到「能发布」，
+CLI 的 `--help` 输出对装包用户不再显示不存在的路径。
+
+### ① npm 打包配置收口（彩排全过）
+
+- `private: true` 移除（它挡着 `npm publish`）；`ai-humanizer` 名字在 registry 可用。
+- 新增 `files` 白名单：`dist-cli` + README + LICENSE。此前无白名单 ⇒ 打包
+  **395 个文件 / 1.5MB**，把 `docs/key-rotation-status.md`、`evidence/`、`scripts/`
+  全打进去；现为 **4 文件 / 140kB**。
+- `engines: node >= 18`（与 CLI 的 esbuild target 一致）。
+- `react` / `react-dom` 移入 devDependencies：Electron 子包自立（不含 root react），
+  CLI 产物零 react 引用，root 依赖仅是构建期所需 ⇒ npm 用户不再被强装 5MB 前端库
+  （electron-app 的 `--omit=dev` 只跑自己 manifest，不受影响）。
+- **彩排**：tarball 装进临时消费者项目 → bin 三件套生成 → `--help` 走 stdout / 退出 0 →
+  stdin 真实拟人正常（正文 stdout、诊断 stderr）。
+
+### ② CLI `--help` 用法首行改显 bin 名
+
+装包用户跑 `ai-humanizer --help`，首行原是 `用法: npx tsx scripts/humanize-cli.ts …`——
+一个装包环境里不存在的路径（v0.9.40 修 `--help` 退出码时留的尾巴）。改显 `ai-humanizer`；
+parseArgs 未动，靶向测试 53 条全过（含 `--help` / `-h` 进程级断言）。
+
+### ③ 内部：key 轮换工具链加固（不改变引擎行为）
+
+SenseNova 3 条旧 key 实测仍有效，全盘终扫 **29 文件 / 109 处**活证后：
+泄露报告清洗已执行（8 处抹除，原文件备份在 `electron-dist/_rotbk/`）；轮换脚本改为
+SCAN_SPECS 递归发现 + 沙箱全链路演练（抓出「备份名互相覆盖」等 2 个 bug 并修复）。
+详见 `docs/key-rotation-status.md`。门禁 1788 tests / 86 文件全绿。
+
 ## v0.9.41 更新（「通过短信通知」不再变成「靠短信通知」——替身降级）
 
 v0.9.40 那轮扩语料抓到 3 类缺陷，当时只修了切句的 2 类（介词残句、目的从句）；
