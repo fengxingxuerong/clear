@@ -1,11 +1,18 @@
 {
   "name": "ai-humanizer",
-  "private": true,
   "version": "0.9.41",
   "type": "module",
   "description": "趣AI味 · 本地离线可用、可选接 LLM 的中文 AI 文本拟人化工具，对标朱雀",
   "bin": {
     "ai-humanizer": "dist-cli/humanize-cli.mjs"
+  },
+  "files": [
+    "dist-cli",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
   },
   "scripts": {
     "dev": "vite",
@@ -33,10 +40,6 @@
     "fmt": "prettier --write \"src/**/*.{ts,tsx,css}\" \"*.{ts,tsx,json,mjs}\" \"vite.config.ts\"",
     "build:electron": "tsc -b && vite build && node scripts/sync-dist.mjs"
   },
-  "dependencies": {
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
-  },
   "optionalDependencies": {
     "@huggingface/transformers": "^4.2.0"
   },
@@ -53,6 +56,8 @@
     "globals": "^17.11.0",
     "happy-dom": "^20.12.0",
     "prettier": "^3.9.6",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "tsx": "^4.23.12",
     "typescript": "^5.5.3",
     "typescript-eslint": "^8.67.0",
