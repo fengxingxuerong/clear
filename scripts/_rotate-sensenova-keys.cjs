@@ -18,11 +18,21 @@ const SK = /sk-[A-Za-z0-9]{16,}/g;
 const BK = "D:/projects/quaiwei/electron-dist/_rotbk";
 const TARGETS = [
   "D:/projects/prompt-master/.env",
-  "D:/projects/prompt-master/.env.bak-20260917",
-  "D:/projects/prompt-master/.env.bak-20260918",
-  "D:/projects/prompt-master/.env.bak-20260918-judges",
   "D:/projects/sqli-scanner/server/.env.ai",
 ];
+
+// prompt-master 的 .env.bak-* 备份：runbook 09-25 曾记录"已不存在"，实测反复出现
+// （2026-10-04 的 judge-swap 备份就漏在硬编码列表外过一次，2026-10-14 补扫发现）——
+// 改为自动发现，杜绝再漏。未来新增备份无需改本脚本。
+function discoverBaks() {
+  const dir = "D:/projects/prompt-master";
+  if (!fs.existsSync(dir)) return [];
+  return fs
+    .readdirSync(dir)
+    .filter((n) => /^\.env\.bak-.+$/.test(n))
+    .map((n) => path.join(dir, n));
+}
+const ALL_TARGETS = [...TARGETS, ...discoverBaks()];
 const REPORTS = [
   "D:/deep/agent-audit-reports/index.html",
   "D:/deep/agent-audit-reports/data/2026-08-15.json",
@@ -55,7 +65,7 @@ function loadNewKeys(file) {
 // 收集目标文件里现存的旧 Key 明文（按固定哈希顺序对齐）
 function collectOldKeys() {
   const found = new Map(); // hash -> 明文
-  for (const f of TARGETS) {
+  for (const f of ALL_TARGETS) {
     const text = fs.readFileSync(f, "utf-8");
     for (const m of text.matchAll(SK)) {
       const h = hashOf(m[0]);
@@ -74,7 +84,8 @@ function rotate(newKeys, oldKeys) {
   const map = new Map(); // 旧明文 → 新明文
   OLD_HASHES.forEach((h, i) => map.set(oldKeys[i], newKeys[i]));
   console.log(`映射（按哈希）：${OLD_HASHES.map((h, i) => `${h}→${hashOf(newKeys[i])}`).join("  ")}`);
-  for (const f of TARGETS) {
+  console.log(`目标文件 ${ALL_TARGETS.length} 个（含自动发现的 .env.bak-* ${discoverBaks().length} 个）`);
+  for (const f of ALL_TARGETS) {
     const text = fs.readFileSync(f, "utf-8");
     const lines = text.split(/\r?\n/);
     let count = 0;
@@ -106,7 +117,7 @@ function rotate(newKeys, oldKeys) {
 function verify() {
   console.log("-- 复扫（旧哈希应 0 命中）--");
   let bad = 0;
-  for (const f of TARGETS) {
+  for (const f of ALL_TARGETS) {
     const text = fs.readFileSync(f, "utf-8");
     const olds = [...text.matchAll(SK)].filter((m) => OLD_HASHES.includes(hashOf(m[0])));
     if (olds.length) {

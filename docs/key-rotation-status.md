@@ -1,4 +1,25 @@
-# Key 轮换状态备忘（2026-09-05｜泄露面复测更新 2026-09-19｜历史清洗处置 2026-09-25｜轮换前置就绪 2026-09-26）
+# Key 轮换状态备忘（2026-09-05｜泄露面复测更新 2026-09-19｜历史清洗处置 2026-09-25｜轮换前置就绪 2026-09-26｜**泄露面再实测 + 报告清洗已执行 2026-10-14**）
+
+## 2026-10-14 泄露面再实测（`_sweep-now.cjs` 全盘重扫）与三项更正
+
+- **3 条旧 Key 复测仍全部有效**：逐条打 `token.sensenova.cn/v1/models` → 3×HTTP 200 / 7 models。
+  这是 09-26 之后再次确认"轮换必要性不变"，且意味着下文的报告清洗**不能等轮换后再做**。
+- **更正①：`.env.bak-*` 备份是 4 个不是 3 个**。09-25/09-26 两次记录都漏了
+  `.env.bak-20261004-judge-swap`（5 处，10-04 新增）。轮换脚本 `_rotate-sensenova-keys.cjs` 的
+  硬编码 TARGETS 同样漏它 → **已改为自动发现** `prompt-master/.env.bak-*`（dry-run 验证：
+  目标 5→6 个、计划 17→23 处，含 10-04 备份的 L8/L74/L84）。
+- **更正②：`.env.example` L9 的凭证是死证**。09-26 猜"占位符"，实测打 `/v1/models` → **401**。
+  但它**被 git 跟踪且已推送** `github.com/fengxingxuerong/prompt-master`（commit aa1e73a，10-07）——
+  无害（已失效）但不雅，建议顺手换成明显假值。
+- **好消息：prompt-master/.env 从未进 git**。未被跟踪、被 gitignore、`git log --all -- .env` 零命中 →
+  3 条活证**没有 GitHub 泄露面**；本地 ahead 4 个未推送 commit 与 .env 无关。
+- **报告清洗已提前执行**（原为轮换后第 7 步；因 Key 仍活着，渲染报告正在泄露活证，故提前）：
+  `index.html` 4 处 + `data/2026-08-15.json` 2 处 + `data/2026-07-08.json` 2 处 = **8 处抹除**，
+  复扫 0 命中；原文件备份在 `electron-dist/_rotbk/*.pre-scrub`（连同抹除的 174c/4535 两条未知凭证）。
+- **轮换前剩余活证明文面**（全部仅本机、无 git）：`quaiwei/scripts/.sensenova-keys`（设计内）+
+  `prompt-master/.env` + 4 个 `.env.bak-*` + `sqli-scanner/server/.env.ai`。
+- **执行序列相应更新**：新 Key 写进 `scripts/.sensenova-keys` 后，一条命令即覆盖全部 6 个目标
+  （23 处），无需再手动补 10-04 备份。
 
 ## 2026-09-26 轮换前置完成（复扫 + 脚本就绪，只等新 Key）
 
@@ -21,7 +42,7 @@
 - **等新 Key 后的执行序列**（对应下方 runbook 步骤号）：
   1. 用户：控制台新建 3 条 Key → **直接写进** `scripts/.sensenova-keys`（3 行，不贴对话）
   2. 助手：`node scripts/_rotate-sensenova-keys.cjs --new-file scripts/.sensenova-keys --apply`
-     → 自动复扫 17 处旧 Key 0 命中
+     → 自动复扫 23 处旧 Key 0 命中（含自动发现的 4 个 `.env.bak-*`，见 2026-10-14 更正①）
   3. 助手：两项目最小真实调用验证新 Key（quaiwei 跑 `loadPresetKeys().length` = 3 + CLI 单轮；
      prompt-master / sqli-scanner 各一次最小调用）
   4. 用户：控制台删除 3 条旧 Key
@@ -146,7 +167,8 @@
    新 Key 请**直接**写进目标文件，或先存进一个不进任何仓库的临时文件。
 3. 更新三处存放点（三个项目的调用代码都不用改）：
    - `D:\projects\quaiwei\scripts\.sensenova-keys` —— 一行一个新 Key
-   - `D:\projects\prompt-master\.env` —— 以及它的 3 个 `.env.bak-*` 副本和交付归档里的 `pool_probe.sh`，
+   - `D:\projects\prompt-master\.env` —— 以及它的 `.env.bak-*` 副本（2026-10-14 实测 **4 个**，
+     脚本已改自动发现，`--apply` 时一并替换，无需手动列举）和交付归档里的 `pool_probe.sh`，
      这些备份是本次扫出来的额外明文面，顺手一起清掉最省事
    - `D:\projects\sqli-scanner\server\.env.ai`
 4. 确认新 Key 生效、条数正确（**只打印条数，不打印内容**）：
