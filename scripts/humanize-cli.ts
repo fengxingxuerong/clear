@@ -161,6 +161,8 @@ interface Args {
   jobs: number;
   /** v0.9.32：只列出将处理的文件，不建目录不落盘 */
   dryRun: boolean;
+  /** v0.9.38：stdin 管道模式。输入参数给 `-` 或整个省略时置位；正文走 stdout、诊断走 stderr */
+  stdin: boolean;
 }
 
 const USAGE =
@@ -171,6 +173,7 @@ const USAGE =
   " [--strict] [--persona default|netgen|classic] [--report <file.json>]" +
   " [--out-format follow|txt|docx] [--explain]" +
   " [--recursive] [--jobs <n>] [--dry-run]\n" +
+  "  输入参数给 - 或整个省略时走标准输入：cat 稿.txt | ai-humanizer -s 0.8（正文 stdout，诊断 stderr）\n" +
   "  --base-url 填网关绝对地址（如 https://token.sensenova.cn/v1）。UI 设置里的 /sensenova/v1" +
   " 是同源代理专用写法（代理会剥掉 /sensenova 前缀再转发），CLI 直连勿带这段前缀。\n" +
   "  --recursive 目录扫描进子目录（默认不进）；--jobs 仅 --api 模式生效（并发路数）；" +
@@ -203,38 +206,121 @@ function parseArgs(argv: string[]): Args {
     recursive: false,
     jobs: 1,
     dryRun: false,
+    stdin: false,
   };
   const a = argv.slice(2);
-  if (!a[0] || a[0].startsWith("--")) {
+  // v0.9.38：stdin 管道模式。输入参数给 `-`（Unix 惯例）或**没有任何位置参数**时置位
+  // stdin，正文从 fd 0 读、结果写 stdout、诊断走 stderr（`ai-humanizer - < 稿.txt > 去味.txt`）。
+  // 位置参数要「剥掉选项」才能定位：选项可以占首位（`--seed 42` 无路径也是合法管道用法），
+  // 所以第一遍扫出输入 token 的下标，第二遍再解析选项（跳过该下标）。
+  // 省略参数时**不能在这里判 TTY**——parseArgs 是纯函数（scripts-logic.test.ts 的 vm 沙箱里
+  // 没有 process.stdin），交互终端下的「用法+退出」交给 main 补判。
+  const VALUED_OPTS = new Set([
+    "--out",
+    "--intensity",
+    "--style",
+    "--suffix",
+    "--seed",
+    "--base-url",
+    "--model",
+    "--api-key",
+    "--judge-model",
+    "--alt-model",
+    "--contest",
+    "--max-calls",
+    "--max-wait",
+    "--persona",
+    "--report",
+    "--out-format",
+    "--jobs",
+  ]);
+  let inputIdx = -1;
+  for (let i = 0; i < a.length; i++) {
+    const t = a[i];
+    if (t === "-") {
+      inputIdx = i; // 显式 stdin
+      break;
+    }
+    if (t.startsWith("-") && t !== "") {
+      if (t.startsWith("--") && VALUED_OPTS.has(t)) i++; // 带值选项：连它的值一起跳过
+      continue;
+    }
+    inputIdx = i; // 第一个位置参数（空串也落这里，下面按原行为打法）
+    break;
+  }
+  if (inputIdx === -1 || a[inputIdx] === "-") {
+    args.input = "-";
+    args.stdin = true;
+  } else if (a[inputIdx] === "") {
     console.error(USAGE);
     process.exit(1);
+  } else {
+    args.input = a[inputIdx];
   }
-  args.input = a[0];
   const num = (v: string | undefined, d: number) => {
     const n = parseFloat(v ?? "");
     return Number.isFinite(n) ? n : d;
   };
-  for (let i = 1; i < a.length; i++) {
+  for (let i = 0; i < a.length; i++) {
+    if (i === inputIdx) continue; // 输入路径已在上面定走，不当选项解析
     switch (a[i]) {
-      case "--out": args.out = a[++i] ?? ""; break;
-      case "--intensity": args.intensity = Math.max(0, Math.min(1, num(a[++i], 0.9))); break;
-      case "--zhuque": args.zhuque = true; break;
-      case "--style": args.style = (a[++i] as Args["style"]) || "casual"; break;
-      case "--suffix": args.suffix = a[++i] ?? ".humanized"; break;
-      case "--seed": args.seed = Math.floor(num(a[++i], 20260905)); break;
-      case "--api": args.api = true; break;
-      case "--base-url": args.baseUrl = a[++i] ?? ""; break;
-      case "--model": args.model = a[++i] ?? ""; break;
-      case "--api-key": args.apiKey = a[++i] ?? ""; break;
-      case "--judge-model": args.judgeModel = a[++i] ?? ""; break;
-      case "--alt-model": args.altModel = a[++i] ?? ""; break;
-      case "--no-deep": args.deep = false; break;
-      case "--contest": args.contest = Math.max(1, Math.floor(num(a[++i], 1))); break;
-      case "--max-calls": args.maxCalls = Math.max(0, Math.floor(num(a[++i], 0))); break;
-      case "--max-wait": args.maxWait = Math.max(0, Math.floor(num(a[++i], 0))); break;
-      case "--strict": args.strict = true; break;
-      case "--persona": args.persona = a[++i] || "default"; break;
-      case "--report": args.report = a[++i] ?? ""; break;
+      case "--out":
+        args.out = a[++i] ?? "";
+        break;
+      case "--intensity":
+        args.intensity = Math.max(0, Math.min(1, num(a[++i], 0.9)));
+        break;
+      case "--zhuque":
+        args.zhuque = true;
+        break;
+      case "--style":
+        args.style = (a[++i] as Args["style"]) || "casual";
+        break;
+      case "--suffix":
+        args.suffix = a[++i] ?? ".humanized";
+        break;
+      case "--seed":
+        args.seed = Math.floor(num(a[++i], 20260905));
+        break;
+      case "--api":
+        args.api = true;
+        break;
+      case "--base-url":
+        args.baseUrl = a[++i] ?? "";
+        break;
+      case "--model":
+        args.model = a[++i] ?? "";
+        break;
+      case "--api-key":
+        args.apiKey = a[++i] ?? "";
+        break;
+      case "--judge-model":
+        args.judgeModel = a[++i] ?? "";
+        break;
+      case "--alt-model":
+        args.altModel = a[++i] ?? "";
+        break;
+      case "--no-deep":
+        args.deep = false;
+        break;
+      case "--contest":
+        args.contest = Math.max(1, Math.floor(num(a[++i], 1)));
+        break;
+      case "--max-calls":
+        args.maxCalls = Math.max(0, Math.floor(num(a[++i], 0)));
+        break;
+      case "--max-wait":
+        args.maxWait = Math.max(0, Math.floor(num(a[++i], 0)));
+        break;
+      case "--strict":
+        args.strict = true;
+        break;
+      case "--persona":
+        args.persona = a[++i] || "default";
+        break;
+      case "--report":
+        args.report = a[++i] ?? "";
+        break;
       case "--out-format": {
         const v = (a[++i] ?? "").toLowerCase();
         if (v === "follow" || v === "txt" || v === "docx") args.outFormat = v;
@@ -244,17 +330,26 @@ function parseArgs(argv: string[]): Args {
         }
         break;
       }
-      case "--explain": args.explain = true; break;
-      case "--recursive": args.recursive = true; break;
-      case "--jobs": args.jobs = Math.max(1, Math.floor(num(a[++i], 1))); break;
-      case "--dry-run": args.dryRun = true; break;
+      case "--explain":
+        args.explain = true;
+        break;
+      case "--recursive":
+        args.recursive = true;
+        break;
+      case "--jobs":
+        args.jobs = Math.max(1, Math.floor(num(a[++i], 1)));
+        break;
+      case "--dry-run":
+        args.dryRun = true;
+        break;
       default:
         console.error(`未知参数: ${a[i]}\n${USAGE}`);
         process.exit(1);
     }
   }
   if (!args.out) {
-    // 单文件时默认输出到它所在目录；目录时输出到它自身（沿用既有行为，只把判定从 .txt 放宽）
+    // 单文件时默认输出到它所在目录；目录时输出到它自身（沿用既有行为，只把判定从 .txt 放宽）。
+    // stdin 模式的 out 无意义（单篇不落盘），main 会提前返回，这里给个占位即可。
     args.out = isSupportedInput(args.input) ? path.dirname(args.input) : args.input;
   }
   return args;
@@ -390,7 +485,11 @@ function sum0(reps: FileReport[], g: (r: FileReport) => number): number {
 }
 
 /** v0.9.32：简单 worker 池（--api 并发；本地引擎单线程不走这里） */
-async function runPool<T>(items: T[], jobs: number, fn: (item: T, i: number) => Promise<void>): Promise<void> {
+async function runPool<T>(
+  items: T[],
+  jobs: number,
+  fn: (item: T, i: number) => Promise<void>,
+): Promise<void> {
   let next = 0;
   const workers = Array.from({ length: Math.max(1, Math.min(jobs, items.length)) }, async () => {
     while (next < items.length) {
@@ -401,8 +500,76 @@ async function runPool<T>(items: T[], jobs: number, fn: (item: T, i: number) => 
   await Promise.all(workers);
 }
 
+/**
+ * v0.9.38：stdin 管道模式主流程。
+ *
+ * 边界（诚实声明）：
+ *  · **只走本地引擎**。LLM 通道（--api）的 cfg 构建与校验在 main 的批量路径里，
+ *    不为一把管道把那段重构进这里——要深度模式请把内容落成文件。
+ *  · 编码：stdin 是 Node 已解码的 UTF-8 流，不走 readInputText 的
+ *    BOM/UTF-16/GBK 探测（那是文件路径场景的能力）。
+ *  · 输出分工：**正文一律 stdout、诊断一律 stderr**，`> 重定向` 不会把进度行混进产物。
+ *  · --report/--suffix/--out-format 在 stdin 模式无意义（单篇不落盘），忽略。
+ */
+async function runStdinMode(args: Args): Promise<void> {
+  if (args.api) {
+    console.error("✗ stdin 模式暂不支持 LLM 通道（--api）：请把内容落成文件再走文件输入");
+    process.exit(1);
+  }
+  let raw: string;
+  try {
+    raw = fs.readFileSync(0, "utf8");
+  } catch (e) {
+    console.error(
+      `✗ 读标准输入失败：${(e as Error).message}\n  用法示例：cat 稿.txt | ai-humanizer -`,
+    );
+    process.exit(1);
+  }
+  if (!raw.trim()) {
+    console.error("✗ 标准输入为空（用法示例：cat 稿.txt | ai-humanizer -）");
+    process.exit(1);
+  }
+  const t0 = Date.now();
+  const before = detectAI(raw).probability;
+  const out = humanize(raw, {
+    intensity: args.intensity,
+    seed: args.seed,
+    zhuqueMode: args.zhuque,
+    style: args.style,
+  });
+  // 正文：stdout（保留引擎产出的换行结构，末尾补一个换方便终端查看）
+  process.stdout.write(out.endsWith("\n") ? out : `${out}\n`);
+  // 诊断：stderr
+  const after = detectAI(out).probability;
+  console.error(
+    `✅ stdin：${before}→${after}（${Date.now() - t0}ms，${raw.length}→${out.length} 字）`,
+  );
+  const advice = adviceFor(raw, aiScore(raw).score);
+  if (advice.code !== "ok") console.error(`ⓘ ${advice.message}`);
+  if (args.explain) {
+    const items = explainChanges(raw, out);
+    console.error(
+      formatExplain(items)
+        .split("\n")
+        .map((l) => `   ${l}`)
+        .join("\n"),
+    );
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv);
+
+  // v0.9.38：stdin 管道模式（输入参数 - 或省略）。省略参数时在这里补判 TTY：
+  // 交互终端下不给管道，维持原行为（用法 + 退出），别把用户晾在读取阻塞里。
+  if (args.stdin) {
+    if (args.input === "-" || !process.stdin.isTTY) {
+      await runStdinMode(args);
+      return;
+    }
+    console.error(USAGE);
+    process.exit(1);
+  }
 
   // v0.9.32：读不到输入路径时给一句话错误，而不是甩 ENOENT 堆栈
   let collected: { files: string[]; skipped: number };
@@ -428,7 +595,8 @@ async function main() {
         `${args.api ? "LLM 通道" : "本地引擎"}${args.recursive ? " | 递归" : ""}（不落盘）`,
     );
     for (const f of files) console.log(`  · ${f}`);
-    if (collected.skipped) console.log(`（另跳过 ${collected.skipped} 个已带输出后缀「${args.suffix}」的既有产物）`);
+    if (collected.skipped)
+      console.log(`（另跳过 ${collected.skipped} 个已带输出后缀「${args.suffix}」的既有产物）`);
     return;
   }
   fs.mkdirSync(args.out, { recursive: true });
@@ -470,14 +638,19 @@ async function main() {
     console.log(
       `批量去味：${files.length} 个文件 | 强度 ${args.intensity} | 朱雀增强 ${args.zhuque ? "开" : "关"} | 文风 ${args.style}`,
     );
-    if (args.jobs > 1) console.log("   ⓘ 本地引擎是单线程 CPU 模式，--jobs 仅对 --api 生效，已忽略");
+    if (args.jobs > 1)
+      console.log("   ⓘ 本地引擎是单线程 CPU 模式，--jobs 仅对 --api 生效，已忽略");
   }
-  if (collected.skipped) console.log(`   ⓘ 已跳过 ${collected.skipped} 个带输出后缀「${args.suffix}」的既有产物（重跑幂等；单文件指名输入不受限）`);
+  if (collected.skipped)
+    console.log(
+      `   ⓘ 已跳过 ${collected.skipped} 个带输出后缀「${args.suffix}」的既有产物（重跑幂等；单文件指名输入不受限）`,
+    );
   console.log("─".repeat(64));
 
   const multi = files.length > 1;
   const reports: FileReport[] = new Array(files.length);
-  let ok = 0, fail = 0;
+  let ok = 0,
+    fail = 0;
   const processOne = async (f: string, idx: number) => {
     const name = path.basename(f);
     const step = multi ? `[${idx + 1}/${files.length}] ` : "";
@@ -504,7 +677,9 @@ async function main() {
           args.intensity,
           cfg,
           (round, score, stage) => {
-            console.log(`   ${step}${name} ${stage ?? ""}第 ${round} 轮${score === null ? "" : ` 评分 ${score}`}`);
+            console.log(
+              `   ${step}${name} ${stage ?? ""}第 ${round} 轮${score === null ? "" : ` 评分 ${score}`}`,
+            );
           },
           args.zhuque,
           undefined, // genre 交给引擎自动判定，与 UI「自动」一致
@@ -560,8 +735,14 @@ async function main() {
       const msg = (e as Error).message;
       console.error(`${step}❌ ${name}：${msg}`);
       reports[idx] = {
-        file: name, ms: 0, charsIn: 0, charsOut: 0,
-        detectBefore: 0, detectAfter: 0, ok: false, error: msg,
+        file: name,
+        ms: 0,
+        charsIn: 0,
+        charsOut: 0,
+        detectBefore: 0,
+        detectAfter: 0,
+        ok: false,
+        error: msg,
       };
       fail++;
     }

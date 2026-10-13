@@ -211,6 +211,8 @@ interface CliArgs {
   recursive: boolean;
   jobs: number;
   dryRun: boolean;
+  /** v0.9.38：stdin 管道模式 */
+  stdin: boolean;
 }
 
 function loadCliFns(): {
@@ -283,6 +285,28 @@ describe("humanize-cli parseArgs", () => {
   it(".txt 输入时 out 默认为其所在目录", () => {
     const a = parseArgs(base(["./docs/a.txt"]));
     expect(a.out).toBe("./docs");
+  });
+
+  it("v0.9.38：输入参数 - 进 stdin 模式（input=-, stdin=true）", () => {
+    const a = parseArgs(base(["-", "--intensity", "0.8"]));
+    expect(a.input).toBe("-");
+    expect(a.stdin).toBe(true);
+    expect(a.intensity).toBe(0.8);
+  });
+
+  it("v0.9.38：未知短选项仍走用法错误（humanize-cli 没有 -s，强度是 --intensity）", () => {
+    expect(() => parseArgs(base(["-", "-s", "0.8"]))).toThrow("__CLI_EXIT__:1");
+  });
+
+  it("v0.9.38：省略输入参数也进 stdin 模式（TTY 补判在 main，纯函数层一律放行）", () => {
+    const a = parseArgs(base(["--intensity", "0.5"]));
+    expect(a.input).toBe("-");
+    expect(a.stdin).toBe(true);
+    expect(a.intensity).toBe(0.5);
+  });
+
+  it("v0.9.38：空串输入参数维持原行为（用法 + 退出 1）", () => {
+    expect(() => parseArgs(base([""]))).toThrow("__CLI_EXIT__:1");
   });
 
   it("全量参数解析：out/intensity/zhuque/style/suffix", () => {

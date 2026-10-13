@@ -81,6 +81,15 @@ npm run dev          # 打开 http://localhost:5173
 
 ## 批量处理（CLI，v0.8.6；v0.9.15 起可选 LLM 通道）
 
+安装为命令后（bin 名 `ai-humanizer`），下面所有 `npx tsx scripts/humanize-cli.ts` 都可以直接写 `ai-humanizer`：
+
+```bash
+npm install
+npm run build:cli        # esbuild 打出 dist-cli/humanize-cli.mjs（bin 字段指向它）
+npm link                 # 可选：全局注册 ai-humanizer 命令
+ai-humanizer --help
+```
+
 目录下所有 `.txt` 批量去味，输出到指定目录：
 
 ```bash
@@ -100,6 +109,17 @@ QUAIWEI_API_KEY=sk-xxx npx tsx scripts/humanize-cli.ts ./in --api \
 
 Key 优先级：`--api-key` > `QUAIWEI_API_KEY` > `OPENAI_API_KEY` > `SENSENOVA_KEYS` / `scripts/.sensenova-keys`。
 注意 baseUrl 必须填完整地址——以 `/` 开头的同源路径只在 dev（vite 代理）和 Electron 桌面版下有效。
+
+### 单篇管道（v0.9.38）
+
+一把梭的单篇处理走标准输入：输入参数给 `-` 或整个省略，**正文走 stdout、诊断走 stderr**，可直接重定向落盘：
+
+```bash
+cat 稿子.txt | ai-humanizer --intensity 0.8 --seed 42 > 去味.txt
+ai-humanizer - --explain < 稿子.txt          # 附「为什么这么改」清单（进 stderr）
+```
+
+边界：stdin 模式只走本地引擎（LLM 通道请把内容落成文件）；stdin 是 Node 已解码的 UTF-8 流，不走文件路径场景的 BOM/UTF-16/GBK 探测。
 
 ## 深度去味模式（v0.3.2，LLM 通道）
 

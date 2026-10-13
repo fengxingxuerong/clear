@@ -14,7 +14,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const outfile = join(root, "dist-cli", "cli.mjs");
+const outfile = join(root, "dist-cli", "humanize-cli.mjs");
 
 // 干净重建：esbuild 的 outdir 清理只认 outdir 模式，单文件 outfile 不会自动清理，
 // 手动删避免 stale 产物被当成新产物分发（本机 repack 已两次栽在"静默留 stale"上）。
@@ -22,7 +22,7 @@ rmSync(join(root, "dist-cli"), { recursive: true, force: true });
 mkdirSync(dirname(outfile), { recursive: true });
 
 await build({
-  entryPoints: [join(root, "scripts", "cli.ts")],
+  entryPoints: [join(root, "scripts", "humanize-cli.ts")],
   bundle: true,
   platform: "node",
   format: "esm",
@@ -33,4 +33,4 @@ await build({
   logLevel: "info",
 });
 
-console.log(`✅ CLI 产物：${outfile}`);
+console.log(`✅ CLI 产物（humanize-cli）：${outfile}`);
