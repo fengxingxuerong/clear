@@ -168,7 +168,7 @@ interface Args {
 }
 
 const USAGE =
-  "用法: npx tsx scripts/humanize-cli.ts <input-dir-or-file> [--out <dir>] [--intensity 0.9]" +
+  "用法: ai-humanizer <input-dir-or-file> [--out <dir>] [--intensity 0.9]" +
   " [--zhuque] [--style casual|plain|academic] [--suffix .humanized] [--seed 20260905]" +
   " [--api [--base-url <url>] [--model <name>] [--api-key <key>] [--judge-model <name>]]" +
   " [--alt-model <name>] [--no-deep] [--contest <n>] [--max-calls <n>] [--max-wait <sec>]" +
