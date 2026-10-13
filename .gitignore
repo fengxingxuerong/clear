@@ -13,6 +13,8 @@ electron-app/node_modules/.pnpm-store/
 
 # 构建产物
 dist/
+# CLI 单文件产物（scripts/build-cli.mjs 生成，bin 字段指向它）
+dist-cli/
 electron-dist/
 *.tsbuildinfo
 electron-app/assets/
