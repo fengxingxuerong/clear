@@ -32,16 +32,26 @@
 | prompt-master 配置 | `.env`、4 个根目录 `.env.bak-*`、`backups/.env.bak-1802`、`backups/modelhub-2026092{1,4}/*.env`、`backups/pre-modelhub-*/.env`、`releases/deploy-drill/.env` | 46 |
 | prompt-master 归档探针 | `logs/archive/2026-09-17-交付归档/pool_probe.sh` | 3 |
 | sqli-scanner | `server/.env.ai` | 3 |
-| Loomy Workspace 探针 | `api_matrix.py`、`api_probe{,2,_all,_detail,_final,_nonstream,_raw}.py`、`probe_cap{,2,_full,_sense}.py` 共 11 个 | 43 |
+| Loomy Workspace 探针 | `api_matrix.py`、`api_probe{,2,_all,_detail,_final,_nonstream,_raw}.py`、`probe_cap{,2,_full,_sense}.py` 共 11 个 | 42 |
 | Desktop 旧副本 | `QuAiWei-v0.5.1/scripts/gateway-probe.mjs`、`src/api/llm.ts`、`electron-app/assets/index-BDomB28k.js`（构建产物） | 9 |
 | Loomy 聊天附件 | `.loomy-attachments/ses_*/…-Text-Document.txt` ×2（会话导出） | 6 |
 
 **轮换脚本已按终扫重做**（`_rotate-sensenova-keys.cjs`）：硬编码 TARGETS 连续漏过三种形态
 （10-04 的 bak、`backups/`+`releases/` 子目录、深度 4 的 `pool_probe.sh`），故改为
-**SCAN_SPECS 递归发现**（根目录 + 文件名判据，跳重目录）。dry-run 实测覆盖 **25 文件**
-（上表前 5 组 + Loomy 全部 12 个探针中的 11 个有证版；`.env.example` 与无证探针以 0 处列出）。
+**SCAN_SPECS 递归发现**（根目录 + 文件名判据，跳重目录）。dry-run 实测覆盖 **28 个目标**
+（24 个含证、94 处；`.env.example` 与 3 个无证探针以 0 处列出）。
 ⚠️ 开发中抓到一个真 bug：判据写成 `(api_|probe_)_.*` 多一个下划线，Loomy 探针整个漏掉——
 dry-run 的"目标文件数"就是它的探针，这类发现逻辑必须跑一遍真数据。
+
+**沙箱全链路演练已通过（2026-10-14，`ROTATE_SANDBOX_ROOT` 模式）**：把 28 个真实目标
+按同目录结构拷进沙箱副本，用假新 Key 跑**真 `--apply`**（含备份与复扫），独立验证 6 项：
+旧证清零 / 新证等量（24 文件 94 处）/ 行数不变 / EOL 风格不变 / 仅 key 行变动 /
+备份逐字节一致。**又抓出两个 bug**：
+1. 备份名用 `basename`——4 个不同目录的 `.env` 互相覆盖，真跑时备份等于没有
+   （已改全路径 sanitize）；
+2. 沙箱路径改写把盘号整个剥掉，与注释声称的"盘号保留"不符，备份写去别处（已修）；
+   备份名改为从**原始路径**派生，保证沙箱与真实跑的备份名一致。
+演练沙箱（含真证副本）用后即删。
 
 **不参与脚本替换的 4 个落点**（陈旧副品 / 会话导出，替换无意义，建议轮换后处置）：
 - `Desktop/QuAiWei-v0.5.1/` 整个旧副本——`src/api/llm.ts` 是 key 清理前的旧代码、
@@ -78,16 +88,22 @@ dry-run 的"目标文件数"就是它的探针，这类发现逻辑必须跑一�
 - **dry-run 演练通过**：替换计划 17 处（`.env` 5 + 三个 bak 共 10 + `.env.ai` 3，行号精确）、
   报告清洗 8 处（index.html 4 + 两个 json 各 2），未写盘。
 - **等新 Key 后的执行序列**（对应下方 runbook 步骤号）：
+  0. 助手：`ROTATE_SANDBOX_ROOT=<temp> … --apply` 沙箱全链路演练（2026-10-14 已建好验证流程，
+     6 项独立断言；换新 discover 逻辑后必跑）
   1. 用户：控制台新建 3 条 Key → **直接写进** `scripts/.sensenova-keys`（3 行，不贴对话）
   2. 助手：`node scripts/_rotate-sensenova-keys.cjs --new-file scripts/.sensenova-keys --apply`
-     → SCAN_SPECS 递归覆盖 **25 个目标文件**（含 backups/、releases/、pool_probe.sh、
-     Loomy 探针、Desktop 旧副本的 gateway-probe.mjs，见 2026-10-14 终扫表），
-     写前自动备份到 `electron-dist/_rotbk/`，替换后自动复扫旧哈希 0 命中
+     → SCAN_SPECS 递归覆盖 **28 个目标**（24 个含证、94 处；含 backups/、releases/、
+     pool_probe.sh、Loomy 探针、Desktop 旧副本的 gateway-probe.mjs，见 2026-10-14 终扫表），
+     写前自动备份到 `electron-dist/_rotbk/`（全路径命名，24 个不互相覆盖），
+     替换后自动复扫旧哈希 0 命中
   3. 助手：两项目最小真实调用验证新 Key（quaiwei 跑 `loadPresetKeys().length` = 3 + CLI 单轮；
      prompt-master / sqli-scanner 各一次最小调用）
   4. 用户：控制台删除 3 条旧 Key
-  5. 助手：`node scripts/_rotate-sensenova-keys.cjs --scrub-reports --apply`（抹 e38f + 174c + 4535）
+  5. 助手：`node scripts/_rotate-sensenova-keys.cjs --scrub-reports --apply`（抹 e38f + 174c + 4535；
+     2026-10-14 已提前执行过一轮，此时应为 0 处——正好当回归探针）
   6. 助手：重跑 `_sweep-now.cjs` 全盘 0 命中收官 → `_rotbk` 备份确认无误后删除 → 手册落"已完成"
+  7. 用户/助手：删除 `Desktop/QuAiWei-v0.5.1/` 整个旧副本与 Loomy 聊天附件（终扫表里
+     "不参与脚本替换"的 4 个落点）
 
 ## 2026-09-25 处置记录：历史明文已清洗 + 仓库已推送公开 GitHub
 

@@ -4,10 +4,14 @@
 //   演练（不写盘）：node scripts/_rotate-sensenova-keys.cjs --new-file <新Key文件>
 //   实际执行：      node scripts/_rotate-sensenova-keys.cjs --new-file <新Key文件> --apply
 //   报告清洗（runbook 第 5 步，删旧 Key 之后）：node scripts/_rotate-sensenova-keys.cjs --scrub-reports [--apply]
+//   沙箱演练（真 --apply 全链路，但只写沙箱副本）：
+//     ROTATE_SANDBOX_ROOT=<dir> node scripts/_rotate-sensenova-keys.cjs --new-file <新Key文件> --apply
+//     （根路径重写为 <dir>/D/... 与 <dir>/C/...；需先把真实目标文件按同结构拷进去）
 //
 // 安全纪律：
 //   - 全程不打印任何 Key 明文，只输出 sha256 前 12 位（哈希非秘密，基准在 docs/key-rotation-status.md）
-//   - --apply 写前把目标文件备份到 electron-dist/_rotbk/（gitignore 覆盖区域，不新增明文面）
+//   - --apply 写前把目标文件备份到 electron-dist/_rotbk/（gitignore 覆盖区域，不新增明文面）；
+//     备份名用全路径 sanitize——曾用 basename，4 个不同目录的 .env 互相覆盖，备份等于没有
 //   - scripts/.sensenova-keys 由用户手动放新 Key，本脚本不碰它
 const fs = require("fs");
 const path = require("path");
@@ -15,7 +19,23 @@ const crypto = require("crypto");
 
 const OLD_HASHES = ["e38fb0a1e798", "b82265ead297", "e1e896e7b77d"]; // 固定映射顺序：旧[i] → 新[i]
 const SK = /sk-[A-Za-z0-9]{16,}/g;
-const BK = "D:/projects/quaiwei/electron-dist/_rotbk";
+
+// 沙箱根：设置后所有根路径/备份目录重写到其下（盘号保留为目录名，D:→<root>/D/…），供全链路演练
+const SANDBOX = process.env.ROTATE_SANDBOX_ROOT || "";
+function sandbox(p) {
+  if (!SANDBOX) return p;
+  return path.join(SANDBOX, p.replace(/^([A-Za-z]):/, "$1"));
+}
+// 沙箱工作路径 → 原始路径（备份名/日志展示用，保证沙箱与真实跑的备份名一致）
+function origOf(work) {
+  if (!SANDBOX) return work;
+  const prefix = path.join(SANDBOX, path.sep);
+  if (work.startsWith(prefix)) {
+    return work.slice(prefix.length).replace(/^([A-Za-z])[\\/]/, "$1:/");
+  }
+  return work;
+}
+const BK = sandbox("D:/projects/quaiwei/electron-dist/_rotbk");
 
 // 目标发现：一组「根目录 + 文件名判据」，递归扫描（跳 .git/node_modules 等重目录）。
 // 2026-10-14 全盘终扫（29 文件 / 109 处活证）后定稿。硬编码列表连续漏过三种形态：
@@ -65,7 +85,8 @@ function discoverTargets() {
     }
   };
   for (const spec of SCAN_SPECS) {
-    if (fs.existsSync(spec.root)) walk(spec.root, spec.match);
+    const root = sandbox(spec.root);
+    if (fs.existsSync(root)) walk(root, spec.match);
   }
   return [...out];
 }
@@ -74,7 +95,7 @@ const REPORTS = [
   "D:/deep/agent-audit-reports/index.html",
   "D:/deep/agent-audit-reports/data/2026-08-15.json",
   "D:/deep/agent-audit-reports/data/2026-07-08.json",
-];
+].map(sandbox);
 // 报告里已知的凭证哈希（e38f=旧 SenseNova Key；174c/4535=agent 会话正文里的其它凭证，收尾一并抹除）
 const REPORT_HASHES = ["e38fb0a1e798", "174c9e2f2a80", "4535b7066bc3"];
 
@@ -140,10 +161,12 @@ function rotate(newKeys, oldKeys) {
       }
       return nl;
     });
-    console.log(`${APPLY ? "✎ 替换" : "☞ 计划"} ${f}：${count} 处${changedLines.length ? " @L" + changedLines.join(",L") : ""}`);
+    console.log(`${APPLY ? (count ? "✎ 替换" : "· 跳过") : "☞ 计划"} ${f}：${count} 处${changedLines.length ? " @L" + changedLines.join(",L") : ""}`);
     if (APPLY && count) {
       fs.mkdirSync(BK, { recursive: true });
-      fs.copyFileSync(f, path.join(BK, path.basename(f) + ".pre-rotation"));
+      // 备份名 = 原始全路径 sanitize：basename 会让不同目录的同名文件（4 个 .env）互相覆盖
+      const bkName = origOf(f).replace(/[\\/:*?"<>|]/g, "_") + ".pre-rotation";
+      fs.copyFileSync(f, path.join(BK, bkName));
       // 保持原文件的换行风格（CRLF 文件统一回 LF 会造成全文件差异）
       const eol = text.includes("\r\n") ? "\r\n" : "\n";
       fs.writeFileSync(f, out.join(eol), "utf-8");
