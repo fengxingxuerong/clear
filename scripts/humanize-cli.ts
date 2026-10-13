@@ -163,6 +163,8 @@ interface Args {
   dryRun: boolean;
   /** v0.9.38：stdin 管道模式。输入参数给 `-` 或整个省略时置位；正文走 stdout、诊断走 stderr */
   stdin: boolean;
+  /** v0.9.40：--help / -h。打印用法后正常退出（0），不再落进「未知参数」的错误分支 */
+  help: boolean;
 }
 
 const USAGE =
@@ -177,7 +179,8 @@ const USAGE =
   "  --base-url 填网关绝对地址（如 https://token.sensenova.cn/v1）。UI 设置里的 /sensenova/v1" +
   " 是同源代理专用写法（代理会剥掉 /sensenova 前缀再转发），CLI 直连勿带这段前缀。\n" +
   "  --recursive 目录扫描进子目录（默认不进）；--jobs 仅 --api 模式生效（并发路数）；" +
-  "  --dry-run 只列出将处理的文件不落盘。目录批量默认跳过已带输出后缀的产物（重跑幂等）。";
+  "  --dry-run 只列出将处理的文件不落盘。目录批量默认跳过已带输出后缀的产物（重跑幂等）。" +
+  "\n  --help / -h 打印本用法（退出码 0）。";
 
 function parseArgs(argv: string[]): Args {
   const args: Args = {
@@ -207,8 +210,17 @@ function parseArgs(argv: string[]): Args {
     jobs: 1,
     dryRun: false,
     stdin: false,
+    help: false,
   };
   const a = argv.slice(2);
+  // v0.9.40：--help / -h 在最前面拦截。此前它落进 default 分支 →「未知参数」+ 退出码 1，
+  // 而 --help 恰是命令行工具的第一个动作（也是 npm 分发后别人的第一印象）。
+  // 这里只置位不做输出：parseArgs 是纯函数（scripts-logic.test.ts 的 vm 沙箱里没有
+  // process 的 argv/stdin 可依赖），打印统一交给 main。
+  if (a.includes("--help") || a.includes("-h")) {
+    args.help = true;
+    return args;
+  }
   // v0.9.38：stdin 管道模式。输入参数给 `-`（Unix 惯例）或**没有任何位置参数**时置位
   // stdin，正文从 fd 0 读、结果写 stdout、诊断走 stderr（`ai-humanizer - < 稿.txt > 去味.txt`）。
   // 位置参数要「剥掉选项」才能定位：选项可以占首位（`--seed 42` 无路径也是合法管道用法），
@@ -559,6 +571,12 @@ async function runStdinMode(args: Args): Promise<void> {
 
 async function main() {
   const args = parseArgs(process.argv);
+
+  // v0.9.40：--help / -h → 用法走 stdout + 退出 0（诊断才走 stderr，帮助不是错误）
+  if (args.help) {
+    process.stdout.write(`${USAGE}\n`);
+    return;
+  }
 
   // v0.9.38：stdin 管道模式（输入参数 - 或省略）。省略参数时在这里补判 TTY：
   // 交互终端下不给管道，维持原行为（用法 + 退出），别把用户晾在读取阻塞里。

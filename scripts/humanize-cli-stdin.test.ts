@@ -123,4 +123,26 @@ describe("humanize-cli stdin 模式", () => {
     expect(fs.readFileSync(tmp, "utf8")).toBe(r.stdout);
     fs.unlinkSync(tmp);
   }, 60_000);
+
+  // v0.9.40：--help 此前落进 default 分支 →「未知参数」+ 退出码 1。命令行工具的第一个
+  // 动作不该是报错。三条断言各自盯一个面：退出码、输出通道（帮助不是诊断）、
+  // 以及「help 提前返回、根本不读 stdin」（空管道仍 0 —— 若退回读 stdin 必红）。
+  it("--help → 用法进 stdout + 退出码 0（不是「未知参数」错误）", async () => {
+    const r = await runCli(["--help"], AI_TEXT);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("用法:");
+    expect(r.stderr).not.toContain("未知参数");
+  }, 60_000);
+
+  it("-h 短选项等价：同样打印用法并退出 0", async () => {
+    const r = await runCli(["-h"], AI_TEXT);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("用法:");
+  }, 60_000);
+
+  it("--help 提前返回：空 stdin 也不报错（证明没去读管道）", async () => {
+    const r = await runCli(["--help"], "");
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("--help");
+  }, 60_000);
 });
