@@ -2,6 +2,45 @@
 
 > 完整版本历史，细节以对应 Git 提交为准。
 
+## v0.9.37 更新（CLI 入口收口分发形态 + gate stale 自清理）
+
+### ① CLI 入口：bin `ai-humanizer`（commit `98797ae`）
+
+项目此前只有 Electron 桌面壳 + scripts 运维脚本，「去 AI 味」能力在引擎里但命令行缺一个壳。
+本版补上：`scripts/cli.ts` → esbuild 单文件产物 `dist-cli/cli.mjs`，package.json 挂 bin 字段。
+
+| 能力 | 说明 |
+|---|---|
+| 输入三路 | `-t 文本` / 文件参数 / stdin 管道（`cat 稿子.txt \| ai-humanizer`） |
+| 参数 | `-s 强度`（0~1）`--seed`（可复现）`-g 体裁`（auto/main/narrative/dialogue/humanHand）`--style`（casual/plain/academic）`--zhuque` `--bestof`（多样本选优）`--score`（前后 aiScore 对比）`-o 输出文件` |
+| 退出码 | 0 成功 / 1 输入或运行错 / 2 用法错 |
+
+工程要点：IO 注入式（`CliIo`），测试不起子进程；argv 解析为纯函数。
+23 条测试全绿，变异检验两发全中（丢 seed → 复现性测试红；-o 错走 stdout → 路由测试红）。
+bundle 产物五路手动实测全通，真实文本 aiScore 11 → 0。
+
+### ② 覆盖率门禁启动时自清理 stale 副本（commit `ac19831`）
+
+`cleanReportsDir` 的第三通道（删除被守卫拦死时 `rename` 挪走）每次 `test:cov` 可能留一个
+`coverage.stale-<ts>` 目录，越积越多。新增 `scripts/coverage-stale-sweep.ts`：gate 启动时
+先扫历史遗留再清本次报告。
+
+- **纪律**：清不掉只提示、不抛错——stale 是历史垃圾，不是本次运行输入，
+  绝不能因「垃圾没扫干净」把「覆盖率不达标」误报出来（本仓库被这类误判坑过）。
+- **安全边界**：只认 `coverage.stale-<纯数字>` 目录；同名文件、花名目录一律不碰。
+- 删除通道与 cleanReportsDir 同构（rd → rmSync）；真实通道端到端验证 `found=2 removed=2`。
+- 7 条测试，变异检验两发全中（花名也扫 → 精确匹配测试红；清不掉就抛 → 两条纪律测试红）。
+
+### ③ 依赖整理：esbuild 显式化并钉版本
+
+esbuild 提为显式 devDependency 并钉 **0.25.12**——与 vite nested 的版本对齐。
+（顶层装 0.28.2 会与 vite 6 自带的 0.25.12 争抢 `@esbuild/win32-x64` 平台二进制，
+vitest 直接起不来报 `Host version "0.25.12" does not match binary version "0.28.2"`。）
+
+### 门禁基线
+
+1782 tests / 85 文件，tsc / eslint / prettier 三查过；全量无回归。
+
 ## v0.9.36 更新（语料面扩池抓到 4 类新病句：四条守卫 + 四条探针）
 
 ### ① 背景：只扩了 3 段语料，抓到 4 类病句
