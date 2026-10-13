@@ -21,6 +21,44 @@
 - **执行序列相应更新**：新 Key 写进 `scripts/.sensenova-keys` 后，一条命令即覆盖全部 6 个目标
   （23 处），无需再手动补 10-04 备份。
 
+### 全盘终扫：29 文件 / 109 处（2026-10-14 午后，不限深度重扫）
+
+上午的扫描有深度上限（≤3）且只认 `.env*` 形态，漏了子目录与探针脚本。终扫（跳 `.git`/
+`node_modules` 等重目录、不限深度）后定稿：
+
+| 分组 | 文件 | 命中 |
+|---|---|---|
+| quaiwei（设计内存放点） | `scripts/.sensenova-keys` | 3 |
+| prompt-master 配置 | `.env`、4 个根目录 `.env.bak-*`、`backups/.env.bak-1802`、`backups/modelhub-2026092{1,4}/*.env`、`backups/pre-modelhub-*/.env`、`releases/deploy-drill/.env` | 46 |
+| prompt-master 归档探针 | `logs/archive/2026-09-17-交付归档/pool_probe.sh` | 3 |
+| sqli-scanner | `server/.env.ai` | 3 |
+| Loomy Workspace 探针 | `api_matrix.py`、`api_probe{,2,_all,_detail,_final,_nonstream,_raw}.py`、`probe_cap{,2,_full,_sense}.py` 共 11 个 | 43 |
+| Desktop 旧副本 | `QuAiWei-v0.5.1/scripts/gateway-probe.mjs`、`src/api/llm.ts`、`electron-app/assets/index-BDomB28k.js`（构建产物） | 9 |
+| Loomy 聊天附件 | `.loomy-attachments/ses_*/…-Text-Document.txt` ×2（会话导出） | 6 |
+
+**轮换脚本已按终扫重做**（`_rotate-sensenova-keys.cjs`）：硬编码 TARGETS 连续漏过三种形态
+（10-04 的 bak、`backups/`+`releases/` 子目录、深度 4 的 `pool_probe.sh`），故改为
+**SCAN_SPECS 递归发现**（根目录 + 文件名判据，跳重目录）。dry-run 实测覆盖 **25 文件**
+（上表前 5 组 + Loomy 全部 12 个探针中的 11 个有证版；`.env.example` 与无证探针以 0 处列出）。
+⚠️ 开发中抓到一个真 bug：判据写成 `(api_|probe_)_.*` 多一个下划线，Loomy 探针整个漏掉——
+dry-run 的"目标文件数"就是它的探针，这类发现逻辑必须跑一遍真数据。
+
+**不参与脚本替换的 4 个落点**（陈旧副品 / 会话导出，替换无意义，建议轮换后处置）：
+- `Desktop/QuAiWei-v0.5.1/` 整个旧副本——`src/api/llm.ts` 是 key 清理前的旧代码、
+  `index-BDomB28k.js` 是当时的构建产物；**轮换后整个目录删除**（归入"ox 旧副本"同类处置）
+- `Loomy Workspace/.loomy-attachments/` 2 个聊天附件——凭证被贴进过 Loomy 会话，本地导出文件；
+  用户知悉即可，如目录还要留存就手工抹除
+
+**其余 sk- 形态命中均已定性，无需动作**：
+- `look/`（有 GitHub 远端）、`prompt-master/tests`、`pm-wt-ci/tests`、`deep/modsearch`、
+  `deep/dsh-voice-input/api-key.txt` —— 全是自描述测试夹具（`sk-abcd…`/`sk-secret…`/`sk-leaked…`），
+  推送了也无实害
+- `nuclei-templates` 的命中是模板路径（`…zendesk-sk-…-csp-bypass…`）**误报**
+- 死证 `2a020acc`（401）现存 4 个 `.env.example`（prompt-master、pm-wt-ci ×2、Loomy `_pm_review`），
+  其中 prompt-master 的已推 GitHub——无害，建议顺手换成明显假值
+- `D:/projects-backup/`：bundle（35.6MB，文档记录内含旧 key）与 tar.gz 为压缩数据扫不到明文；
+  `.patch/.txt/.bak` 散件 0 命中
+
 ## 2026-09-26 轮换前置完成（复扫 + 脚本就绪，只等新 Key）
 
 - **旧 Key 有效性复测**：3 条逐条打 `/v1/models` 全部 HTTP 200——仍然有效，轮换必要性不变。
@@ -42,7 +80,9 @@
 - **等新 Key 后的执行序列**（对应下方 runbook 步骤号）：
   1. 用户：控制台新建 3 条 Key → **直接写进** `scripts/.sensenova-keys`（3 行，不贴对话）
   2. 助手：`node scripts/_rotate-sensenova-keys.cjs --new-file scripts/.sensenova-keys --apply`
-     → 自动复扫 23 处旧 Key 0 命中（含自动发现的 4 个 `.env.bak-*`，见 2026-10-14 更正①）
+     → SCAN_SPECS 递归覆盖 **25 个目标文件**（含 backups/、releases/、pool_probe.sh、
+     Loomy 探针、Desktop 旧副本的 gateway-probe.mjs，见 2026-10-14 终扫表），
+     写前自动备份到 `electron-dist/_rotbk/`，替换后自动复扫旧哈希 0 命中
   3. 助手：两项目最小真实调用验证新 Key（quaiwei 跑 `loadPresetKeys().length` = 3 + CLI 单轮；
      prompt-master / sqli-scanner 各一次最小调用）
   4. 用户：控制台删除 3 条旧 Key
@@ -167,9 +207,9 @@
    新 Key 请**直接**写进目标文件，或先存进一个不进任何仓库的临时文件。
 3. 更新三处存放点（三个项目的调用代码都不用改）：
    - `D:\projects\quaiwei\scripts\.sensenova-keys` —— 一行一个新 Key
-   - `D:\projects\prompt-master\.env` —— 以及它的 `.env.bak-*` 副本（2026-10-14 实测 **4 个**，
-     脚本已改自动发现，`--apply` 时一并替换，无需手动列举）和交付归档里的 `pool_probe.sh`，
-     这些备份是本次扫出来的额外明文面，顺手一起清掉最省事
+   - `D:\projects\prompt-master\.env` —— **不用手动列举副本**：脚本 SCAN_SPECS 递归覆盖
+     `.env` + 全部 `.env.bak-*`（根目录 4 个 + `backups/` 4 个）+ `releases/deploy-drill/.env`
+     + `logs/archive/…/pool_probe.sh`（2026-10-14 终扫共 11 个文件），`--apply` 一并替换
    - `D:\projects\sqli-scanner\server\.env.ai`
 4. 确认新 Key 生效、条数正确（**只打印条数，不打印内容**）：
    ```bash

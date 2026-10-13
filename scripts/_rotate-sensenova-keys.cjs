@@ -16,23 +16,60 @@ const crypto = require("crypto");
 const OLD_HASHES = ["e38fb0a1e798", "b82265ead297", "e1e896e7b77d"]; // 固定映射顺序：旧[i] → 新[i]
 const SK = /sk-[A-Za-z0-9]{16,}/g;
 const BK = "D:/projects/quaiwei/electron-dist/_rotbk";
-const TARGETS = [
-  "D:/projects/prompt-master/.env",
-  "D:/projects/sqli-scanner/server/.env.ai",
-];
 
-// prompt-master 的 .env.bak-* 备份：runbook 09-25 曾记录"已不存在"，实测反复出现
-// （2026-10-04 的 judge-swap 备份就漏在硬编码列表外过一次，2026-10-14 补扫发现）——
-// 改为自动发现，杜绝再漏。未来新增备份无需改本脚本。
-function discoverBaks() {
-  const dir = "D:/projects/prompt-master";
-  if (!fs.existsSync(dir)) return [];
-  return fs
-    .readdirSync(dir)
-    .filter((n) => /^\.env\.bak-.+$/.test(n))
-    .map((n) => path.join(dir, n));
+// 目标发现：一组「根目录 + 文件名判据」，递归扫描（跳 .git/node_modules 等重目录）。
+// 2026-10-14 全盘终扫（29 文件 / 109 处活证）后定稿。硬编码列表连续漏过三种形态：
+//   ① .env.bak-20261004-judge-swap（根目录，09-25/09-26 两次记录都漏）
+//   ② backups/ 与 releases/deploy-drill/ 子目录里的 .env（深度>1）
+//   ③ logs/archive/2026-09-17-交付归档/pool_probe.sh（深度 4 的归档探针）
+// 故一律递归 + 判据匹配，新增落点无需改脚本。
+const SKIP_DIRS = new Set([
+  "node_modules", ".git", "dist", "electron-dist", "coverage", "out", ".next",
+  "target", "build", ".venv", "venv", "__pycache__", ".pytest_cache",
+]);
+const SCAN_SPECS = [
+  // prompt-master：全部 .env*（含子目录备份/发布物）+ 交付归档里的探针脚本
+  {
+    root: "D:/projects/prompt-master",
+    match: (n) => /^\.env/.test(n) || n === "pool_probe.sh",
+  },
+  // sqli-scanner：AI 通道配置
+  { root: "D:/projects/sqli-scanner/server", match: (n) => n === ".env.ai" },
+  // Loomy Workspace：API 探针脚本（api_*.py / probe_*.py）
+  {
+    root: "C:/Users/Admin（无密码）/Documents/Loomy Workspace",
+    match: (n) => /^(api_|probe_).*\.py$/.test(n),
+  },
+  // Desktop 上的 QuAiWei-v0.5.1 旧副本（轮换后整个目录应删除，见 runbook）
+  {
+    root: "C:/Users/Admin（无密码）/Desktop/QuAiWei-v0.5.1/scripts",
+    match: (n) => n === "gateway-probe.mjs",
+  },
+];
+function discoverTargets() {
+  const out = new Set();
+  const walk = (dir, match) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        if (!SKIP_DIRS.has(e.name)) walk(p, match);
+      } else if (match(e.name)) {
+        out.add(p);
+      }
+    }
+  };
+  for (const spec of SCAN_SPECS) {
+    if (fs.existsSync(spec.root)) walk(spec.root, spec.match);
+  }
+  return [...out];
 }
-const ALL_TARGETS = [...TARGETS, ...discoverBaks()];
+const ALL_TARGETS = discoverTargets();
 const REPORTS = [
   "D:/deep/agent-audit-reports/index.html",
   "D:/deep/agent-audit-reports/data/2026-08-15.json",
@@ -84,7 +121,7 @@ function rotate(newKeys, oldKeys) {
   const map = new Map(); // 旧明文 → 新明文
   OLD_HASHES.forEach((h, i) => map.set(oldKeys[i], newKeys[i]));
   console.log(`映射（按哈希）：${OLD_HASHES.map((h, i) => `${h}→${hashOf(newKeys[i])}`).join("  ")}`);
-  console.log(`目标文件 ${ALL_TARGETS.length} 个（含自动发现的 .env.bak-* ${discoverBaks().length} 个）`);
+  console.log(`目标文件 ${ALL_TARGETS.length} 个（SCAN_SPECS 递归发现，见文件头注释）`);
   for (const f of ALL_TARGETS) {
     const text = fs.readFileSync(f, "utf-8");
     const lines = text.split(/\r?\n/);
@@ -103,7 +140,7 @@ function rotate(newKeys, oldKeys) {
       }
       return nl;
     });
-    console.log(`${APPLY ? "✎ 替换" : "☞ 计划"} ${f}：${count} 处 @L${changedLines.join(",L")}`);
+    console.log(`${APPLY ? "✎ 替换" : "☞ 计划"} ${f}：${count} 处${changedLines.length ? " @L" + changedLines.join(",L") : ""}`);
     if (APPLY && count) {
       fs.mkdirSync(BK, { recursive: true });
       fs.copyFileSync(f, path.join(BK, path.basename(f) + ".pre-rotation"));
