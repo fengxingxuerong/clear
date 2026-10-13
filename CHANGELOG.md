@@ -2,6 +2,51 @@
 
 > 完整版本历史，细节以对应 Git 提交为准。
 
+## v0.9.38 更新（修正 v0.9.37 的 bin 指错对象 + humanize-cli 补 stdin 管道模式）
+
+### ① 修正：bin 应指向 humanize-cli，不是重复轮子（commit `f9374ae`）
+
+v0.9.37 新写了 `scripts/cli.ts` 并挂上 bin 字段——但 `scripts/humanize-cli.ts` 才是
+v0.8.6 起就有、SKILL.md 双向锁定的主 CLI（批量目录/单文件、.docx 输入输出、
+GBK/UTF-16 编码探测、LLM 深度通道、递归/并发/回环防护）。cli.ts 只是它的功能子集，
+挂错对象等于把用户导流向弱化副本。本版删除重复轮子，bin 指向 humanize-cli 的
+bundle 产物（`dist-cli/humanize-cli.mjs`，esbuild 单文件）。
+
+### ② humanize-cli 新增 stdin 管道模式
+
+| 能力 | 说明 |
+|---|---|
+| 触发 | 输入参数给 `-`（Unix 惯例）或**没有任何位置参数**（纯选项如 `--seed 42` 也放行） |
+| 输出分工 | **正文 stdout、诊断 stderr**——`cat 稿.txt \| ai-humanizer --intensity 0.8 > 去味.txt` 干净可重定向 |
+| 参数 | 强度/种子/文风/朱雀增强/--explain 全量透传 |
+
+边界（诚实声明）：stdin 模式只走本地引擎（`--api` 拒绝并提示落成文件——不为一把管道
+重构批量路径的 cfg 校验）；stdin 是 Node 已解码的 UTF-8 流，不走文件路径场景的
+BOM/UTF-16/GBK 探测。
+
+实现要点：两遍扫描剥选项定位输入 token（选项可占首位，原 `a[0]` 判断覆盖不到
+`--seed 42` 这种组合）；TTY 补判放在 main（parseArgs 是纯函数，vm 沙箱里没有 stdin）。
+
+### ③ 测试与验证
+
+- vm 切片测试 +4 条（`-`/省略/空串/未知短选项）；新增 `humanize-cli-stdin.test.ts`
+  8 条端到端（bash 真管道 + 环境变量传文本）。
+- 变异检验两发全中：诊断错走 stdout（重定向 + 可复现双测试红）；VALUED_OPTS 漏
+  `--intensity`（省略参数组合测试红）。
+- bundle 产物三模式手动验证：stdin、省略参数管道、批量回归全通。
+
+### ④ 本机坑记录（测试写法）
+
+node 的 `execFile` `input` 选项在本环境**不可靠**：input 写入后管道不 EOF，
+子进程 `readFileSync(0)` 永久阻塞（20s 才被杀）。bash 真管道
+（`printf %s "$VAR" | ...`）反而正常——端到端测试一律走 bash 通路。
+另：`node "$NODE_BIN" script` 会把 node.exe 自身当脚本读（MZ SyntaxError），
+可执行与脚本别写反。
+
+### 门禁基线
+
+1771 tests / 85 文件，tsc / eslint / prettier 三查过；全量无回归。
+
 ## v0.9.37 更新（CLI 入口收口分发形态 + gate stale 自清理）
 
 ### ① CLI 入口：bin `ai-humanizer`（commit `98797ae`）
