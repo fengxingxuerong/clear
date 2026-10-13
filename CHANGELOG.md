@@ -2,6 +2,39 @@
 
 > 完整版本历史，细节以对应 Git 提交为准。
 
+## v0.9.39 更新（skill 化第一步：引擎规则导出为 agent skill）
+
+### ① 生态位修正：从「锁在引擎里」到「零安装可装」
+
+对比 GitHub 同类后的第一个动作（完整对比见当日工作日志）：2026 年主流「去 AI 味」
+用法是给 Claude Code / Cursor 装一份 Markdown 规则 skill（blader/humanizer 44k★
+那一类），而本项目的规则深度此前只存在于 TypeScript 引擎里，agent 零感知。
+
+新增 [`skills/humanizer-rules/`](skills/humanizer-rules/)——独立 skill，
+**不装桌面版/CLI 也能用**：
+
+| 文件 | 内容 |
+|---|---|
+| `SKILL.md` | 入口：六步工作流程（判体裁→过签名→换套话→查病句→调节奏→交付）+ 硬约束 |
+| `rules/vocab.md` | 50+ 组套话替换表（含引擎踩坑清单：搭配崩坏/词性错位/技术文档豁免） |
+| `rules/formulaic.md` | 28 条模板腔静态签名 + 要闻体骨架词密度提示 |
+| `rules/materials.md` | 口语开头词/插入语/句尾软化等改写素材（按场景分类） |
+| `rules/genres.md` | 四体裁旋钮表（句长目标 23/28/32/36、burst、强度上限）+ 判定线索 |
+| `rules/guards.md` | 六类实测病句模式（v0.9.36 人眼审查抓到的那批）+ 通用红线 |
+
+### ② 单一事实源 + 双向锁（继承项目纪律）
+
+- `scripts/gen-skill-rules.ts`：规则文档全部**从引擎生成**，不手抄；
+  `--check` 模式供 CI 比对（漂移退出 1）。
+- `scripts/skill-rules.test.ts` 9 条锁：磁盘逐字一致、无游离文件、
+  VOCAB/FORMULAIC/旋钮值/病句模式全量在场、frontmatter 合法、--check 子进程。
+- 变异检验：手改磁盘文档 → 一致性 + --check 双测试红。
+- 引擎侧只加 export（`getGenreKnobs`/`GenreKnobs`/`EffectiveGenre`），行为零变化。
+
+### 门禁基线
+
+1780 tests / 85 文件，tsc / eslint / prettier 三查过；全量无回归。
+
 ## v0.9.38 更新（修正 v0.9.37 的 bin 指错对象 + humanize-cli 补 stdin 管道模式）
 
 ### ① 修正：bin 应指向 humanize-cli，不是重复轮子（commit `f9374ae`）
