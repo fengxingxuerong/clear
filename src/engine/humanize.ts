@@ -25,6 +25,7 @@ import {
   fragmentCanStand,
   FORMULAIC,
   guardBlocks,
+  MEDIUM_NOUN_AFTER,
   isSceneBlockLine,
   isScriptFormatLine,
   isCJK,
@@ -471,7 +472,20 @@ function replaceVocab(
         // 「取得」会立刻在同一位置顶上来，替换词干并把助词留成病句。
         !PARTICLE_PREFIX_BLOCK.has(from)
       ) {
-        const rep = pick(rng, candidates);
+        let rep = pick(rng, candidates);
+        // v0.9.41 替身降级（MEDIUM_DOWNGRADE）：「通过」后紧邻媒介/渠道名词时，
+        // 「靠/借」崩坏（"靠短信通知"×）——但与 VERB_PHRASE_AFTER 的处置不同：
+        // 那条是「跳过替换」（宁保留原词），本条**降级到「用」**（"用短信通知"√），
+        // 保留去味收益。候选里没有「用」时不动（宁保留原选，不引入未验证的替身）。
+        // 实证：操作说明语料 × 20 seed，"靠短信通知/靠邮件发送"稳定复现；
+        // 判据必须紧邻（8 字窗口会把"通过各部门协作，用短信通知"误算）。
+        if (
+          (rep === "靠" || rep === "借") &&
+          candidates.includes("用") &&
+          MEDIUM_NOUN_AFTER.test(base.slice(end, end + 8))
+        ) {
+          rep = "用";
+        }
         // v0.9.22 级联守卫（见 VOCAB_KEY_SET 注释）：替身本身是源词 → 会被下一轮
         // 词条循环再替一次（「实现→落地」后再「落地→真正做出来」）。作废该次替换。
         // v0.8.9 叠字守卫（右侧）：替换词尾字与右侧首字相同时将产生叠字——

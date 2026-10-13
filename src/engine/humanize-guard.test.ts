@@ -7,7 +7,7 @@
  * 拦截一旦失效，替身会直接流进正文，用户看见的是"不帮 CommonJS"这种句子。
  */
 import { describe, expect, it } from "vitest";
-import { VERB_PHRASE_AFTER, guardBlocks } from "./humanize-guard.ts";
+import { VERB_PHRASE_AFTER, MEDIUM_NOUN_AFTER, guardBlocks } from "./humanize-guard.ts";
 
 /**
  * 混排守卫（行 184-188）
@@ -93,6 +93,37 @@ describe("「通过」动词短语紧邻守卫（行 245）", () => {
   it("「引入的方式」实测仍被拦——注释说该放行，但正则没有「的?」容错", () => {
     expect(VERB_PHRASE_AFTER.test("引入的方式")).toBe(true);
     expect(guardBlocks("通过", "引入的方式", "")).toBe(true);
+  });
+});
+
+/**
+ * 「通过」媒介名词的**替身降级**（v0.9.41，MEDIUM_NOUN_AFTER + humanize.ts 降级逻辑）。
+ *
+ * 与上面 VERB_PHRASE_AFTER 的处理方式不同：那条是"跳过替换"，本条是
+ * 「靠/借 → 用」的降级（"用短信通知"是通顺的，跳过白丢一次去味）。
+ * 所以这里测的是**正则判据**（哪些 ctx 该触发降级），端到端行为由
+ * scan-bugs 的「媒介名词配崩」探针兜底。
+ */
+describe("「通过」媒介名词替身降级（v0.9.41）", () => {
+  it("命中：具体媒介/渠道名词（靠短信/靠邮件 崩坏）", () => {
+    for (const ctx of ["短信通知", "邮件发送", "电话联系", "微信沟通", "手机App完成"]) {
+      expect(MEDIUM_NOUN_AFTER.test(ctx), ctx).toBe(true);
+    }
+  });
+
+  it("不命中：抽象依托对象照常轮换替身（靠数据分析/靠努力 是合法的）", () => {
+    // 这组是降级判据**必须收窄**的证据：把"数据分析"一起降级 = 白白丢掉
+    // 「靠数据分析」「借不懈的努力」这些成立的口语变体。
+    for (const ctx of ["数据分析", "不懈的努力", "各部门协作", "反复权衡"]) {
+      expect(MEDIUM_NOUN_AFTER.test(ctx), ctx).toBe(false);
+    }
+  });
+
+  it("紧邻判据：媒介词隔了字不算（窗口包含判据会误伤），放行", () => {
+    // 真实上下文 = 替换点后 8 字。"通过各部门协作，用短信通知用户"的 context 是
+    // "各部门协作，用短信"——「短信」在第 7 字位，若用 GUARD_AFTER 的窗口包含判据
+    // 会被误拦（这是 VERB_PHRASE_AFTER 踩过的同一课）。
+    expect(MEDIUM_NOUN_AFTER.test("各部门协作，用短信")).toBe(false);
   });
 });
 
