@@ -259,6 +259,27 @@ export const REPORTING_TAIL_RE =
  */
 export const REPORTING_DAO_RE = /[说道问答喊答应笑叹]道$/;
 
+/**
+ * v0.9.43：**及物动词收尾** → 切点落在其后必然产生「悬空及物动词」残句。
+ *
+ * 实证（2026-10-15 真实稿件测试，议论文 × 3 档 × 10 seed：**30/60 必现**）：
+ *
+ *     原文：我们也必须清醒地认识到，转型过程仍然面临数据孤岛、人才短缺等多重挑战。
+ *     旧产出：我们也必须清醒地认识到。转型过程仍然面临数据孤岛、人才短缺等多重挑战。
+ *
+ * 前半句「…认识到」的宾语（整个从句）被留在后半句 ⇒ 及物动词悬空。
+ *
+ * 为什么既有守卫漏掉：`REPORTING_TAIL_RE` 收的是**引述**动词
+ * （了解到/获悉/表示/指出/强调/认为…），「认识到/意识到/提出/包括/涉及/发现」
+ * 不在这个语义类里，一条都没进表。
+ *
+ * ⚠️ 刻意**不收「要求」「建议」「明确」**——它们有高频名词用法
+ *   （「满足要求，」「采纳建议，」），收进来会误伤正常切分（宁可少拦）。
+ * ⚠️ `了?` 容差：「提出了，…」同样悬空，只锚定「提出」会漏。
+ */
+export const TRANSITIVE_TAIL_RE =
+  /(?:认识到|意识到|认识到|提出|包括|涵盖|涉及|发现|显示|表明|证明|阐明|揭示|体现)了?$/;
+
 /** v0.9 专家修复 P2（前半句守卫）：切点前半句若以「在/随着/当/根据/通过…下/中/时/后」
  *  收束，说明这是状语从句与主句的分界——句号化后前半句是无谓语残句
  *  （「在28纳米工艺节点下。」），这种切点必须否决。
@@ -312,6 +333,8 @@ export function fragmentFrontCanStand(front: string): boolean {
   if (SUBORDINATE_LEAD_RE.test(front) && !/[，、；：]/.test(front)) return false;
   // v0.9.36：引述动词收尾（引述内容缺失）⇒ 残句；否定式"表态"义由正则内 lookbehind 放行
   if (REPORTING_TAIL_RE.test(front)) return false;
+  // v0.9.43：及物动词收尾（宾语被留在后半句）⇒ 悬空及物动词残句（见 TRANSITIVE_TAIL_RE）
+  if (TRANSITIVE_TAIL_RE.test(front)) return false;
   if (ADVERBIAL_HEAD_RE.test(front) && ADVERBIAL_TAIL_RE.test(front)) return false;
   // 「…的同时」「…的时候」等复合状语尾
   if (/(?:的同时|的时候|的情形|的情况下|的基础上)$/.test(front)) return false;

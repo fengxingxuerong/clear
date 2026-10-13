@@ -151,6 +151,27 @@ describe("clampAvgSentenceLenUnder25（句长硬上限）", () => {
     expect(fragmentCanStand("这次改版将推动整个行业重新洗牌。")).toBe(true);
   });
 
+  it("v0.9.43：递进副词 + 系词「是」不能独立成句（真实议论文 10/10 seed 必现）", () => {
+    // 成因：PREDICATE_HINT 的注释从 2026-09-30 起就写着收"判断动词"，
+    // 正则里却漏了最典型的系词「是」⇒「更是一场…」被判"可独立成句"，
+    // 于是「不仅仅是一场技术变革，更是一场深刻的思维革命」在逗号处被劈成两句。
+    expect(fragmentCanStand("更是一场深刻的思维革命")).toBe(false);
+    expect(fragmentCanStand("也是一次难得的机遇")).toBe(false);
+    // 对照组：副词后 10 字窗口内出现主语 → 自带主语，照常放行
+    expect(fragmentCanStand("更重要的是，我们要先把这件事做完")).toBe(true);
+    expect(fragmentCanStand("也就是把数据先放一边")).toBe(true);
+  });
+
+  it("v0.9.43：光杆系表残句「是 + 表语」不能独立成句（技术科普 17/20 seed 必现）", () => {
+    // 成因：主语是**从句**「如何平衡能力与安全」，切句层在逗号处劈开后
+    // 后半只剩「是 + 表语」，主语被留在前一句 ⇒ 无主系表句。
+    expect(fragmentCanStand("是当前学术界与工业界共同关注的焦点")).toBe(false);
+    // 对照组三条放行判据，每条都要有对应用例（少一条就是把守卫写死）：
+    expect(fragmentCanStand("是这样的。")).toBe(true); // ① 问答形态 / 短句
+    expect(fragmentCanStand("是不是漏了什么步骤呢")).toBe(true); // ① 疑问形态
+    expect(fragmentCanStand("是他先动的手")).toBe(true); // ③ 前 6 字含主语提示
+  });
+
   it("rest 带主语时照常切分（守卫生效方向不搞反）", () => {
     // 对照组：同样超长、同样只有一个逗号，但 rest 有主语「这次改版」→ 允许切
     const t =
