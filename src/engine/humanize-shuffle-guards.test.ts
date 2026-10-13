@@ -140,6 +140,17 @@ describe("clampAvgSentenceLenUnder25（句长硬上限）", () => {
     }
   });
 
+  it("v0.9.40：目的连词开头的 rest 不能独立成句（以便/从而/以免/以防/借此）", () => {
+    // 成因：v0.9.36 的从属从句守卫查的是 front（从句在前：「如果A，B」），
+    // 而「…上传至对象存储，以便实现快速回滚」的残句在 **back**（从句在后）——
+    // 镜像盲区，两半都要查。技术文档/操作说明新语料修复前实测 44/60。
+    expect(fragmentCanStand("以便实现快速回滚")).toBe(false);
+    expect(fragmentCanStand("从而显著降低执行时间")).toBe(false);
+    expect(fragmentCanStand("以免影响后续流程")).toBe(false);
+    // 对照组：不是目的连词开头 → 照常放行
+    expect(fragmentCanStand("这次改版将推动整个行业重新洗牌。")).toBe(true);
+  });
+
   it("rest 带主语时照常切分（守卫生效方向不搞反）", () => {
     // 对照组：同样超长、同样只有一个逗号，但 rest 有主语「这次改版」→ 允许切
     const t =

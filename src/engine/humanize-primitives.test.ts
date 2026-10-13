@@ -52,6 +52,18 @@ describe("fragmentFrontCanStand —— 必须拒绝的（残句防线）", () =>
     expect(fragmentFrontCanStand("他在开会的时候")).toBe(false);
   });
 
+  it("v0.9.40：介词头的**替换后形态**也要拦（用/靠/借/凭借/基于/依托/经过）", () => {
+    // 成因：替换在前、守卫在后——「通过合理配置构建与部署流程」先被词表换成
+    // 「用合理配置构建与部署流程」，而守卫表原来只认替换前的「通过」，
+    // 于是「用…流程。」被句号化（无谓语残句）。技术文档新语料修复前实测 18/60。
+    expect(fragmentFrontCanStand("用合理配置构建与部署流程")).toBe(false);
+    expect(fragmentFrontCanStand("靠短信通知")).toBe(false);
+    // 对照组：末段是完整主谓（含体标记「了」）→ 放行（每否一次 = 白丢一次劈句机会）。
+    // ⚠️ 反面教材：「用这种方式处理数据」不能当对照组——它本身就是无谓语介词短语，
+    //   拦掉是对的（宽表里没有它的谓词标记，实测确实 false）。
+    expect(fragmentFrontCanStand("用这种方式，他处理完了数据")).toBe(true);
+  });
+
   it("长名词短语（「的+名词性中心语」）", () => {
     // 这条是 C 类病句修复的核心，实测 119/120 命中
     expect(fragmentFrontCanStand("采用智能化系统的企业")).toBe(false);
