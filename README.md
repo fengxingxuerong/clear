@@ -79,6 +79,25 @@ npm run dev          # 打开 http://localhost:5173
 文档里的参数表 ↔ `scripts/humanize-cli.ts` 的参数由 `scripts/skill-md.test.ts` **双向锁死**：
 改了 CLI 忘改文档、或文档凭空多写一个参数，测试直接红。
 
+### 去 AI 味规则 skill（零安装，v0.9.39）
+
+不想装桌面版/CLI，只想让自己在用的 agent（Claude Code / Cursor / Windsurf / Cline）**直接按规则改**？
+[`skills/humanizer-rules/`](skills/humanizer-rules/) 是一份独立 skill：50+ 组套话替换表、
+28 条模板腔签名、四体裁旋钮（论说/叙事/对话/人写）、六类实测病句模式、朱雀标定依据。
+
+```bash
+# Claude Code
+mkdir -p ~/.claude/skills/humanizer-rules
+cp -r skills/humanizer-rules/* ~/.claude/skills/humanizer-rules/
+
+# Cursor / Windsurf / Roo Code / Cline：把 skills/humanizer-rules/ 加入技能目录，
+# 或将 SKILL.md 内容并入 .cursorrules / 系统提示词
+```
+
+规则文档由 `scripts/gen-skill-rules.ts` **从引擎源码自动生成**（词表/旋钮/守卫正则单一事实源），
+与引擎同源、随引擎更新；手改文档会被 `scripts/skill-rules.test.ts` 逐字比对拦下。
+引擎本体的完整能力（朱雀对标标定、AI 分自评、批量/LLM 通道）见上方各章节。
+
 ## 批量处理（CLI，v0.8.6；v0.9.15 起可选 LLM 通道）
 
 安装为命令后（bin 名 `ai-humanizer`），下面所有 `npx tsx scripts/humanize-cli.ts` 都可以直接写 `ai-humanizer`：

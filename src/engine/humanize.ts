@@ -209,9 +209,10 @@ function effectiveIntensity(intensity: number): number {
  *     真要消除它：把这两档的字段与调用点一起收进结构层分支，而不是造一次假调用。
  *  · skipSceneInject：只有对话体需要（剧本【场景/人物/背景】块不塞自问自答，避免违和）。
  */
-type EffectiveGenre = AutoGenre | "humanHand";
+// v0.9.39：导出给 gen-skill-rules.ts 用（同 getGenreKnobs）
+export type EffectiveGenre = AutoGenre | "humanHand";
 
-interface GenreKnobs {
+export interface GenreKnobs {
   avgLenTarget: number;
   burstTarget: number;
   intensityCap: number; // 硬上限：> 这个值会被 clamp
@@ -222,7 +223,9 @@ interface GenreKnobs {
   skipSelfQA: boolean; // v0.9.1：叙事文跳过自问自答/碎片注入（"例子呢？"不属于叙事）
 }
 
-function getGenreKnobs(genre: EffectiveGenre): GenreKnobs {
+// v0.9.39：导出给 scripts/gen-skill-rules.ts（skill 规则文档生成器）用——
+// 四体裁旋钮是引擎的单一事实源，skill 文档从它生成而非手抄，防两边漂移。
+export function getGenreKnobs(genre: EffectiveGenre): GenreKnobs {
   switch (genre) {
     case "main":
       return {
