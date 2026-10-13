@@ -36,6 +36,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, execFileSync } from "node:child_process";
 import { COVERAGE_THRESHOLDS, type CoverageThresholds } from "./coverage-thresholds";
+import { sweepStaleReports } from "./coverage-stale-sweep";
 
 const ROOT_RAW = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 // v0.9.34：盘符大写化。本机 MSYS/Git Bash 链路会把盘符规范化成小写
@@ -109,6 +110,25 @@ function cleanReportsDir(): void {
     fs.rmSync(REPORTS_DIR, { recursive: true, force: true });
   }
   if (stillThere()) throw new Error(`报告目录仍存在，清理未生效：${REPORTS_DIR}`);
+}
+
+/**
+ * stale 副本的删除通道：与 cleanReportsDir 同构（rd → rmSync），但**不抛错**——
+ * 清不掉就留给下次启动（sweepStaleReports 的纪律：历史垃圾 ≠ 本次判定依据）。
+ */
+function rmdirNative(target: string): void {
+  const winPath = target.split("/").join("\\");
+  try {
+    execFileSync("cmd.exe", ["/c", "rd", "/s", "/q", winPath], { encoding: "utf8" });
+  } catch {
+    /* rd 对"目录不存在"也返回非零；同步派生被 EBUSY 拦时同样落这里 */
+  }
+  if (!fs.existsSync(target)) return;
+  try {
+    fs.rmSync(target, { recursive: true, force: true });
+  } catch {
+    /* 批量删除守卫拦下 → 留给下次启动 */
+  }
 }
 
 interface IstanbulFileCov {
@@ -284,6 +304,18 @@ async function main(): Promise<void> {
   }
 
   console.log("══════════ 覆盖率门禁（从产物派生判定）══════════");
+  // 先扫历史遗留的 stale 副本（cleanReportsDir 第三通道「挪走」的产物），再清本次的 coverage/。
+  // 放在 cleanReportsDir 之前：万一本次又要挪走，新旧两批一起扫，不用等下一轮。
+  const swept = sweepStaleReports({
+    parentDir: path.dirname(REPORTS_DIR),
+    rmdir: rmdirNative,
+  });
+  if (swept.found > 0) {
+    console.log(
+      `   ⓘ 历史报告副本 coverage.stale-*：已清 ${swept.removed}/${swept.found}` +
+        (swept.removed < swept.found ? "（剩余删不动，留给下次启动；不影响本次判定）" : ""),
+    );
+  }
   cleanReportsDir();
 
   // 超时可用环境变量覆盖：CI 想早点失败、或本机想验证超时分支时改成 60_000 即可
