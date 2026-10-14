@@ -7,6 +7,30 @@
 > ⚠️ 连带推论：**披露面不变**（本机 29 文件 / 109 处明文活证依旧存在），因此
 > 「不要把含 Key 的包公开发到 GitHub」这条硬约束**继续有效且更关键**。
 
+### 桌面端 Key 池上线（2026-10-14 晚，commit d652d6b + bbc5f8a）
+
+既然继续用这 3 条，就把它们接进桌面端：此前 `SENSENOVA_PRESET.keys` 在浏览器 bundle 里
+恒为空（`loadPresetKeys` 的文件分支要求 `process.versions.node`，桌面渲染层为假）
+⇒ 桌面版「填入 SenseNova 常驻通道」按钮**永远置灰**，常驻 LLM 通道形同虚设。
+
+| 环节 | 落点 |
+|---|---|
+| Key 文件 | `electron-app/preset-keys.txt`（每行一条，**已 gitignore**） |
+| 读取 | `electron-app/main.js` 注册 `ipcMain.handle("preset-keys")`，读不到返回空串（不崩） |
+| 桥 | `preload.js` → `contextBridge.exposeInMainWorld("preset", { keys })` |
+| 前端 | `src/api/llm-config.ts` 新增 `hydratePresetKeys()`，`main.tsx` 的 `bootstrap()` 在 `adoptSecureApiKeys` 之前补齐 |
+
+**两条硬纪律（写在这里是因为它跨三个文件、且后果不可逆）：**
+
+1. **公开发 GitHub 的包必须在没有 `electron-app/preset-keys.txt` 的状态下 build + repack。**
+   `verify-pruned.cjs` 的 `[3b]` 节会打印形态提示；`artifacts/_make-zip.cjs` 检测到 Key 文件
+   **默认 exit 1 中止**（本机私有脚本，`artifacts/` 被 gitignore），确属本地自用才加 `--allow-local-keys`。
+   ⇒ 三道防线：版本号/gitignore 忽略 / 形态标注 / 打 zip 拦截。
+2. **去掉 Key 不需要改代码**：删掉那个文件重打就是公开包形态，按钮自动回到"用户自填 Key"。
+
+模型组合沿用 2026-09-01 实测最优：`deepseek-v4-flash` 主力 + `glm-5.2` 交叉评判 +
+`deepseek-v4-pro` 备选（`SettingsModal` 的「填入常驻通道」按钮一键写好）。
+
 ## 2026-10-14 泄露面再实测（`_sweep-now.cjs` 全盘重扫）与三项更正
 
 - **3 条旧 Key 复测仍全部有效**：逐条打 `token.sensenova.cn/v1/models` → 3×HTTP 200 / 7 models。
