@@ -74,6 +74,36 @@ export interface ApiConfig {
  *   3) 都没有 → keys 为空数组，UI「填入 SenseNova 常驻通道」仍可用（用户自己填）
  * 注意：若你从旧版本升级，旧 Key 已随 git 历史泄露，请到商汤后台轮换。
  */
+/**
+ * v0.9.46 桌面版 Key 池异步补齐（Electron preload → 主进程 → preset-keys.txt）。
+ *
+ * 为什么需要第二级：loadPresetKeys 跑在**浏览器环境**的 bundle 里（`process.versions?.node`
+ * 为假），文件那一支永远不会生效 ⇒ 桌面端 `SENSENOVA_PRESET.keys` 恒为空，
+ * 「填入 SenseNova 常驻通道」按钮被置灰 —— 这是 v0.8.6「Key 不硬编码」改造的副作用。
+ *
+ * Key 的落点是**产物根目录下的 preset-keys.txt**（不入 Git），所以：
+ *   - bundle 里没有明文（拆包找不到）
+ *   - GitHub Release 的 zip 只要不带这个文件，就是干净的（发版纪律，见 key-rotation-status.md）
+ *
+ * 幂等：重复调用只做去重合并，不重复追加。
+ */
+export async function hydratePresetKeys(): Promise<string[]> {
+  const bridge = (globalThis as Record<string, unknown>).preset as
+    { keys?: () => Promise<unknown> } | undefined;
+  if (!bridge || typeof bridge.keys !== "function") return SENSENOVA_PRESET.keys;
+  try {
+    const raw = await bridge.keys();
+    if (typeof raw === "string") {
+      for (const k of splitKeys(raw)) {
+        if (!SENSENOVA_PRESET.keys.includes(k)) SENSENOVA_PRESET.keys.push(k);
+      }
+    }
+  } catch {
+    // 通道不存在 / 主进程读不到文件：保持现状（可能为空），绝不阻塞启动
+  }
+  return SENSENOVA_PRESET.keys;
+}
+
 /** v0.8.7 修复后导出：供测试锁死「ESM 下 Key 池不得静默丢失」回归 */
 export function loadPresetKeys(): string[] {
   const out: string[] = [];

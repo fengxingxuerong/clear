@@ -8,6 +8,12 @@ contextBridge.exposeInMainWorld("secureStore", {
   set: (key, value) => ipcRenderer.invoke("secure-store-set", key, value),
 });
 
+// v0.9.46 预置 Key 池（SenseNova 常驻通道）：Key 放在产物根目录的 preset-keys.txt，
+// 由主进程读、经此桥交给页面。该文件不入 Git，公开包不带它时返回空串。
+contextBridge.exposeInMainWorld("preset", {
+  keys: () => ipcRenderer.invoke("preset-keys"),
+});
+
 contextBridge.exposeInMainWorld("ppl", {
   status: () => ipcRenderer.invoke("ppl-status"),
   download: (onProgress) => {

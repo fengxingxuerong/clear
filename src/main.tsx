@@ -4,6 +4,7 @@ import App from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { adoptSecureApiKeys, loadApi, loadDetector, loadDetectorKeySecure } from "./store";
 import type { ApiConfig } from "./api/llm";
+import { hydratePresetKeys } from "./api/llm-config";
 import type { DetectorConfig } from "./api/detector";
 import "./styles.css";
 
@@ -13,6 +14,8 @@ import "./styles.css";
 // Web 版：window.secureStore 不存在，走同步 localStorage（adoptSecureApiKeys 返回空对象，
 // 于是 initialApi 保持 undefined，由 App 自己 loadApi()——与修复前逐字节一致）。
 async function bootstrap() {
+  // 桌面版补 Key 池必须在渲染前完成：设置面板打开时就读 SENSENOVA_PRESET.keys.length
+  await hydratePresetKeys();
   const adopted = await adoptSecureApiKeys();
   let initialApi: ApiConfig | undefined;
   if (adopted.apiKey !== undefined || adopted.apiKeys !== undefined) {

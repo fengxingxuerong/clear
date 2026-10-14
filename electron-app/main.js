@@ -77,6 +77,7 @@ if (!gotLock) {
   app.quit();
 } else {
   registerSecureStore();
+  registerPresetKeys();
   registerPplIpc(ipcMain, pplMirrorRef);
   createWindowWhenReady();
 
@@ -151,6 +152,27 @@ function registerSecureStore() {
     }
     writeSecureStore(data);
     return true;
+  });
+}
+
+/* ----------------------------- 预置 Key 池（随本地包分发） ----------------------------- */
+// v0.9.46：SenseNova 常驻通道的 Key 池不再硬编码进源码，浏览器环境又没有 fs，
+// 于是 SENSENOVA_PRESET.keys 在桌面端恒为空，「填入常驻通道」按钮被置灰。
+//
+// 解法：主进程读产物根目录下的 preset-keys.txt（每行一个 Key），经 IPC 交给渲染层。
+// 该文件 **不入 Git**（.gitignore 已忽略），只在本机/自用包里由人工生成 ⇒
+// Key 既不进 bundle、也不进 GitHub Release。
+// ⚠️ 发版纪律：公开发 GitHub 的 zip 必须在 **没有** 这个文件的状态下 build + repack。
+
+const PRESET_KEYS_FILE = path.join(__dirname, "preset-keys.txt");
+
+function registerPresetKeys() {
+  ipcMain.handle("preset-keys", () => {
+    try {
+      return fs.readFileSync(PRESET_KEYS_FILE, "utf8").trim();
+    } catch {
+      return ""; // 公开包形态：没有文件 → 空串 → 按钮照旧置灰
+    }
   });
 }
 
