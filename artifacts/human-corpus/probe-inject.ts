@@ -54,6 +54,51 @@ const STYLE_MAP: [RegExp, string][] = [
   [/还没/g, "尚未"],
 ];
 
+/**
+ * 书面 → 口语（**反向**替换）。
+ *
+ * ## 这个方向为什么值得单独测
+ *
+ * 前面的"套话注入"是正向的（加 AI 特征 → 分数该升）。这个是**反向**的：
+ * 把书面体改口语（更接近真人随手写作）⇒ 分数**应该降**。
+ *
+ * 为什么用它测语体维度：维基百科正文里**几乎没有口语词**（17 万字仅 22 处），
+ * 所以"口语→书面"那个方向在语料上跑不了（对照组全 0）；
+ * 但**书面词 abundant**，反向替换命中率高，能真正测到"语体变化 → 分数变化"。
+ *
+ * 一正一反两个方向都动，才敢说"aiScore 对语体维度有覆盖"——
+ * 只测一个方向，任何结论都可能只是"它只对关键词敏感"的假象。
+ */
+const FORMAL_MAP: [RegExp, string][] = [
+  [/大致/g, "差不多"],
+  [/尤其/g, "特别"],
+  [/较为/g, "挺"],
+  [/尚未/g, "还没"],
+  [/随后/g, "接着"],
+  [/当即/g, "赶紧"],
+  [/随即/g, "顺手"],
+  [/原本/g, "原来"],
+  [/诸多/g, "好多"],
+  [/倘若/g, "要是"],
+  [/若干/g, "一些"],
+  [/颇为/g, "挺"],
+  [/诸如/g, "像"],
+  [/以便/g, "好让"],
+  [/倘若如此/g, "要真是这样"],
+];
+
+function toColloq(text: string): { out: string; hits: number } {
+  let out = text;
+  let hits = 0;
+  for (const [re, to] of FORMAL_MAP) {
+    out = out.replace(re, () => {
+      hits++;
+      return to;
+    });
+  }
+  return { out, hits };
+}
+
 function injectCliche(text: string, perPara: number): string {
   const paras = text.split(/\n\s*\n/);
   let k = 0;
@@ -95,6 +140,9 @@ interface Row {
   formalHits: number;
   formal: number;
   dFormal: number;
+  colloqHits: number;
+  colloqScore: number;
+  dColloq: number;
 }
 
 const rows: Row[] = [];
@@ -106,6 +154,8 @@ for (const it of manifest.items) {
   const cScore = aiScore(cText).score;
   const { out: fText, hits } = toFormal(prose);
   const fScore = aiScore(fText).score;
+  const { out: qText, hits: qHits } = toColloq(prose);
+  const qScore = aiScore(qText).score;
   rows.push({
     title: it.title,
     genre: it.genre,
@@ -116,17 +166,25 @@ for (const it of manifest.items) {
     formalHits: hits,
     formal: fScore,
     dFormal: fScore - base,
+    colloqHits: qHits,
+    colloqScore: qScore,
+    dColloq: qScore - base,
   });
 }
 
 console.log(`确定性注入实验｜${rows.length} 篇真人文本（中文维基百科 CC BY-SA 4.0）\n`);
-console.log("体裁            条目        字数  基线  注入套话后  Δ  │ 书面化替换  Δ");
-console.log("─".repeat(80));
+console.log(
+  "体裁            条目        字数  基线  注入套话后  Δ  │书面化处 Δ  │口语化处 降口语后  Δ",
+);
+console.log("─".repeat(92));
 for (const r of rows) {
   console.log(
     `${r.genre.padEnd(14)} ${r.title.padEnd(10)} ${String(r.chars).padStart(5)} ${String(r.base).padStart(5)} ${String(r.withCliche).padStart(11)} ` +
       `${(r.dCliche >= 0 ? "+" : "") + r.dCliche}`.padStart(4) +
-      `  │${String(r.formalHits).padStart(7)}处 ${(r.dFormal >= 0 ? "+" : "") + r.dFormal}`.padStart(
+      `  │${String(r.formalHits).padStart(5)} ${(r.dFormal >= 0 ? "+" : "") + r.dFormal}`.padStart(
+        5,
+      ) +
+      `  │${String(r.colloqHits).padStart(5)} ${String(r.colloqScore).padStart(8)} ${(r.dColloq >= 0 ? "+" : "") + r.dColloq}`.padStart(
         5,
       ),
   );
@@ -135,21 +193,29 @@ for (const r of rows) {
 const avg = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
 const dc = rows.map((r) => r.dCliche);
 const df = rows.map((r) => r.dFormal);
+const dq = rows.map((r) => r.dColloq);
 const upC = dc.filter((x) => x > 0).length;
 const upF = df.filter((x) => x > 0).length;
+const dnQ = dq.filter((x) => x < 0).length; // 口语化后分数"下降"才是判对
 
-console.log(`\n━━━ 判别力（注入后分数升高 = 判对）━━━`);
+console.log(`\n━━━ 判别力 ━━━`);
 console.log(
-  `  套话注入     ${upC}/${rows.length} = ${((upC / rows.length) * 100).toFixed(0)}% 方向正确`,
+  `  套话注入（正向·应升）  ${upC}/${rows.length} = ${((upC / rows.length) * 100).toFixed(0)}% 方向正确`,
 );
 console.log(
   `               Δ 均值 ${avg(dc).toFixed(1)}｜范围 ${Math.min(...dc)} ~ ${Math.max(...dc)}`,
 );
 console.log(
-  `  语体书面化   ${upF}/${rows.length} = ${((upF / rows.length) * 100).toFixed(0)}% 方向正确（仅 ${rows.reduce((a, b) => a + b.formalHits, 0)} 处命中，口语标记本就极少）`,
+  `  书面化替换（正向·应升）${upF}/${rows.length} = ${((upF / rows.length) * 100).toFixed(0)}% 方向正确（仅 ${rows.reduce((a, b) => a + b.formalHits, 0)} 处命中，维基正文口语词本就极少）`,
 );
 console.log(
   `               Δ 均值 ${avg(df).toFixed(1)}｜范围 ${Math.min(...df)} ~ ${Math.max(...df)}`,
+);
+console.log(
+  `  口语化替换（反向·应降）${dnQ}/${rows.length} = ${((dnQ / rows.length) * 100).toFixed(0)}% 方向正确（命中 ${rows.reduce((a, b) => a + b.colloqHits, 0)} 处）`,
+);
+console.log(
+  `               Δ 均值 ${avg(dq).toFixed(1)}｜范围 ${Math.min(...dq)} ~ ${Math.max(...dq)}`,
 );
 
 console.log(`\n━━━ 真人基线的关键事实 ━━━`);
