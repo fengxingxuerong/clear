@@ -1,0 +1,104 @@
+{
+  "rows": [
+    {
+      "id": "C1-work-summary",
+      "aiScore": "54→8",
+      "len": "274→291",
+      "段落": "1→1",
+      "HARD": "0",
+      "SOFT": "0",
+      "ms": "2"
+    },
+    {
+      "id": "C2-opinion-wechat",
+      "aiScore": "24→14",
+      "len": "213→230",
+      "段落": "1→1",
+      "HARD": "0",
+      "SOFT": "0",
+      "ms": "2"
+    },
+    {
+      "id": "C3-tech-popular",
+      "aiScore": "25→3",
+      "len": "282→278",
+      "段落": "1→1",
+      "HARD": "0",
+      "SOFT": "0",
+      "ms": "1"
+    },
+    {
+      "id": "C4-product-copy",
+      "aiScore": "18→0",
+      "len": "267→279",
+      "段落": "1→1",
+      "HARD": "0",
+      "SOFT": "0",
+      "ms": "1"
+    },
+    {
+      "id": "C5-news-release",
+      "aiScore": "17→8",
+      "len": "198→198",
+      "段落": "1→1",
+      "HARD": "0",
+      "SOFT": "0",
+      "ms": "1"
+    },
+    {
+      "id": "C6-academic-abstract",
+      "aiScore": "36→0",
+      "len": "226→242",
+      "段落": "1→1",
+      "HARD": "0",
+      "SOFT": "0",
+      "ms": "2"
+    },
+    {
+      "id": "C7-story-dialogue",
+      "aiScore": "8→0",
+      "len": "208→207",
+      "段落": "6→5",
+      "HARD": "0",
+      "SOFT": "1",
+      "ms": "1"
+    },
+    {
+      "id": "C8-social-post",
+      "aiScore": "12→12",
+      "len": "118→118",
+      "段落": "4→4",
+      "HARD": "0",
+      "SOFT": "0",
+      "ms": "1"
+    },
+    {
+      "id": "C9-mixed-links",
+      "aiScore": "18→1",
+      "len": "334→334",
+      "段落": "6→6",
+      "HARD": "0",
+      "SOFT": "0",
+      "ms": "3"
+    },
+    {
+      "id": "C10-tiny-input",
+      "aiScore": "6→0",
+      "len": "53→52",
+      "段落": "1→1",
+      "HARD": "0",
+      "SOFT": "0",
+      "ms": "1"
+    }
+  ],
+  "findings": [
+    {
+      "id": "C7-story-dialogue",
+      "f": {
+        "level": "SOFT",
+        "kind": "段落数变化",
+        "detail": "6 → 5"
+      }
+    }
+  ]
+}

@@ -156,9 +156,34 @@ export function classifyGenre(text: string): GenreResult {
   let colonHits = 0;
   // eslint-disable-next-line no-useless-escape -- 字符类里的 \[ 必须转义，否则类提前闭合、正则恒不匹配（见上方注释与测试）
   const colonRe = /^[\u4e00-\u9fa5A-Za-z0-9_\-\s（）()【】\[\]]{1,24}?[：:]/;
+
+  // v0.9.46 真实案例修正（artifacts/realcase）：「台词冒号」此前把三种非台词形态一起数了进去，
+  // 于是一篇只出现一两次的正常新闻稿/说明文档被打成 dialogue（引语≈0、场景块=0、短句=0，
+  // 却因为冒号密度单项过 0.06 直接触发 Rule 1）。实测样本：
+  //   ① 新闻间接引语：「公司首席执行官王建国在发布会上表示：“……”」——陈述动词+冒号，不是台词；
+  //   ② URL scheme：「接口地址变更为 https://api.example.com/…」——协议分隔符；
+  //   ③ 说明文标签：「本次 API 升级说明如下：」「调用示例：」——说明体例，不是对话。
+  // 下方三条排除逐一对应。口径刻意保守：只排除"冒号左边白纸黑字是这些形态"的确定性证据，
+  // 不碰阈值本身（动阈值会连带 exposition/narrative 判据的测试基线）。
+  const REPORT_VERB_RE =
+    /(?:表示|指出|强调|认为|认为|介绍|宣布|透露|补充|解释|说明|总结|写道|宣称|回应|提醒|建议)$/;
+  const EXPLAIN_LABEL_RE =
+    /(?:如下|示例|例如|举例|步骤|注意|备注|附注|要点|清单|说明|介绍|用法|示例如下)$/;
+  const URL_SCHEME_RE = /\b(?:https?|ftp|mailto|file):\/\//i;
+
   for (const s of sents) {
     const trimmed = s.trimStart();
-    if (colonRe.test(trimmed)) colonHits++;
+    const m = trimmed.match(colonRe);
+    if (!m) continue;
+    const upto = trimmed.slice(0, m[0].length); // 含冒号的前缀，例如「王建国在发布会上表示：」
+    // ② URL scheme：整句里出现协议分隔符就整句不计（技术文档的 scheme 冒号密度极高）
+    if (URL_SCHEME_RE.test(trimmed)) continue;
+    const head = upto.slice(0, -1).trim(); // 去掉冒号本身
+    // ① 转述动词收尾（"某某表示："这类新闻陈述）
+    if (REPORT_VERB_RE.test(head)) continue;
+    // ③ 说明性标签收尾（"升级说明如下："、"调用示例："）
+    if (EXPLAIN_LABEL_RE.test(head)) continue;
+    colonHits++;
   }
   f.dlgColonRatio = colonHits / Math.max(1, sents.length);
 

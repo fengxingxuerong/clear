@@ -96,6 +96,7 @@ import {
   collapseDoubleConnectives,
   fixOrphanConnectiveLeads,
   isSceneMetaSentence,
+  fixBrokenCollocations,
 } from "./anti-fingerprint.ts";
 
 // P7 引擎级体裁联动：自动体裁识别 + 每体裁参数旋钮
@@ -397,8 +398,17 @@ export const DIR_MODIFIER_VERB_CLASH_RE =
  *  起因是 `建立→搞出` 命中「建立健全相关的法律法规」→ **「搞出健全相关的法律法规」**
  *  （实测 27/30，scan-bugs v8.0「口语动词+制度法规宾语」）。旧表收了「制度/规范/规则」
  *  却漏了「法律法规」——同一语义场的词，漏一半等于这条守卫只在半个场里生效。 */
+/**
+ * v0.9.22：口语结果动词（见 COLLOQUIAL_RESULT_VERBS）不该接抽象名词宾语。
+ *
+ * ⚠️ v0.9.46 距离上限 6 → 12（与调用处 slice 窗口同步 8 → 14）：
+ * 真实案例 C2 公众号观点文实测产出「我们需要搞出一个清晰的自我认识体系」——
+ * 宾语前に9 字修饰语（"一个清晰的自我认识"），在 6 字窗口内完全看不到"体系"，
+ * 于是 clashAbstract 不命中、病句放行。模板语料的宾语几乎都是零修饰，测不出这个洞。
+ * 放宽方向是**多否决替换**（宁可少改，不可错改），与既定方针同向。
+ */
 const ABSTRACT_OBJECT_RE =
-  /^[\s\S]{0,6}(?:框架|机制|体系|格局|价值|水平|质量|效率|意义|能力|模式|结构|制度|规范|标准|流程|生态|共识|关系|布局|目标|任务|要求|原则|方针|政策|战略|愿景|理念|文化|氛围|环境|条件|基础|保障|支撑|引领|指导|监管|治理|服务|管理|评价|评估|指标|模型|方法|方案|路径|思路|逻辑|规则|秩序|信誉|口碑|信任|权威|优势|潜力|空间|机遇|挑战|风险|压力|动力|活力|合力|效力|影响力|竞争力|凝聚力|创造力|生产力|法律法规|法律|法规|法令|条例|规章|纪律|规矩|公约|条约)/;
+  /^[\s\S]{0,12}(?:框架|机制|体系|格局|价值|水平|质量|效率|意义|能力|模式|结构|制度|规范|标准|流程|生态|共识|关系|布局|目标|任务|要求|原则|方针|政策|战略|愿景|理念|文化|氛围|环境|条件|基础|保障|支撑|引领|指导|监管|治理|服务|管理|评价|评估|指标|模型|方法|方案|路径|思路|逻辑|规则|秩序|信誉|口碑|信任|权威|优势|潜力|空间|机遇|挑战|风险|压力|动力|活力|合力|效力|影响力|竞争力|凝聚力|创造力|生产力|法律法规|法律|法规|法令|条例|规章|纪律|规矩|公约|条约)/;
 
 /** v0.9 专家修复 P5：academic 文风下禁止的口语替身（书面语体错位签名）。
  *  按源词建白名单表——源词在这些学术语义词上不得替换成口语替身。 */
@@ -503,7 +513,8 @@ function replaceVocab(
         const clashLeft = prevCh !== "" && rep.startsWith(prevCh);
         // v0.9.22 类别级：口语结果动词接抽象名词宾语 = 搭配不当（见 COLLOQUIAL_RESULT_VERBS）
         const clashAbstract =
-          COLLOQUIAL_RESULT_VERBS.has(rep) && ABSTRACT_OBJECT_RE.test(base.slice(end, end + 8));
+          // 窗口必须与 ABSTRACT_OBJECT_RE 的 {0,12} 同宽再加一点余量（宾语词本身也要进得来）
+          COLLOQUIAL_RESULT_VERBS.has(rep) && ABSTRACT_OBJECT_RE.test(base.slice(end, end + 14));
         // v0.9.24 类别级：替身**末字或倒数第二字**是助词，且右邻也是助词 = 助词连用。
         //
         // 「抱着」+「了」→「抱着了」；「就出现了」+「地」→「就出现了地」。
@@ -986,6 +997,10 @@ export function humanize(text: string, opts: HumanizeOptions = {}): string {
   //  B) 语体门控：论说/学术（formal）下还原过度口语替换；双连接词叠放不限语体
   const formalRegister = effectiveGenre === "main" || (opts.style ?? "plain") === "academic";
   result = guardFormalRegister(result, formalRegister);
+  //  B') v0.9.46：与体裁无关的坏替身修复（「借在…上」「拔高表现」）。
+  //      必须放在 guardFormalRegister 之后：那张表会先把「拔高」整词还原成「提升」，
+  //      顺序颠倒会让这里的搭配判定失去对象。
+  result = fixBrokenCollocations(result);
   result = collapseDoubleConnectives(result);
   //  C) v0.9.5 P4 双语气词折叠：多个注入 pass 叠加时句尾出现"呀呀""嘛嗯""呢呵"
   //  式堆叠（Phase1 迭代实测），真人不会连发两个语气词。相邻重复折叠为一个，

@@ -11,6 +11,7 @@ import {
   fixOrphanConnectiveLeads,
   isSceneMetaSentence,
   isSceneMetaLine,
+  fixBrokenCollocations,
 } from "./anti-fingerprint";
 import { humanize } from "./humanize";
 import { SELF_QA_POOLS } from "./shuffle/structure";
@@ -310,6 +311,44 @@ describe("fixOrphanConnectiveLeads：残句合并两侧（338-346）", () => {
     expect(fixOrphanConnectiveLeads('"好，我这就去准备。"')).toBe('"好，我这就去准备。"');
     // 含文字的超短残段仍照常合并（守卫只挡"不含词字符"的纯标点段）
     expect(fixOrphanConnectiveLeads("张三说得对。他也这么认为")).toBe("张三说得对，他也这么认为");
+  });
+});
+
+/**
+ * v0.9.46 真实案例驱动：与体裁无关的坏替身修复。
+ *
+ * 起因（artifacts/realcase C3 技术科普）：「通过在大规模语料上进行预训练」被 VOCAB 替成
+ * 「借在…上」，而 FORMAL_RESTORE 被 `guardFormalRegister` 的体裁门控包着——这篇被判成
+ * narrative（"自 2017 年以来"触发过去时），于是**没有一层会把病句救回来**。
+ * 病句与体裁无关，故这张表必须无条件执行，下面三条分别锁：单句修复 / 距离上限 / 体裁无关。
+ */
+describe("fixBrokenCollocations（与体裁无关的坏替身修复）", () => {
+  it("介词「通过」被替成「借」→ 还原时必须把「在」一起补回", () => {
+    const out = fixBrokenCollocations("该模型借在大规模语料上进行预训练。");
+    expect(out).toBe("该模型通过在大规模语料上进行预训练。");
+    // ⚠️ 还原串写成 "通过$1$2" 会把「在」吃掉 ⇒ 断言必须钉在完整形态上
+    expect(out).not.toContain("借在");
+  });
+
+  it("「拔高」+ 抽象宾语一律还原为「提升」，宾语前允许较长修饰语", () => {
+    expect(fixBrokenCollocations("明显拔高了下游任务的表现。")).toBe("明显提升了下游任务的表现。");
+    expect(fixBrokenCollocations("拔高质量")).toBe("提升质量");
+    expect(fixBrokenCollocations("拔高了他的整体效率")).toBe("提升了他的整体效率");
+  });
+
+  it("合法用法不被误伤：「借助…基础上」与字面义的「拔高」原样保留", () => {
+    expect(fixBrokenCollocations("借助的基础上再看")).toBe("借助的基础上再看");
+    // 宾语不是抽象名词时不还原——「拔高一截」是字面义的抬高，不是 VOCAB 的坏替身
+    expect(fixBrokenCollocations("把标杆拔高一截")).toBe("把标杆拔高一截");
+  });
+
+  it("端到端：被判非 main 体裁的技术科普，产出里不得出现「借在」", () => {
+    // 这句会让 classifyGenre 走 narrative（"自…以来"是过去时指示词）
+    const src =
+      "Transformer 架构自 2017 年提出以来，该模型通过在大规模语料上进行 Masked Language Model 预训练，显著提升了下游任务的表现。";
+    const out = humanize(src, { intensity: 0.9, seed: 20261015 });
+    expect(out).not.toContain("借在");
+    expect(out).not.toMatch(/拔高(了)?[\u4e00-\u9fa5]{0,8}(?:表现|质量|水平|能力|效率|效果)/);
   });
 });
 
