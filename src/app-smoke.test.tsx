@@ -7,11 +7,21 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { render, fireEvent, cleanup, act } from "@testing-library/react";
 import App from "./App";
+import { saveViewMode } from "./store";
 
 beforeEach(() => {
   localStorage.clear();
 });
 afterEach(() => cleanup());
+
+// v0.9.48 起默认视图是简洁模式（工程面板收起）。本文件多数断言覆盖的是
+// 「指纹体检 / 朱雀检测 / 历史 / 设置」等专业档常驻形态，得先切到专业模式；
+// 简洁模式本身由 src/App-simple-view.test.tsx 单独覆盖。
+// 第 1 条「整棵树挂载」刻意留在默认档——它守的就是默认形态不白屏。
+function renderPro() {
+  saveViewMode("pro");
+  return render(<App />);
+}
 
 describe("App 冒烟（默认空配置）", () => {
   it("整棵树挂载：标题、双输入面板与主操作按钮全部渲染", () => {
@@ -25,7 +35,7 @@ describe("App 冒烟（默认空配置）", () => {
   });
 
   it("空输入时依赖输出的按钮禁用；强度滑块默认 60%", () => {
-    const { getByText, container } = render(<App />);
+    const { getByText, container } = renderPro();
     expect((getByText("复制").closest("button") as HTMLButtonElement).disabled).toBe(true);
     expect((getByText("对比").closest("button") as HTMLButtonElement).disabled).toBe(true);
     expect((getByText("指纹体检").closest("button") as HTMLButtonElement).disabled).toBe(true);
@@ -34,7 +44,7 @@ describe("App 冒烟（默认空配置）", () => {
   });
 
   it("未配置 API 时不显示深度模式徽章；朱雀增强可点击切换", () => {
-    const { container } = render(<App />);
+    const { container } = renderPro();
     expect(container.textContent).not.toContain("深度模式");
     const tag = Array.from(container.querySelectorAll(".mode-tag")).find((el) =>
       el.textContent?.includes("朱雀增强"),
@@ -45,7 +55,7 @@ describe("App 冒烟（默认空配置）", () => {
   });
 
   it("点「示例」载入样例后，检测类按钮全部可用", () => {
-    const { getByText, container } = render(<App />);
+    const { getByText, container } = renderPro();
     fireEvent.click(getByText("示例"));
     const input = container.querySelector("section.pane textarea") as HTMLTextAreaElement;
     expect(input.value.length).toBeGreaterThan(150);
@@ -55,7 +65,7 @@ describe("App 冒烟（默认空配置）", () => {
   });
 
   it("点「示例」→「指纹体检」渲染体检面板（ppl unsupported 也不崩）", async () => {
-    const { getByText, container } = render(<App />);
+    const { getByText, container } = renderPro();
     fireEvent.click(getByText("示例"));
     await act(async () => {
       fireEvent.click(getByText("指纹体检"));
@@ -66,7 +76,7 @@ describe("App 冒烟（默认空配置）", () => {
   });
 
   it("点「朱雀检测」渲染朱雀面板（本地近似 + 350 字样例通过门槛）", () => {
-    const { getByText, container } = render(<App />);
+    const { getByText, container } = renderPro();
     fireEvent.click(getByText("示例"));
     fireEvent.click(getByText("朱雀检测"));
     expect(container.textContent).toContain("朱雀检测（本地近似");
@@ -74,7 +84,7 @@ describe("App 冒烟（默认空配置）", () => {
   });
 
   it("点「AI 检测」渲染本地检测面板", () => {
-    const { getByText, container } = render(<App />);
+    const { getByText, container } = renderPro();
     fireEvent.click(getByText("示例"));
     fireEvent.click(getByText("AI 检测"));
     expect(container.textContent).toContain("原文");
@@ -82,7 +92,7 @@ describe("App 冒烟（默认空配置）", () => {
   });
 
   it("「历史」面板：空库提示；设置弹窗可打开且 Esc 关闭", () => {
-    const { getByText, container } = render(<App />);
+    const { getByText, container } = renderPro();
     fireEvent.click(getByText("历史"));
     expect(container.textContent).toContain("暂无历史记录");
     fireEvent.click(getByText("关闭"));
@@ -93,7 +103,7 @@ describe("App 冒烟（默认空配置）", () => {
   });
 
   it("「清空」按钮清空输入输出", () => {
-    const { getByText, container } = render(<App />);
+    const { getByText, container } = renderPro();
     fireEvent.click(getByText("示例"));
     fireEvent.click(getByText("清空"));
     const ta = container.querySelector("section.pane textarea") as HTMLTextAreaElement;

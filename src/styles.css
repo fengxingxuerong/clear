@@ -838,6 +838,142 @@ button.sm {
 }
 
 /* =========================================================================
+   面向用户的成品化外壳（v0.9.47）
+   -------------------------------------------------------------------------
+   引擎能力一直都在，缺的是"用户第一眼该看什么"。
+   这一组样式服务三件事：模式切换、三步引导、结果条。
+   ========================================================================= */
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* ---- 简洁 / 专业 模式切换： segmented control ---- */
+.viewswitch {
+  display: flex;
+  border: 1px solid var(--border);
+  background: rgba(0, 240, 255, 0.05);
+  clip-path: var(--cut-sm);
+}
+.viewswitch button {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 1px;
+  padding: 7px 14px;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease,
+    text-shadow 0.15s ease;
+}
+.viewswitch button:hover {
+  color: var(--text);
+}
+.viewswitch button.on {
+  background: rgba(0, 240, 255, 0.16);
+  color: #eafcff;
+  text-shadow: 0 0 10px rgba(0, 240, 255, 0.7);
+}
+.viewswitch button:first-child.on {
+  box-shadow: inset -1px 0 0 var(--border-strong);
+}
+
+/* ---- 三步引导：只在还没产出时出现 ---- */
+.guide {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+  padding: 9px 14px;
+  background: rgba(160, 107, 255, 0.07);
+  border: 1px solid rgba(160, 107, 255, 0.28);
+  border-left: 3px solid var(--violet);
+  clip-path: var(--cut-sm);
+}
+.guide-step {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.guide-step:first-child {
+  color: #eafcff;
+  font-weight: 600;
+}
+.guide-arrow {
+  color: rgba(160, 107, 255, 0.7);
+  font-size: 13px;
+}
+
+/* ---- 结果条：交稿动作集中在这里 ---- */
+.resultbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin: 0 0 14px;
+  padding: 12px 16px;
+  background: linear-gradient(90deg, rgba(92, 255, 157, 0.1), transparent 55%), var(--panel);
+  border: 1px solid rgba(92, 255, 157, 0.3);
+  border-left: 3px solid var(--lime);
+  backdrop-filter: blur(10px);
+  box-shadow: var(--shadow-1);
+  clip-path: var(--cut-sm);
+}
+.result-score {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.result-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.result-num {
+  font-family: var(--font-mono);
+  font-size: 26px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  text-shadow: 0 0 14px currentColor;
+}
+.result-num.ok {
+  color: var(--lime);
+}
+.result-arrow {
+  color: var(--muted);
+  font-size: 16px;
+}
+.result-hint {
+  font-size: 12.5px;
+  color: var(--text-dim);
+  margin-left: 4px;
+}
+.result-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ---- 强度滑块的人话标签 ---- */
+.slider-word {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--violet);
+  margin-top: 2px;
+}
+
+/* =========================================================================
    流水线追踪面板（v0.9.47 新增）
    「引擎到底做了什么」——逐阶段展示本地引擎的真实执行过程。
    ========================================================================= */

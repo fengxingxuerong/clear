@@ -12,7 +12,14 @@ import { render, fireEvent, cleanup, waitFor, within } from "@testing-library/re
 import App from "./App";
 import { aiScore, humanize } from "./engine/humanize";
 import { loadHistory } from "./store-history";
-import { loadIntensity, saveDraft, loadDraft, loadZhuqueMode, loadDetector } from "./store";
+import {
+  loadIntensity,
+  saveDraft,
+  loadDraft,
+  loadZhuqueMode,
+  loadDetector,
+  saveViewMode,
+} from "./store";
 import { DEFAULT_API } from "./api/llm-config";
 import { DEFAULT_DETECTOR } from "./api/detector";
 
@@ -114,6 +121,11 @@ async function renderApp() {
 
 beforeEach(() => {
   localStorage.clear();
+  // v0.9.48 起默认视图是**简洁模式**（工程面板收起）。本文件既有的断言覆盖的是
+  // 「指纹体检 / 朱雀检测 / 历史 / 对比 / 为什么这么改」等常驻形态，
+  // 它们仍然要被验证——只是现在得先切到专业模式。简洁模式本身由
+  // src/App-simple-view.test.tsx 单独覆盖。
+  saveViewMode("pro");
   runHumanizeMock.mockReset();
   readDocxTextMock.mockReset();
   judgeScoreStableMock.mockReset();
@@ -934,6 +946,7 @@ describe("App 守卫分支与面板回调（行覆盖补锁）", () => {
 describe("引擎返回值的边界形状（目标行 221 / 229）", () => {
   beforeEach(() => {
     localStorage.clear();
+    saveViewMode("pro");
   });
 
   it("roundScores 为 undefined 时兜底成空数组，界面不崩", async () => {
@@ -1049,6 +1062,7 @@ describe("引擎返回值的边界形状（目标行 221 / 229）", () => {
 describe("指纹体检的空输入守卫（行 191-192）", () => {
   beforeEach(() => {
     localStorage.clear();
+    saveViewMode("pro");
     computePplFeatureMock.mockReset();
     ensurePplModelMock.mockReset();
   });
@@ -1105,6 +1119,7 @@ describe("LLM 模式标签（行 509-518）", () => {
 
   function renderWith(cfg: Record<string, unknown>) {
     localStorage.clear();
+    saveViewMode("pro");
     localStorage.setItem(
       KEY,
       JSON.stringify({ baseUrl: "https://api.example.com", apiKey: "k1", ...cfg }),

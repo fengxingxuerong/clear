@@ -33,7 +33,10 @@ import {
   loadDraft,
   saveDraft,
   clearDraft,
+  loadViewMode,
+  saveViewMode,
   type LocalSettings,
+  type ViewMode,
 } from "./store";
 import { setProtectedTerms } from "./engine/term-protect";
 import { explainChanges, type ExplainItem } from "./engine/explain";
@@ -71,6 +74,28 @@ import {
 import type { PplFeature } from "./ppl/scorer-core";
 
 type Score = ScoreBreakdown;
+
+/**
+ * 把「强度 65%」翻译成人话。
+ * 百分比只对调过参的人有意义；第一次用的人需要的是"轻改还是大改"。
+ */
+function intensityWord(v: number): string {
+  if (v <= 0.05) return "（几乎不动）";
+  if (v < 0.45) return "（轻度：只清套话和连接词）";
+  if (v < 0.75) return "（标准：换词 + 调句式）";
+  return "（彻底：大改写法，可能动结构）";
+}
+
+/**
+ * 把 AI 味分数翻译成一句结论。
+ * 判据沿用引擎自己的分档：≤27 是人写区间，29 是判定线（AI_SCORE_HUMAN_MAX / CUTOFF）。
+ */
+function scoreVerdict(score: number): string {
+  if (score <= 12) return "几乎没有 AI 味，可以直接交";
+  if (score <= 27) return "已经落在人写区间，基本没问题";
+  if (score <= 45) return "还有点味道，可以把强度调高一档再跑一次";
+  return "AI 味偏重，建议提到「彻底」重跑";
+}
 
 /** 「示例」按钮载入的样例文本 */
 const SAMPLE_TEXT = `值得注意的是，随着人工智能技术的快速发展，AI 写作工具应运而生。
@@ -129,6 +154,14 @@ export default function App({
   // 自定义保护术语（原文）。term-protect 的保护集是模块级全局，挂载时注入一次；
   // 设置里改完由 handleSaveSettings 再注入。
   const [protectedTermsRaw, setProtectedTermsRaw] = useState<string>(() => loadProtectedTerms());
+  // 视图模式：simple=只给主流程（默认），pro=追加工程面板。
+  const [view, setView] = useState<ViewMode>(() => loadViewMode());
+  const simple = view === "simple";
+
+  function switchView(v: ViewMode) {
+    setView(v);
+    saveViewMode(v);
+  }
 
   // ---- 困惑度第 8 项 + 朱雀检测/校准实验室编排（自本组件抽出，行为不变） ----
   // 两个 hook 互有依赖（ppl 特征 → 朱雀面板重算），用 ref 中转打破声明顺序循环：
@@ -506,10 +539,40 @@ export default function App({
             <div className="subtitle">本地引擎离线可用 · 可选接 LLM · 对标朱雀</div>
           </div>
         </div>
-        <button className="gear" onClick={openSettings}>
-          ⚙ 设置
-        </button>
+        <div className="topbar-right">
+          <div className="viewswitch" role="group" aria-label="视图模式">
+            <button
+              className={simple ? "on" : ""}
+              onClick={() => switchView("simple")}
+              title="只显示「粘贴 → 去味 → 复制」这条主流程"
+            >
+              简洁
+            </button>
+            <button
+              className={!simple ? "on" : ""}
+              onClick={() => switchView("pro")}
+              title="追加工程面板：指纹体检、朱雀检测、流水线追踪、历史等"
+            >
+              专业
+            </button>
+          </div>
+          <button className="gear" onClick={openSettings}>
+            ⚙ 设置
+          </button>
+        </div>
       </header>
+
+      {/* 三步引导：第一次打开的人最需要的就是「我该干什么」，
+          有产出之后它就没用了，撤掉腾地方。 */}
+      {simple && !outputHasText && (
+        <div className="guide">
+          <span className="guide-step">① 把 AI 写的稿子粘进左边</span>
+          <span className="guide-arrow">›</span>
+          <span className="guide-step">② 点「去味」</span>
+          <span className="guide-arrow">›</span>
+          <span className="guide-step">③ 复制右边的结果</span>
+        </div>
+      )}
 
       <main className="grid">
         <TextPane
@@ -531,6 +594,8 @@ export default function App({
         <div className="slider">
           <label>
             去味强度 <b>{Math.round(intensity * 100)}%</b>
+            {/* 百分比是给调参的人看的；对只想改稿的人，三档人话更好懂 */}
+            <span className="slider-word">{intensityWord(intensity)}</span>
           </label>
           <input
             type="range"
@@ -553,52 +618,38 @@ export default function App({
             {api.deepMode ? "⚡ 深度模式" : "LLM 单轮"}
           </span>
         )}
-        <label
-          className={`mode-tag ${zhuqueMode ? "active" : ""}`}
-          title="朱雀增强：叠加方言/插入语/句式片段/主观意见/括号自语等反检测特征"
-          style={
-            zhuqueMode
-              ? {
-                  color: "#ff5d6c",
-                  borderColor: "rgba(255, 93, 108, 0.5)",
-                  background: "rgba(255, 93, 108, 0.1)",
-                  cursor: "pointer",
-                }
-              : { cursor: "pointer" }
-          }
-        >
-          <input
-            type="checkbox"
-            checked={zhuqueMode}
-            onChange={(e) => {
-              setZhuqueMode(e.target.checked);
-              saveZhuqueMode(e.target.checked);
-            }}
-            style={{ display: "none" }}
-          />
-          🛡 朱雀增强
-        </label>
+        {!simple && (
+          <label
+            className={`mode-tag ${zhuqueMode ? "active" : ""}`}
+            title="朱雀增强：叠加方言/插入语/句式片段/主观意见/括号自语等反检测特征"
+            style={
+              zhuqueMode
+                ? {
+                    color: "#ff5d6c",
+                    borderColor: "rgba(255, 93, 108, 0.5)",
+                    background: "rgba(255, 93, 108, 0.1)",
+                    cursor: "pointer",
+                  }
+                : { cursor: "pointer" }
+            }
+          >
+            <input
+              type="checkbox"
+              checked={zhuqueMode}
+              onChange={(e) => {
+                setZhuqueMode(e.target.checked);
+                saveZhuqueMode(e.target.checked);
+              }}
+              style={{ display: "none" }}
+            />
+            🛡 朱雀增强
+          </label>
+        )}
         <button className="primary" onClick={handleHumanize} disabled={loading}>
           {loading ? "处理中…" : "去味"}
         </button>
         <button className="ghost" onClick={copy} disabled={!output}>
           复制
-        </button>
-        <button
-          className="ghost"
-          onClick={handleExport}
-          disabled={!output}
-          title="把去味结果下载为 .txt"
-        >
-          导出 .txt
-        </button>
-        <button
-          className="ghost"
-          onClick={handleExportDocx}
-          disabled={!output}
-          title="把去味结果下载为 .docx（纯文本内容，Word/WPS 可打开）"
-        >
-          导出 .docx
         </button>
         <input
           ref={fileInputRef}
@@ -614,59 +665,123 @@ export default function App({
         >
           导入
         </button>
-        <button
-          className="ghost"
-          onClick={() => setShowDiff(true)}
-          disabled={!inputHasText || !outputHasText}
-        >
-          对比
-        </button>
-        <button
-          className="ghost"
-          onClick={handleExplain}
-          disabled={!inputHasText || !outputHasText}
-          title="逐条列出这次改动属于哪类规则、依据是哪张表"
-        >
-          为什么这么改
-        </button>
+        {/* 以下都是排查/调参入口，简洁档收起：它们在主流程里没有位置，
+            而且「朱雀检测」「指纹体检」这类词对只想改稿的人是噪音。 */}
+        {!simple && (
+          <>
+            <button
+              className="ghost"
+              onClick={handleExport}
+              disabled={!output}
+              title="把去味结果下载为 .txt"
+            >
+              导出 .txt
+            </button>
+            <button
+              className="ghost"
+              onClick={handleExportDocx}
+              disabled={!output}
+              title="把去味结果下载为 .docx（纯文本内容，Word/WPS 可打开）"
+            >
+              导出 .docx
+            </button>
+            <button
+              className="ghost"
+              onClick={() => setShowDiff(true)}
+              disabled={!inputHasText || !outputHasText}
+            >
+              对比
+            </button>
+            <button
+              className="ghost"
+              onClick={handleExplain}
+              disabled={!inputHasText || !outputHasText}
+              title="逐条列出这次改动属于哪类规则、依据是哪张表"
+            >
+              为什么这么改
+            </button>
+            <button className="ghost" onClick={handleSample}>
+              示例
+            </button>
+            <button className="ghost" onClick={() => setShowHistory(true)}>
+              历史
+            </button>
+            <button
+              className="ghost"
+              onClick={handleFingerprint}
+              disabled={!outputHasText && !inputHasText}
+            >
+              指纹体检
+            </button>
+            <button className="ghost" onClick={handleLocalDetect} disabled={!inputHasText}>
+              AI 检测
+            </button>
+            <button
+              className="ghost"
+              onClick={handleZhuque}
+              disabled={!inputHasText && !outputHasText}
+            >
+              朱雀检测
+            </button>
+          </>
+        )}
         <button className="ghost" onClick={handleClear}>
           清空
         </button>
-        <button className="ghost" onClick={handleSample}>
-          示例
-        </button>
-        <button className="ghost" onClick={() => setShowHistory(true)}>
-          历史
-        </button>
-        <button
-          className="ghost"
-          onClick={handleFingerprint}
-          disabled={!outputHasText && !inputHasText}
-        >
-          指纹体检
-        </button>
-        <button className="ghost" onClick={handleLocalDetect} disabled={!inputHasText}>
-          AI 检测
-        </button>
-        <button className="ghost" onClick={handleZhuque} disabled={!inputHasText && !outputHasText}>
-          朱雀检测
-        </button>
+        {simple && (
+          <button className="ghost" onClick={handleSample}>
+            示例
+          </button>
+        )}
       </div>
 
-      <FingerprintPanel
-        fingerprint={fingerprint}
-        fidelity={fidelity}
-        checkingOutput={outputHasText}
-        pplEnabled={pplEnabled}
-        pplState={pplState}
-        pplFeature={pplFeature}
-        pplIssues={pplIssues}
-        pplProgress={pplProgress}
-        pplNote={pplNote}
-        onDownloadPpl={() => void ensurePpl()}
-      />
+      {/* 结果条：简洁档的「交稿动作」集中在这里。
+          分数给结论（不只是数字），按钮给下一步（复制 / 导出）。 */}
+      {simple && outputHasText && (
+        <div className="resultbar">
+          <div className="result-score">
+            {before && after ? (
+              <>
+                <span className="result-label">AI 味</span>
+                <b className="result-num">{before.score}</b>
+                <span className="result-arrow">→</span>
+                <b className="result-num ok">{after.score}</b>
+                <span className="result-hint">{scoreVerdict(after.score)}</span>
+              </>
+            ) : (
+              <span className="result-hint">已生成，可直接复制走</span>
+            )}
+          </div>
+          <div className="result-actions">
+            <button className="primary" onClick={copy}>
+              复制结果
+            </button>
+            <button className="ghost" onClick={handleExportDocx}>
+              导出 .docx
+            </button>
+            <button className="ghost" onClick={handleExport}>
+              导出 .txt
+            </button>
+          </div>
+        </div>
+      )}
 
-      {before && after && (
+      {!simple && (
+        <FingerprintPanel
+          fingerprint={fingerprint}
+          fidelity={fidelity}
+          checkingOutput={outputHasText}
+          pplEnabled={pplEnabled}
+          pplState={pplState}
+          pplFeature={pplFeature}
+          pplIssues={pplIssues}
+          pplProgress={pplProgress}
+          pplNote={pplNote}
+          onDownloadPpl={() => void ensurePpl()}
+        />
+      )}
+
+      {!simple && before && after && (
         <div className="scores">
           <ScoreBadge label="去味前 · AI味" s={before} tone="before" />
           <ScoreBadge label="去味后 · AI味" s={after} tone="after" />
@@ -683,30 +798,40 @@ export default function App({
         </div>
       )}
 
-      <PipelineTracePanel trace={trace} bestOfTried={lastRun?.bestOfTried} llmPath={lastRun?.llm} />
+      {!simple && (
+        <PipelineTracePanel
+          trace={trace}
+          bestOfTried={lastRun?.bestOfTried}
+          llmPath={lastRun?.llm}
+        />
+      )}
 
-      <BenchmarkPanel
-        output={output}
-        after={after}
-        roundScores={roundScores}
-        judging={judging}
-        detecting={detecting}
-        api={api}
-        detector={detector}
-        judgeScore={judgeScore}
-        judgeCritique={judgeCritique}
-        detectorScore={detectorScore}
-        zhuqueManualScore={zhuqueManualScore}
-        onJudge={handleJudge}
-        onDetect={handleDetect}
-        onManualScore={setZhuqueManualScore}
-        onGenreChange={setGenreOverride}
-        onNote={setNote}
-      />
+      {!simple && (
+        <BenchmarkPanel
+          output={output}
+          after={after}
+          roundScores={roundScores}
+          judging={judging}
+          detecting={detecting}
+          api={api}
+          detector={detector}
+          judgeScore={judgeScore}
+          judgeCritique={judgeCritique}
+          detectorScore={detectorScore}
+          zhuqueManualScore={zhuqueManualScore}
+          onJudge={handleJudge}
+          onDetect={handleDetect}
+          onManualScore={setZhuqueManualScore}
+          onGenreChange={setGenreOverride}
+          onNote={setNote}
+        />
+      )}
 
-      {explainItems && <ExplainPanel items={explainItems} onClose={() => setExplainItems(null)} />}
+      {!simple && explainItems && (
+        <ExplainPanel items={explainItems} onClose={() => setExplainItems(null)} />
+      )}
 
-      {(detectIn || detectOut) && (
+      {!simple && (detectIn || detectOut) && (
         <LocalDetectPanel
           detectIn={detectIn}
           detectOut={detectOut}
@@ -715,7 +840,7 @@ export default function App({
         />
       )}
 
-      {zq && (
+      {!simple && zq && (
         <ZhuquePanel
           text={zqText || zqTarget()}
           rep={zq}

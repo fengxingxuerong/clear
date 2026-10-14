@@ -284,6 +284,32 @@ export function saveZhuqueMode(v: boolean): void {
   localStorage.setItem(K_ZQ, String(v));
 }
 
+/* ------------------------------------------------------------------
+   v0.9.48 视图模式：简洁 / 专业
+   ------------------------------------------------------------------
+   此前界面把 15 个按钮和 6 个工程面板（指纹体检 / 朱雀检测 / 基准 /
+   流水线追踪 / 本地检测 / 历史）一股脑平铺在主界面上。那是**开发调参视图**，
+   不是给用户看的：普通人打开只会想知道"我的稿子粘进来 → 改好 → 复制走"，
+   而「朱雀增强」「困惑度」「降幅」这些词对他们没有意义。
+
+   · simple（**默认**）：只留主流程——粘贴、强度、去味、复制、导入导出。
+   · pro：追加全部工程面板，供调参与排查用。
+
+   默认取 simple：第一次打开的人看到的必须是"这东西怎么用"，
+   而不是一堆看不懂的开关。专业模式是主动选择，不是默认形态。
+------------------------------------------------------------------ */
+export type ViewMode = "simple" | "pro";
+
+const K_VIEW = "aihumanizer.view";
+
+export function loadViewMode(): ViewMode {
+  return localStorage.getItem(K_VIEW) === "pro" ? "pro" : "simple";
+}
+
+export function saveViewMode(v: ViewMode): void {
+  localStorage.setItem(K_VIEW, v);
+}
+
 /** 困惑度体检开关（默认开）；关闭后指纹体检只跑前 7 项 */
 export function loadPplEnabled(): boolean {
   return localStorage.getItem(K_PPL) !== "false";
