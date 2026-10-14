@@ -378,7 +378,21 @@ export function fixOrphanConnectiveLeads(text: string): string {
       // 「剥句尾标点 + ，」⇒ `"好，我这就去准备，"`——句号被吞、引号被隔在外面，
       // 标点损坏（全种子复现）。跳过合并 = join 时原样拼回，标点无损。
       const hasWordChar = /[\u4e00-\u9fa5a-zA-Z0-9]/.test(trimmed);
+      // v0.9.47 段落守卫：待合并的片段里带换行 = 它是一个新段落的开头。
+      //
+      // 证据（scripts/realcase 的 C7-story-dialogue，intensity 0.9 / seed 20261015）：
+      //   原文 6 段 → 输出 5 段，叙述段与台词段被焊在一起。
+      //   二分定位：强度 0.50 保持 6 段 / 0.55 起变 5 段 —— 与 `intensity >= 0.55`
+      //   的调用门槛精确对齐；体裁改成 narrative（跳过结构层）仍为 5 段，
+      //   排除结构层。元凶就是本函数的残句合并。
+      //   机理：段首片段形如 `"\n\n决定了。"`，`trimmed` 会把前导换行 trim 掉，
+      //   合并时用 trimmed 拼回 ⇒ 段间空行蒸发 ⇒ 两段焊成一段。
+      //
+      // 为什么判在合并条件里而不是外层：ORPHAN_LEAD_RE 的 `^` 依赖全文开头语义，
+      // 改成逐段分发会连带改变第 1 步的行为，波及已有基线。这里只拦"跨段落合并"。
+      const hasLineBreak = /[\n\r]/.test(s);
       if (
+        !hasLineBreak &&
         acc.length > 0 &&
         hasWordChar &&
         trimmed.length < MERGE_MIN_CHARS &&

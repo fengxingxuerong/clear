@@ -44,6 +44,50 @@ export interface HumanizeOptions {
    * 传 true：恢复 v0.8.8 及之前的无条件剥离行为（回归探针用，见 scripts/scan-bugs.ts）。
    */
   stripCJKSpaces?: boolean;
+  /**
+   * v0.9.47 流水线可观测：每跑完一个子步骤回调一次。
+   *
+   * 默认不传 = 零开销（各插入点都是 `if (onStage)` 短路，不传时连计时都不做）。
+   * 传了才会逐阶段计时/取快照 —— UI 要看"引擎到底做了什么"时才付这份成本。
+   *
+   * ⚠️ 契约：回调只读，且不得改写传入对象。引擎不读回调的返回值，
+   * 因此 onStage 的存在**不改变随机序列与输出结果**（runTraced 与普通
+   * humanize 的返回值逐字相同，见 pipeline-trace.test.ts）。
+   */
+  onStage?: (stage: StageTrace) => void;
+  /** 段落序号：humanize() 逐段调用 humanizeSingle 时注入，供 trace 标注来源段 */
+  para?: number;
+}
+
+/**
+ * 流水线 trace 的单条记录。
+ *
+ * 设计原则：**只记真实执行产物，不记估算**。
+ *  `ms` 是该步真实耗时（performance.now 差值）；
+ *  `charsBefore/charsAfter` 是该步进出文本的真实长度；
+ *  `snippet` 是该步**输出**文本的截断快照（不是"预期会变成什么样"）；
+ *  `metric` 只填能直接数出来的量（替换处数、句数变化），算不准的一律不填。
+ * 因此 trace 里不会出现"命中率""置信度"这类编造数字。
+ */
+export interface StageTrace {
+  /** 稳定阶段 id（跨段落同一步骤共用，聚合器靠它合并） */
+  id: string;
+  /** 阶段显示名 */
+  name: string;
+  /** 这一步为什么存在（引擎设计意图，写死常量，不随输入变） */
+  why: string;
+  /** 真实耗时（毫秒，保留 3 位小数） */
+  ms: number;
+  charsBefore: number;
+  charsAfter: number;
+  /** 该步输出的前 N 字快照 */
+  snippet: string;
+  /** 可观测补充量，如「替换 6 处」「句数 12→14」；算不准时为 undefined */
+  metric?: string;
+  /** 来源段落序号（段落级步骤才有） */
+  para?: number;
+  /** 该步被门控跳过（体裁不符 / 强度不够 / 短路返回） */
+  skipped?: boolean;
 }
 
 /**

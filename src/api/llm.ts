@@ -17,6 +17,8 @@ export * from "./llm-judge";
 
 import { humanize, aiScore, checkFidelityLocal, crossChunkCleanup } from "../engine/humanize";
 import { humanizeBestOf } from "../engine/humanize-bestof";
+import { aggregateStages, type PipelineTrace } from "../engine/pipeline-trace";
+import type { StageTrace } from "../engine/humanize-primitives";
 import { ApiConfig, DEEP_MAX_ROUNDS, DEEP_TARGET_SCORE, effectiveKeys } from "./llm-config";
 import { CHUNK_THRESHOLD, splitIntoChunks } from "./llm-chunk";
 import { humanizeViaApi, humanizeViaApiDeep, FabricationVetoError } from "./llm-humanize";
@@ -44,6 +46,14 @@ export interface RunResult {
   bestOf?: { tried: number; rejected: number; seed: number };
   /** v0.9.4 P2 压缩率（去空白产出/原文，仅 API 路径）：UI 知情用 */
   shrinkRatio?: number;
+  /**
+   * v0.9.47 流水线 trace：本地引擎逐步骤的真实执行记录。
+   *
+   * 仅本地引擎路径有（LLM 路径的执行过程发生在远端，本地无法逐步记录；
+   * 多候选择优模式也不产出——那是 N 个候选并行跑，逐步骤记录会混成一本糊涂账）。
+   * 为 undefined 时 UI 不显示追踪面板，而不是显示一条假的。
+   */
+  trace?: PipelineTrace;
 }
 
 /** 本地引擎选项：多候选择优 */
@@ -60,7 +70,13 @@ function runLocal(
   genre: "main" | "narrative" | "dialogue" | "humanHand" | undefined,
   style: ApiConfig["style"],
   local?: LocalOptions,
-): { text: string; after: ReturnType<typeof aiScore>; bestOf: RunResult["bestOf"] } {
+  collectTrace?: boolean,
+): {
+  text: string;
+  after: ReturnType<typeof aiScore>;
+  bestOf: RunResult["bestOf"];
+  trace?: PipelineTrace;
+} {
   if (local?.bestOf) {
     const r = humanizeBestOf(text, {
       intensity,
@@ -69,10 +85,28 @@ function runLocal(
       genre,
       candidates: local.candidates,
     });
+    // 多候选择优：N 个候选各自跑完整条流水线，逐步记录会互相穿插，
+    // 这里刻意不产出 trace（UI 侧说明原因，而不是给一份会误导人的合并记录）
     return {
       text: r.text,
       after: r.after,
       bestOf: { tried: r.tried, rejected: r.rejected, seed: r.seed },
+    };
+  }
+  if (collectTrace) {
+    const events: StageTrace[] = [];
+    const out = humanize(text, {
+      intensity,
+      zhuqueMode,
+      style,
+      genre,
+      onStage: (s: StageTrace) => events.push(s),
+    });
+    return {
+      text: out,
+      after: aiScore(out),
+      bestOf: undefined,
+      trace: aggregateStages(events, text.length, out.length),
     };
   }
   const out = humanize(text, { intensity, zhuqueMode, style, genre });
@@ -88,6 +122,11 @@ export async function runHumanize(
   zhuqueMode?: boolean,
   genre?: "main" | "narrative" | "dialogue" | "humanHand",
   local?: LocalOptions,
+  /**
+   * v0.9.47：收集本地引擎的流水线 trace（默认 false = 不收集，零开销）。
+   * UI 要展示"引擎到底做了什么"时传 true；LLM 路径与择优模式不会产出。
+   */
+  collectTrace?: boolean,
 ): Promise<RunResult> {
   const before = aiScore(text);
   // v0.9.4 P1 边界守卫：超短文本透传。实测「短。」发给 LLM 被当成用户指令，
@@ -113,6 +152,7 @@ export async function runHumanize(
   let roundScores: number[] = [];
   let bestOf: RunResult["bestOf"];
   let shrinkRatio: number | undefined;
+  let trace: PipelineTrace | undefined;
 
   if (cfg.enabled && effectiveKeys(cfg).length > 0) {
     try {
@@ -251,9 +291,10 @@ export async function runHumanize(
       }
     } catch (e: unknown) {
       // 回退本地引擎时同样尊重择优设置
-      const r = runLocal(text, intensity, zhuqueMode, genre, cfg.style, local);
+      const r = runLocal(text, intensity, zhuqueMode, genre, cfg.style, local, collectTrace);
       outText = r.text;
       bestOf = r.bestOf;
+      trace = r.trace;
       engine = "local";
       // v0.9.14：编造否决与"API 失败"是两件事，必须分开说——前者是我们主动拦下
       // 一份有事实性新增的稿（用户该知道 LLM 稿被拒收），后者是通路故障。
@@ -268,9 +309,10 @@ export async function runHumanize(
         : `API 调用失败，已回退本地引擎：${errMsg(e)}`;
     }
   } else {
-    const r = runLocal(text, intensity, zhuqueMode, genre, cfg.style, local);
+    const r = runLocal(text, intensity, zhuqueMode, genre, cfg.style, local, collectTrace);
     outText = r.text;
     bestOf = r.bestOf;
+    trace = r.trace;
     degrade.push("未启用 API 或无可用 Key，本稿由本地引擎产出（非 LLM）");
   }
 
@@ -299,5 +341,6 @@ export async function runHumanize(
     roundScores,
     bestOf,
     shrinkRatio,
+    ...(trace === undefined ? {} : { trace }),
   };
 }

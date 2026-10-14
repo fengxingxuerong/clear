@@ -312,6 +312,32 @@ describe("fixOrphanConnectiveLeads：残句合并两侧（338-346）", () => {
     // 含文字的超短残段仍照常合并（守卫只挡"不含词字符"的纯标点段）
     expect(fixOrphanConnectiveLeads("张三说得对。他也这么认为")).toBe("张三说得对，他也这么认为");
   });
+
+  it("v0.9.47：跨段落的残句不合并——段间空行不得被 trim 吃掉", () => {
+    // 实证（scripts/realcase C7-story-dialogue，强度 0.9 / seed 20261015）：
+    //   段首片段形如 "\n\n决定了。"，trimmed 去掉前导换行后走进合并模板，
+    //   拼回时用的是 trimmed ⇒ 段间空行蒸发 ⇒ 原文的 6 段被焊成 5 段。
+    // 修复前返回 "...一片一片，决定了。"，段数 −1。
+    const src = "她站在窗边看雨。\n\n决定了。她说完就挂了电话。";
+    expect(fixOrphanConnectiveLeads(src)).toBe(src);
+    expect(fixOrphanConnectiveLeads(src).split(/\n\n+/)).toHaveLength(2);
+  });
+
+  it("v0.9.47 端到端：对话体语料经整条管线后段落数不减", () => {
+    // 与上面的单元测试互补：单测验函数，这里验"整条管线里它真的被拦住了"。
+    // 二分证据：强度 0.50 保持 6 段、0.55 起变 5 段 —— 与 `intensity >= 0.55`
+    // 的调用门槛精确对齐；改 narrative（跳过结构层）仍 5 段 ⇒ 排除结构层。
+    // 语料取自入库的 cases.json（不依赖 out/ —— 那是跑测产物，CI 干净检出上没有）
+    const cases = JSON.parse(
+      readFileSync(new URL("../../scripts/realcase/cases.json", import.meta.url), "utf-8"),
+    ) as { cases: { id: string; text: string }[] };
+    const c7 = cases.cases.find((c) => c.id === "C7-story-dialogue");
+    expect(c7, "cases.json 里必须有 C7 对话体语料").toBeTruthy();
+    const before = c7!.text.trim();
+    const paras = (s: string): number => s.split(/\n+/).filter((p) => p.trim()).length;
+    const out = humanize(before, { intensity: 0.9, seed: 20261015 });
+    expect(paras(out)).toBe(paras(before));
+  });
 });
 
 /**

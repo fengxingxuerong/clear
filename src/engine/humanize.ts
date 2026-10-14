@@ -71,7 +71,12 @@ import {
   clampAvgSentenceLenUnder25,
 } from "./humanize-shuffle.ts";
 
-import { countPadHeads, PAD_INJECT_CAP, REPORTING_DAO_RE } from "./humanize-primitives.ts";
+import {
+  countPadHeads,
+  PAD_INJECT_CAP,
+  REPORTING_DAO_RE,
+  type StageTrace,
+} from "./humanize-primitives.ts";
 
 import {
   aiScore,
@@ -134,6 +139,7 @@ export type {
   FingerprintReport,
   FingerprintIssue,
   FidelityReport,
+  StageTrace,
 };
 
 /* ----------------------------- 常量：概率 / 阈值 ----------------------------- */
@@ -410,6 +416,43 @@ export const DIR_MODIFIER_VERB_CLASH_RE =
 const ABSTRACT_OBJECT_RE =
   /^[\s\S]{0,12}(?:框架|机制|体系|格局|价值|水平|质量|效率|意义|能力|模式|结构|制度|规范|标准|流程|生态|共识|关系|布局|目标|任务|要求|原则|方针|政策|战略|愿景|理念|文化|氛围|环境|条件|基础|保障|支撑|引领|指导|监管|治理|服务|管理|评价|评估|指标|模型|方法|方案|路径|思路|逻辑|规则|秩序|信誉|口碑|信任|权威|优势|潜力|空间|机遇|挑战|风险|压力|动力|活力|合力|效力|影响力|竞争力|凝聚力|创造力|生产力|法律法规|法律|法规|法令|条例|规章|纪律|规矩|公约|条约)/;
 
+/**
+ * v0.9.46：正式语体下**不得采用**的口语替身（按"替身"而不是源词冻结）。
+ *
+ * 为什么是这张表：此前的处置方式是"事后打补丁"——先在 VOCAB 层把「努力」换成「使劲」、
+ * 把「围绕」换成「环绕」，再靠 anti-fingerprint 的 FORMAL_RESTORE（和 v0.9.46 新增的
+ * fixBrokenCollocations）把它们在正式语体下改回来。问题是补丁必须逐条写、且只在
+ * formal 门控打开时跑；真实案例 C1（季度工作总结）实测照样产出「使劲在下一季度取得」
+ * 「紧紧环绕公司年度战略目标」「主要看得出来在跨部门…」——说明补丁既不全也太晚。
+ *
+ * 治本：在**替换阶段**就把这些替身否掉，该处保留原词。
+ * 取舍：宁可少改一处，不可先改成病句再指望下游救回来（与项目既定方针同向）。
+ *
+ * 收词口径（不自造新判断）：只收**当前真在 VOCAB 候选里**的替身。
+ * 由 `vocab-formal-substitutes.test.ts` 自动校验这张表的两项合法性：
+ *   ① 每个词必须在某个 VOCAB 词条的候选里出现（否则写了也拦不住任何东西）；
+ *   ② 每个词要么已被 FORMAL_RESTORE 还原、要么有真实案例实证。
+ *
+ * ⚠️ 初版曾把 FORMAL_RESTORE 的 9 个目标词（死磕/摆平/捋顺/弄全/兜好/盯紧/把牢/兜住/搭起）
+ *    一起抄进来，被第 ① 条当场抓出：**它们早已从 VOCAB 整条删除**（见 humanize-vocab.ts 的
+ *    "构筑/完善"词条注释），FORMAL_RESTORE 里那些规则是历史保险。抄进来只会让表看起来很全、
+ *    实际一个都拦不住。 ⇒ 教训：表必须从"当前词表"倒推，不能从"补丁表"顺推。
+ *
+ * ⚠️ 实现要点：只**否决**结果、不重新挑选，也不额外消耗 rng。
+ *    原实现注释明确写着"每个命中位置无条件消耗一次 rng"，与其配套的所有 lithium
+ *    （regression-12 / quality / bestof）都按这个序列复现；多调一次 pick 会让全仓 seed
+ *    敏感断言整体漂移。
+ */
+export const FORMAL_FORBIDDEN_SUBSTITUTES = new Set([
+  // —— FORMAL_RESTORE 已经在还原的（且当前 VOCAB 里仍然存在的）——
+  "拔高",
+  "稳当",
+  // —— 本轮真实案例新增（scripts/realcase C1 季度工作总结实测产出）——
+  "使劲", // 努力 → 使劲：「使劲在下一季度取得更加优异的成绩」——总结体里的语体崩
+  "环绕", // 围绕 → 环绕：「紧紧环绕公司年度战略目标」——FORMAL_RESTORE 只写了「环绕年度」这一组合
+  "看得出来", // 体现 → 看得出来：「主要看得出来在跨部门…」——谓词位置的错配
+]);
+
 /** v0.9 专家修复 P5：academic 文风下禁止的口语替身（书面语体错位签名）。
  *  按源词建白名单表——源词在这些学术语义词上不得替换成口语替身。 */
 const ACADEMIC_FROZEN = new Set([
@@ -455,9 +498,12 @@ function replaceVocab(
   rng: () => number,
   intensity: number,
   style: RewriteStyle = "casual",
+  /** 正式语体（main / academic）：VOCAB 的口语替身在替换阶段直接否掉，见 FORMAL_FORBIDDEN_SUBSTITUTES */
+  formal = false,
 ): string {
   const p = intensity <= 0 ? 0 : Math.min(1, REPLACE_VOCAB_BASE + REPLACE_VOCAB_SLOPE * intensity);
   const academic = style === "academic";
+  const formalSubstituteBlocked = formal || academic;
   let base = text;
   for (const [from, candidates] of REPLACE_VOCAB_CANDIDATES) {
     let idx = base.indexOf(from);
@@ -538,6 +584,9 @@ function replaceVocab(
         // v0.9.31：方向修饰语 + 行为动词 = 搭配不当（见 DIR_MODIFIER_VERB_CLASH_RE 注释）。
         // 只测 `替身 + 右邻 2 字`：够判定"正向"后面接的是不是行为动词。
         const clashDirVerb = DIR_MODIFIER_VERB_CLASH_RE.test(rep + base.slice(end, end + 2));
+        // v0.9.46 正式语体守卫：口语替身在替换阶段就否掉（详见 FORMAL_FORBIDDEN_SUBSTITUTES）。
+        // ⚠️ 只否决、不重挑：pick 已消耗过 rng，再调一次会让全仓 seed 敏感断言整体漂移。
+        const clashFormalSub = formalSubstituteBlocked && FORMAL_FORBIDDEN_SUBSTITUTES.has(rep);
         if (
           rep &&
           !cascade &&
@@ -545,7 +594,8 @@ function replaceVocab(
           !clashLeft &&
           !clashAbstract &&
           !clashParticle &&
-          !clashDirVerb
+          !clashDirVerb &&
+          !clashFormalSub
         )
           hits.push({ at: idx, rep });
       }
@@ -820,23 +870,116 @@ function replaceTemplates(text: string, rng: () => number, intensity: number): s
   return result;
 }
 
+/* --------------------- 流水线可观测：trace 发射器 --------------------- */
+
+/**
+ * 计时源：浏览器与 Node 都有 performance；被裁掉的环境退回 Date.now。
+ * 只在 opts.onStage 存在时才调用 —— 不传回调时这些代码路径根本不会执行。
+ */
+const nowMs = (): number =>
+  typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
+
+/** 快照截断长度：够看清这一步动了哪里，又不至于把整篇原文塞进 trace */
+const TRACE_SNIPPET_LEN = 120;
+
+/** 发射一条阶段记录（onStage 未传时整体跳过，零开销） */
+function emitStage(
+  on: ((s: StageTrace) => void) | undefined,
+  st: Omit<StageTrace, "ms" | "charsAfter" | "snippet">,
+  t0: number,
+  after: string,
+): void {
+  if (!on) return;
+  on({
+    ...st,
+    ms: Math.round((nowMs() - t0) * 1000) / 1000,
+    charsAfter: after.length,
+    snippet: after.slice(0, TRACE_SNIPPET_LEN),
+  });
+}
+
+/**
+ * 词表命中计数：统计文本里出现的所有 VOCAB 词表词的总次数。
+ * 只在开 trace 时调用（全表扫描有成本），用来给出「本步替换了几处」的真实数字。
+ */
+function countVocabTokens(text: string): number {
+  let n = 0;
+  for (const k of VOCAB_KEY_SET) {
+    let i = text.indexOf(k);
+    while (i !== -1) {
+      n++;
+      i = text.indexOf(k, i + k.length);
+    }
+  }
+  return n;
+}
+
 /* ----------------------------- 主流程 ----------------------------- */
 
 /** 入口：按段落拆分逐段处理、保留原文分段 */
 export function humanize(text: string, opts: HumanizeOptions = {}): string {
-  if (!text || !text.trim()) return "";
+  const onStage = opts.onStage;
+  if (!text || !text.trim()) {
+    if (onStage)
+      emitStage(
+        onStage,
+        {
+          id: "guard",
+          name: "入口守卫",
+          why: "空文本没有可去味的内容，直接返回原样，避免下游 pass 在空串上造出垃圾。",
+          charsBefore: text?.length ?? 0,
+          skipped: true,
+        },
+        nowMs(),
+        "",
+      );
+    return "";
+  }
   // v0.9.4 P1 边界守卫：超短文本透传。实测「短。」（3 字符）经整条管线后被清成
   // 空串（替换/删除类 pass 在孤词上无东西可保，最终输出丢失原文）——数据丢失级
   // 边界 bug。10 字以内没有"去味"的空间与必要，原样返回最安全。
-  if (text.replace(/\s+/g, "").length < 10) return text;
+  if (text.replace(/\s+/g, "").length < 10) {
+    if (onStage)
+      emitStage(
+        onStage,
+        {
+          id: "guard",
+          name: "入口守卫 · 超短透传",
+          why: "去掉空白不足 10 字：这么短的文本经整条管线后会被清成空串（实测「短。」3 字符触发），没有去味空间，原样返回最安全。",
+          charsBefore: text.length,
+          skipped: true,
+        },
+        nowMs(),
+        text,
+      );
+    return text;
+  }
   // v0.8.6：强度=0 必须严格返回原文。之前所有 pass 都按概率 0 跳过，
   // 但最后几道确定性兜底（stripAICliches / stripLeadingConnectivesHard /
   // clampAvgSentenceLenUnder25 / replaceGuardedFormulaicDerivs 等）不关心强度，
   // 会删掉"值得注意的是/然而/因此"这类连接词、切长句、替换"有效性→实际效果"，
   // 导致用户选 0 时原文仍被改写。在入口直接短路，语义最直观。
   const rawIntensity = opts.intensity ?? 0.6;
-  if (rawIntensity <= 0) return text;
+  if (rawIntensity <= 0) {
+    if (onStage)
+      emitStage(
+        onStage,
+        {
+          id: "guard",
+          name: "入口守卫 · 强度为 0",
+          why: "强度=0 必须严格返回原文。下游有几道确定性兜底（stripAICliches 等）不关心强度，不在此短路的话用户选 0 仍会被改写。",
+          charsBefore: text.length,
+          skipped: true,
+        },
+        nowMs(),
+        text,
+      );
+    return text;
+  }
   // P7-A：体裁判定——显式 opts.genre 优先，否则自动识别（纯人写不自动判，必须用户显式传 humanHand）
+  const tGenre = nowMs();
   const classified = opts.genre ? null : classifyGenre(text);
   let effectiveGenre: EffectiveGenre = opts.genre ?? classified!.genre;
   // v0.9.45 防御：自动识别把**非对话文本**判成 dialogue 时降级为 main。
@@ -864,12 +1007,30 @@ export function humanize(text: string, opts: HumanizeOptions = {}): string {
   ) {
     effectiveGenre = "main";
   }
+  if (onStage) {
+    const f = classified?.features;
+    emitStage(
+      onStage,
+      {
+        id: "genre",
+        name: `体裁判定 → ${effectiveGenre}`,
+        why: "体裁决定后面每一层的旋钮：注入什么、句长切多短、要不要动结构。判错体裁会在书面稿上塞口语，所以对自动识别的 dialogue 还有一道降级兜底。",
+        charsBefore: text.length,
+        metric: f
+          ? `引语率 ${f.dlgQuoteRatio.toFixed(3)} · 短对话轮 ${f.dlgShortTurn} · 场景块 ${f.dlgSceneBlockRatio} · 冒号率 ${f.dlgColonRatio.toFixed(3)}`
+          : "显式指定体裁，未跑自动识别",
+      },
+      tGenre,
+      text,
+    );
+  }
   const knobs = getGenreKnobs(effectiveGenre);
   // P7-D：humanHand 强约束——强度硬钳制到 ≤0.48（该体裁斜率为负，越去味官分越高）
   const intensity = Math.min(Math.max(0, Math.min(1, opts.intensity ?? 0.6)), knobs.intensityCap);
   // P7-D：humanHand 强制关闭朱雀增强
   const zhuqueOn = (opts.zhuqueMode ?? false) && !knobs.disableZhuque;
   const paragraphs = text.split(/\n+/).filter((p) => p.trim());
+  const tPara = nowMs();
   let result: string;
   if (paragraphs.length <= 1) {
     result = humanizeSingle(text, { ...opts, intensity, genre: effectiveGenre });
@@ -881,21 +1042,66 @@ export function humanize(text: string, opts: HumanizeOptions = {}): string {
           ...opts,
           intensity,
           genre: effectiveGenre,
+          para: i,
           seed: baseSeed === undefined ? undefined : (baseSeed + i * 2654435761) >>> 0,
         }),
       )
       .join("\n\n");
   }
+  if (onStage)
+    emitStage(
+      onStage,
+      {
+        id: "para",
+        name: `段落级改写（${paragraphs.length} 段）`,
+        why: "整篇按段落切开逐段跑：段与段之间不共享注入上下文，才不会把同一条垫词/自问自答模板连着塞两遍。多段时每段派生独立种子，保证结果可复现。",
+        charsBefore: text.length,
+        metric:
+          paragraphs.length > 1
+            ? `${paragraphs.length} 段各自派生种子（seed + i×2654435761）`
+            : "单段文本，走直通分支",
+      },
+      tPara,
+      result,
+    );
 
   // 朱雀增强模式（全文本级）——P7-D humanHand 强制关闭；P7-E 对话体场景块跳过自问自答
   // v0.9.1：narrative/humanHand 跳过自问自答+碎片注入（"例子呢？"不属于叙事/人写原稿）
   // v0.9.4 P2：垫词饱和守卫——输入已被垫词塞满（多轮处理/高度口语）时不再注入
+  const tZq = nowMs();
+  let zqRan = false;
   if (zhuqueOn && intensity >= 0.35 && countPadHeads(text) < PAD_INJECT_CAP) {
     // v0.9.8 P0 收敛（七）：兜底风格 casual → plain（与 DEFAULT_API.style 对齐）。
     result = applyZhuqueFeatures(result, intensity, opts.seed, opts.style ?? "plain", {
       skipSceneInject: knobs.skipSceneInject,
       skipSelfQA: knobs.skipSelfQA,
     });
+    zqRan = true;
+  }
+  if (onStage) {
+    let metric = "注入插话 / 观点短语 / 括号自语 / 自问自答等反检测特征";
+    let skipped = false;
+    if (!zqRan) {
+      skipped = true;
+      metric = !zhuqueOn
+        ? "未开启朱雀增强"
+        : intensity < 0.35
+          ? `强度 ${intensity.toFixed(2)} < 0.35，按设计不注入`
+          : `原文垫词已饱和（≥ ${PAD_INJECT_CAP} 处），本轮不再注入`;
+    }
+    emitStage(
+      onStage,
+      {
+        id: "zhuque",
+        name: skipped ? "朱雀增强（跳过）" : "朱雀增强",
+        why: "在改写稿上叠加检测器统计层面的反特征。它只加「人味特征」、不碰语义；跑不跑由开关、强度、垫词饱和三道门控共同决定。",
+        charsBefore: text.length,
+        metric,
+        skipped,
+      },
+      tZq,
+      result,
+    );
   }
 
   // v0.8 结构级：本地引擎跑完后做二次扫荡（强度 >= 0.55），对段落骨架再动刀
@@ -915,6 +1121,7 @@ export function humanize(text: string, opts: HumanizeOptions = {}): string {
   // 代价评估：跳过结构层会少一个"骨架打散"手段，但叙事/人写本来就不靠这个——
   //   实测叙事全档位 aiScore 已是 0~17（低于判定线 29），去掉后不产生新缺口。
   const structuralAllowedGenre = effectiveGenre !== "narrative" && effectiveGenre !== "humanHand";
+  const tStruct = nowMs();
   if (intensity >= 0.55 && structuralAllowedGenre) {
     const structRng = makeRng(opts.seed, 5555);
     // P7-B：论说文 + 强度≥0.75 → 强制开启 P3 结构增强（覆盖 expoScore 略低于 0.55 的边缘论说文）
@@ -949,11 +1156,44 @@ export function humanize(text: string, opts: HumanizeOptions = {}): string {
       result = injectHumanTypos(result, structRng, intensity);
     }
   }
+  if (onStage)
+    emitStage(
+      onStage,
+      {
+        id: "structure",
+        name: intensity >= 0.55 && structuralAllowedGenre ? "结构层扫荡" : "结构层扫荡（跳过）",
+        why: "对段落骨架再动刀：拆三段式、破排比、打散总-分-总。叙事/人写体裁整体跳过——原文的断句与分段是作者的表达，动它属于破坏性改写，不是去 AI 味。",
+        charsBefore: text.length,
+        metric:
+          intensity >= 0.55 && structuralAllowedGenre
+            ? "拆解论说文骨架 + 段落重排 + 错别字锚点"
+            : intensity < 0.55
+              ? `强度 ${intensity.toFixed(2)} < 0.55，不动结构`
+              : `体裁 ${effectiveGenre} 按设计跳过结构层`,
+        skipped: !(intensity >= 0.55 && structuralAllowedGenre),
+      },
+      tStruct,
+      result,
+    );
 
   // 全文级垫词去重
+  const tDedupe = nowMs();
   result = dedupePadWords(result);
+  if (onStage)
+    emitStage(
+      onStage,
+      {
+        id: "dedupe",
+        name: "垫词去重",
+        why: "多个注入器各撒各的，全文级再收一次口：垫词密集处去重，避免「说真的，…坦白讲，」连发。",
+        charsBefore: text.length,
+      },
+      tDedupe,
+      result,
+    );
 
   // 全文级句长节奏兜底
+  const tRhythm = nowMs();
   if (intensity > 0.4) {
     const rng3 = makeRng(opts.seed, 4444);
     // v0.9.8 P0 修复：废除 boostBurstiness 的「短碎片句」注入（boostBurstinessFragments）。
@@ -985,10 +1225,40 @@ export function humanize(text: string, opts: HumanizeOptions = {}): string {
           .join("\n\n")
       : boostBurstinessByCutting(result, 0.55, 8);
   }
+  if (onStage)
+    emitStage(
+      onStage,
+      {
+        id: "rhythm",
+        name: intensity > 0.4 ? "句长节奏兜底" : "句长节奏兜底（跳过）",
+        why: "AI 文本最稳的 statistical 痕迹之一是句长过于均匀。这里只切长句、零注入——靠长短句交错补方差，不引任何新的人造痕迹。",
+        charsBefore: text.length,
+        metric:
+          intensity > 0.4
+            ? `逐段切长句（目标 CV 0.55）· 原句数 ${splitSentences(result).length}`
+            : `强度 ${intensity.toFixed(2)} ≤ 0.4，不动节奏`,
+        skipped: !(intensity > 0.4),
+      },
+      tRhythm,
+      result,
+    );
 
   // v3 P4+P5 最终清尾（必须放在所有结构/自问自答生成之后）——
   // P4-C：VOCAB GUARD 保护的"针对→性/系统→性/有效→性"等合法套话衍生，保语义整体替换为口语
+  const tDerivs = nowMs();
   result = replaceGuardedFormulaicDerivs(result);
+  if (onStage)
+    emitStage(
+      onStage,
+      {
+        id: "derivs",
+        name: "套话衍生词替换",
+        why: "「有效性/系统性/针对性」这类派生词被上游保护逻辑放过了（整词合法），但它们在书面稿里同样成套话。这里保语义整体替换成口语。",
+        charsBefore: text.length,
+      },
+      tDerivs,
+      result,
+    );
   // v0.9 反「新指纹」层：引擎注入特征不得变成新指纹
   //  A) 长模板跨段复读封顶（自问自答/插话模板全文每种限 1 次，仅在注入强度 ≥0.65 时启用）
   if (intensity >= 0.65) {
@@ -1002,6 +1272,19 @@ export function humanize(text: string, opts: HumanizeOptions = {}): string {
   //      顺序颠倒会让这里的搭配判定失去对象。
   result = fixBrokenCollocations(result);
   result = collapseDoubleConnectives(result);
+  if (onStage)
+    emitStage(
+      onStage,
+      {
+        id: "antifp",
+        name: "反「新指纹」层",
+        why: "引擎自己注入的特征不能变成新指纹。这一层做四件事：长模板跨段复读封顶、正式语体还原过度口语的替换、修复坏搭配（「借在…上」）、折叠叠放的连接词与语气词。",
+        charsBefore: text.length,
+        metric: `语体门控 ${formalRegister ? "开（正式语体，还原口语替身）" : "关（非书面体裁）"} · 模板封顶 ${intensity >= 0.65 ? "启用" : `未启用（强度 ${intensity.toFixed(2)} < 0.65）`}`,
+      },
+      tDerivs,
+      result,
+    );
   //  C) v0.9.5 P4 双语气词折叠：多个注入 pass 叠加时句尾出现"呀呀""嘛嗯""呢呵"
   //  式堆叠（Phase1 迭代实测），真人不会连发两个语气词。相邻重复折叠为一个，
   //  相邻异形双语气词保留第一个；"好吧/行吧/哦对"等合法组合不受影响
@@ -1016,6 +1299,7 @@ export function humanize(text: string, opts: HumanizeOptions = {}): string {
   // P7-C + P5-A：按体裁压 avgLen（论说23 / 叙事28 / 对话32 / 人写36 不触发硬切）
   // v0.9 专家修复 P2 连带：切点守卫收紧后长句切分机会变少，maxCuts 5→8 补偿——
   // 只放宽「尝试次数」，每刀仍逐点过守卫，不会切出残句
+  const tClamp0 = nowMs();
   result = clampAvgSentenceLenUnder25(result, knobs.avgLenTarget, 8);
   // P7-C + P4-B（P5 增强版）：按体裁拉 burstiness CV（论说0.63 / 叙事0.59 / 对话0.57 / 人写0.50）
   //       （原全局固定 0.61 → 现按体裁分档，论说最严、人写最松，避免负斜率体裁被过度注入锚点）
@@ -1023,6 +1307,19 @@ export function humanize(text: string, opts: HumanizeOptions = {}): string {
   result = ensureEmDashCountHardCap(result, 1);
   result = limitPunctuation(result, "……", 1, "。");
   result = limitPunctuation(result, "——", 1, "，");
+  if (onStage)
+    emitStage(
+      onStage,
+      {
+        id: "clamp",
+        name: "句长钳制 + 标点硬上限",
+        why: "按体裁目标压平均句长（论说 23 / 叙事 28 / 对话 32 / 人写 36），并给破折号、省略号设整篇硬上限——这两样一旦超标就是一眼可见的机器痕迹。",
+        charsBefore: text.length,
+        metric: `avgLen 目标 ${knobs.avgLenTarget} 字 · 破折号/省略号各限 1 处`,
+      },
+      tClamp0,
+      result,
+    );
   // v0.8.8：独立极短语气句密度收口（每段 ≤1）——v0.9 专家修复 P3：门槛 0.75→0.5。
   // 实测 0.5/0.6 档输出同样出现段尾「嗯。啧。」成串（多注入器叠加不分档位），
   // 收口只删超额语气句、不动正常短句，低强度下也安全。
@@ -1084,7 +1381,21 @@ export function humanize(text: string, opts: HumanizeOptions = {}): string {
         : boostBurstinessByCutting(result, 0.55, 8);
     }
   }
+  if (onStage)
+    emitStage(
+      onStage,
+      {
+        id: "burst",
+        name: "节奏收口 + 语气句密度",
+        why: "先删超额极短语气句（防止段尾「嗯。啧。」成串），再用纯切句把 CV 拉回指纹红线之上。删完再补、补完再删，两个目标靠「只切句、零注入」才不再互相拉锯。",
+        charsBefore: text.length,
+        metric: `当前 CV ${burstinessOf(result).toFixed(3)}（指纹红线 0.45）· 目标 ${knobs.burstTarget}`,
+      },
+      tClamp0,
+      result,
+    );
   // 行首残留标点清理（结构重排/模板删除可留下「，一句话概括」式残逗号）
+  const tFinal = nowMs();
   result = result
     .replace(/(^|\n)\s*[，、；：]+/g, "$1")
     .replace(/([。！？])\s*([，、；：]+)/g, "$1");
@@ -1104,6 +1415,19 @@ export function humanize(text: string, opts: HumanizeOptions = {}): string {
     /(^|\n)(首先|其次|再次|再说|另外|此外|总的来看|总而言之|总的说来|最后|其一|其二)[。！？]/g,
     (_m: string, lead: string, word: string) => lead + word + "，",
   );
+  if (onStage)
+    emitStage(
+      onStage,
+      {
+        id: "final",
+        name: "清尾",
+        why: "清掉前面所有 pass 留下的行首残标点，并把「其次。」这类被切出去的骨架独句还原成逗号——骨架词的作用是引导后文，独立成句是机器痕迹。",
+        charsBefore: text.length,
+        metric: `输出 ${result.length} 字 · ${splitSentences(result).length} 句`,
+      },
+      tFinal,
+      result,
+    );
 
   return result;
 }
@@ -1253,29 +1577,159 @@ function humanizeSingle(text: string, opts: HumanizeOptions = {}): string {
 
   if (!text || !text.trim()) return "";
 
+  // trace：段落级步骤发射器。
+  // 把上一步的输出长度当成本步的输入长度串起来，逐段逐步骤产出真实快照。
+  // ⚠️ 未传 onStage 时 `t0` 连算都不算（三元短路），只多一层函数调用，输出逐字不变。
+  const on = opts.onStage;
+  const para = opts.para;
+  let prev = text;
+  // fn 刻意做成**无参**thunk：调用处直接读外层 working，
+  // 这样每一步的赋值都是"下一步真会读"的活值（而不是被 eslint 判成死存储的中间量）。
+  const step = (
+    id: string,
+    name: string,
+    why: string,
+    fn: () => string,
+    metric?: string,
+  ): string => {
+    const b = prev;
+    const t0 = on ? nowMs() : 0;
+    const after = fn();
+    prev = after;
+    if (!on) return after;
+    emitStage(
+      on,
+      {
+        id,
+        name,
+        why,
+        charsBefore: b.length,
+        ...(metric === undefined ? {} : { metric }),
+        ...(para === undefined ? {} : { para }),
+      },
+      t0,
+      after,
+    );
+    return after;
+  };
+
   // P8 场景块全格式保真：整段为剧本【场景/人物/背景…】块头行 → 原样返回。
   // 块头是元数据不是行文：relaxColon 会改成【场景，…】、replaceVocab/templates 也会污染。
-  if (isSceneBlockLine(text)) return text;
+  if (isSceneBlockLine(text)) {
+    if (on)
+      emitStage(
+        on,
+        {
+          id: "scene-block",
+          name: "场景块全格式保真",
+          why: "整段是剧本【场景/人物/背景】块头行。块头是元数据不是行文，任何替换都会破坏剧本格式，原样返回。",
+          charsBefore: text.length,
+          ...(para === undefined ? {} : { para }),
+        },
+        nowMs(),
+        text,
+      );
+    return text;
+  }
 
   // 1) 全局词汇替换 + 套话
-  let working = dropLeadingConnectives(text, rng, intensity);
-  working = relaxRedundantVerb(working, rng, 0.85 * intensity);
-  working = relaxIntensifierVerb(working, rng, 0.85 * intensity);
-  working = relaxLe(working, rng, 0.6 * intensity); // 补"了"概率从 0.4 提到 0.6，人味更强
+  let working = step(
+    "conn",
+    "删句首连接词",
+    "「然而 / 因此 / 与此同时」这类句首连接词是 AI 论说文最稳定的痕迹——真人起句多半直入正题，不垫过渡。",
+    () => dropLeadingConnectives(text, rng, intensity),
+  );
+  working = step(
+    "redundant",
+    "去冗余动词",
+    "「进行 / 予以 / 加以 + 动词」是公文式冗余，去掉后动词直接落地，句子立刻短一截。",
+    () => relaxRedundantVerb(working, rng, 0.85 * intensity),
+  );
+  working = step(
+    "intensifier",
+    "拆强化副词",
+    "「大幅提升 / 不断优化」这类「副词+动词」固定搭配过于规整，按概率拆掉副词，节奏才会参差不齐。",
+    () => relaxIntensifierVerb(working, rng, 0.85 * intensity),
+  );
+  working = step(
+    "le",
+    "补完成态「了」",
+    "AI 文本极少使用完成态。按概率补「了」，让叙述有时态落点。",
+    () => relaxLe(working, rng, 0.6 * intensity), // 补"了"概率从 0.4 提到 0.6，人味更强
+  );
   // 必须排在 replaceVocab 之前：否则"受到广泛关注"的"关注"先被换成"留意"，
   // 这里再也匹配不到，实测会留下"受到广泛留意"这种搭配病句。
-  working = softenPassive(working, rng, Math.min(1, 0.85 * intensity));
-  working = replaceTemplates(working, rng, intensity);
-  working = replaceVocab(working, rng, intensity, style);
-  working = replaceWithDevelopment(working, rng, intensity);
-  working = reframeConcessives(working, rng, Math.min(1, 0.5 + 0.5 * intensity));
-  working = relaxEmDash(working, rng, 0.6 * intensity);
-  working = relaxDunhao(working, rng, 0.5 * intensity);
-  working = relaxColon(working, rng, 0.4 * intensity);
-  working = relaxQuotes(working, rng, 0.3 * intensity);
-  working = splitOnConnectors(working, rng, 0.3 * intensity);
+  working = step(
+    "passive",
+    "被动改主动",
+    "「受到广泛关注」这类被动句是书面腔的显著特征，改回主动。必须排在词汇替换之前——顺序颠倒会留下「受到广泛留意」这类搭配病句。",
+    () => softenPassive(working, rng, Math.min(1, 0.85 * intensity)),
+  );
+  working = step(
+    "template",
+    "模板套话改写",
+    "整句级模板替换：「值得注意的是…」「综上所述…」这类开场套式按表改写，比逐词替换更贴近真人起笔方式。",
+    () => replaceTemplates(working, rng, intensity),
+  );
+  // v0.9.46：正式语体 = main / academic（与 guardFormalRegister 完全同口径）。
+  // 传给 replaceVocab 后，口语替身就地否掉，不再走"先改成病句、再靠下游还原"的老路。
+  const formalRegister = opts.genre === "main" || style === "academic";
+  // 词汇替换要给出真实命中数：本步单独手写 emit（step 的 metric 是静态串，这里需要前后计数差）
+  {
+    const b = working;
+    const t0 = on ? nowMs() : 0;
+    const before = on ? countVocabTokens(b) : 0;
+    working = replaceVocab(b, rng, intensity, style, formalRegister);
+    prev = working;
+    if (on) {
+      const hits = Math.max(0, before - countVocabTokens(working));
+      emitStage(
+        on,
+        {
+          id: "vocab",
+          name: "词汇替换",
+          why: "词表级替换。正式语体（main / academic）下口语替身会被就地否掉——不从「先改成病句再靠下游还原」的老路走，而是源头就否掉。",
+          charsBefore: b.length,
+          metric: `词表词减少 ${hits} 处${formalRegister ? " · 正式语体门控已开" : ""}`,
+          ...(para === undefined ? {} : { para }),
+        },
+        t0,
+        working,
+      );
+    }
+  }
+  working = step(
+    "dev",
+    "「随着…的发展」改写",
+    "「随着人工智能技术的发展」这类开场套式单独处理——它是整段级结构，逐词替换拆不动。",
+    () => replaceWithDevelopment(working, rng, intensity),
+  );
+  working = step(
+    "concessive",
+    "让步结构重构",
+    "「虽然…但是」的让步结构换写法，避免通篇一种句式。",
+    () => reframeConcessives(working, rng, Math.min(1, 0.5 + 0.5 * intensity)),
+  );
+  working = step(
+    "punct",
+    "标点松弛",
+    "破折号、顿号、冒号、引号按概率换成更口语的形态。AI 的标点过于规整本身就是可检测特征。",
+    () => {
+      let r = relaxEmDash(working, rng, 0.6 * intensity);
+      r = relaxDunhao(r, rng, 0.5 * intensity);
+      r = relaxColon(r, rng, 0.4 * intensity);
+      return relaxQuotes(r, rng, 0.3 * intensity);
+    },
+  );
+  working = step(
+    "splitconn",
+    "连接词处切句",
+    "长句里的连接词处按概率断开成两句，制造长短交错——这是句长方差的主要来源之一。",
+    () => splitOnConnectors(working, rng, 0.3 * intensity),
+  );
 
   // 2) 切句，逐句处理
+  const tSent = on ? nowMs() : 0;
   const sentences = splitSentences(working);
   const out: string[] = [];
   const usedInterjections = new Set<string>();
@@ -1485,7 +1939,23 @@ function humanizeSingle(text: string, opts: HumanizeOptions = {}): string {
     out.push(s);
   }
 
+  if (on)
+    emitStage(
+      on,
+      {
+        id: "sentence",
+        name: "逐句处理（节奏层）",
+        why: "逐句跑四件事：句首垫词、劈长句、合并过短句、句尾软化。所有注入都受垫词总预算约束；剧本台词行与场景块行整句跳过，避免把垫词插到说话人前面。",
+        charsBefore: working.length,
+        metric: `句数 ${sentences.length} → ${out.length}`,
+        ...(para === undefined ? {} : { para }),
+      },
+      tSent,
+      out.join(""),
+    );
+
   // 3) 重新拼接 + 清理
+  const tJoin = on ? nowMs() : 0;
   let result = out
     .join("")
     .replace(/\n{2,}/g, "\n")
@@ -1497,19 +1967,76 @@ function humanizeSingle(text: string, opts: HumanizeOptions = {}): string {
     .replace(/。，/g, "。")
     .replace(/，。/g, "。");
   result = stripCJKEdgeSpaces(result);
+  if (on) {
+    emitStage(
+      on,
+      {
+        id: "cleanup",
+        name: "拼接清理",
+        why: "劈句与合并会留下重复标点、悬空连接词和「但，」这类粘连，这里统一收口。",
+        charsBefore: prev.length,
+        ...(para === undefined ? {} : { para }),
+      },
+      tJoin,
+      result,
+    );
+    prev = result;
+  }
 
   // 4) 确定性套话兜底
+  const tCliche = on ? nowMs() : 0;
   result = stripAICliches(result);
   result = stripLeadingConnectivesHard(result);
   result = dedupePadWords(result);
+  if (on) {
+    emitStage(
+      on,
+      {
+        id: "cliche",
+        name: "套话兜底（与强度无关）",
+        why: "确定性兜底，不吃强度参数：删残留 AI 套话、删句首连接词、全文去重垫词。前面所有概率性 pass 都可能漏，这一层保证下限。",
+        charsBefore: prev.length,
+        ...(para === undefined ? {} : { para }),
+      },
+      tCliche,
+      result,
+    );
+    prev = result;
+  }
 
   // 半角逗号微混入
-  result = injectHalfWidth(result, rng, 0.04 * intensity);
+  result = step(
+    "halfwidth",
+    "半角逗号微混入",
+    "按 4%×强度 把全角逗号换成半角。真人手写中英混排时标点并不统一，这一点点不一致反而是人味。",
+    () => injectHalfWidth(result, rng, 0.04 * intensity),
+  );
 
   // 5) 句长节奏兜底
+  const tBurst = on ? nowMs() : 0;
   if (intensity > 0.4) {
     const rng2 = makeRng(opts.seed, 3333);
     result = boostBurstinessSingle(result, rng2, 0.5 * intensity);
+  }
+  if (on) {
+    emitStage(
+      on,
+      {
+        id: "burst-single",
+        name: intensity > 0.4 ? "段内节奏兜底" : "段内节奏兜底（跳过）",
+        why: "段一级再补一次句长方差：只劈长句、不注入任何新词。全文级那道兜底在 humanize() 末尾，这里管段内。",
+        charsBefore: prev.length,
+        metric:
+          intensity > 0.4
+            ? `劈句概率 ${(0.5 * intensity).toFixed(2)}`
+            : `强度 ${intensity.toFixed(2)} ≤ 0.4，段内不切`,
+        skipped: !(intensity > 0.4),
+        ...(para === undefined ? {} : { para }),
+      },
+      tBurst,
+      result,
+    );
+    prev = result;
   }
 
   // 6) 标点相撞兜底 —— 必须放在**最后**。

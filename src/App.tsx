@@ -56,6 +56,8 @@ import {
   makeHistoryEntry,
   type HistoryEntry,
 } from "./store-history";
+import { PipelineTracePanel } from "./components/PipelineTrace";
+import type { PipelineTrace } from "./engine/pipeline-trace";
 import { usePplFlow } from "./hooks/usePplFlow";
 import { useZhuqueLab } from "./hooks/useZhuqueLab";
 import { buildHumanizeNote, formatRestoredNote } from "./app-messages";
@@ -119,6 +121,10 @@ export default function App({
   const [showDetectFeatures, setShowDetectFeatures] = useState(false);
   // ---- 「为什么这么改」清单（事后比对，随任一稿更新而失效） ----
   const [explainItems, setExplainItems] = useState<ExplainItem[] | null>(null);
+  // 流水线追踪：本地引擎这一稿真实跑过的步骤（LLM 路径为 null，面板不渲染）
+  const [trace, setTrace] = useState<PipelineTrace | null>(null);
+  // 上一稿的来源元信息：面板用它解释「为什么没有逐步记录」（LLM 远端执行 / 多候选择优）
+  const [lastRun, setLastRun] = useState<{ bestOfTried?: number; llm: boolean } | null>(null);
   const [local, setLocal] = useState<LocalSettings>(() => loadLocal());
   // 自定义保护术语（原文）。term-protect 的保护集是模块级全局，挂载时注入一次；
   // 设置里改完由 handleSaveSettings 再注入。
@@ -208,6 +214,7 @@ export default function App({
     setRoundScores([]);
     setFingerprint(null);
     setFidelity(null);
+    setTrace(null);
     try {
       const r = await runHumanize(
         input,
@@ -223,7 +230,13 @@ export default function App({
         zhuqueMode,
         genreOverride ?? undefined,
         local.bestOf ? { bestOf: true, candidates: local.candidates } : undefined,
+        true, // collectTrace：本地引擎路径下收集逐步执行记录
       );
+      setTrace(r.trace ?? null);
+      setLastRun({
+        bestOfTried: r.bestOf?.tried,
+        llm: r.engine !== "local" && r.engine !== "passthrough",
+      });
       setOutput(r.text);
       setExplainItems(null);
       setBefore(r.before);
@@ -424,6 +437,8 @@ export default function App({
     setZq(null);
     setZqSem(null);
     setZqMsg("");
+    setTrace(null);
+    setLastRun(null);
     clearDraft(); // 显式清空：草稿随之丢弃，下次打开是干净的
   }
 
@@ -667,6 +682,8 @@ export default function App({
           </div>
         </div>
       )}
+
+      <PipelineTracePanel trace={trace} bestOfTried={lastRun?.bestOfTried} llmPath={lastRun?.llm} />
 
       <BenchmarkPanel
         output={output}

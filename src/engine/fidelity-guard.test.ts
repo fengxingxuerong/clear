@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { humanize, mechanicalShuffle } from "./humanize";
+import { collapseIssues } from "./humanize-metrics";
 
 /**
  * 保真门禁：内容/实体一个都不能丢或坏（v0.9.24 新增）
@@ -226,17 +227,33 @@ describe("保真门禁", () => {
    *
    * 这里钉住「段落合并不该被当损坏」，防止将来有人把段落数加回判据。
    */
-  it("反向对照：段落合并是设计行为，不算损坏", () => {
+  it("反向对照：段落被合并但内容未丢 → 保真判据不得报损坏", () => {
+    /**
+     * v0.9.47 前提已变，**这条用例的构造方式随之改写**（用意不变）。
+     *
+     * 原版依赖"端到端跑得出来的段落合并"：先统计 30 个 seed 里合并发生了几次，
+     * 并要求 > 0（否则对照形同虚设）。v0.9.47 修掉 `fixOrphanConnectiveLeads`
+     * 的跨段落残句合并后，这批语料在 0.6/0.75/0.9 三档 × 30 seed 下**全部不再合并**
+     * （结构层 `resegmentParagraphsAggressive` 对它们同样不合并）。
+     * ⇒ 端到端已经凑不出合并样本，原写法的前置断言必然红。
+     *
+     * 但这条对照真正要钉住的不是"引擎会合并段落"，而是
+     * **「段落数减少 ≠ 内容损坏」**——防止将来有人把段落数加回保真判据。
+     * 不再依赖引擎端行为，直接手工构造一份「段落被合并、内容一字未丢」的稿，
+     * 反而更贴近用意：无论引擎改不改，这条判据都不该响。
+     */
     const text = CORPUS[1][1];
     const paras = (s: string) => s.split(/\n\s*\n/).filter((x) => x.trim()).length;
-    let merged = 0;
+    // 段间空行换成逗号 = 设计上"合并段落"的形态：段落数减少，内容零丢失
+    const mergedText = text.replace(/\n\n/g, "，");
+    expect(paras(mergedText), "构造失败：这份样本必须真的少了几段").toBeLessThan(paras(text));
+    expect(nums(mergedText), "合并段落不该动到数字").toBe(nums(text));
+    expect(collapseIssues(text, mergedText), "段落合并不算内容坍缩").toEqual([]);
+
+    // 端到端那条不变式照旧：无论段落数怎么变，数字必须完整
     for (let seed = 0; seed < 30; seed++) {
       const out = humanize(text, { intensity: 0.6, seed });
-      if (paras(out) < paras(text)) merged++;
-      // 无论段落数怎么变，数字必须完整
-      expect(nums(out), `seed=${seed} 合并段落时数字丢了`).toBe(nums(text));
+      expect(nums(out), `seed=${seed} 数字丢了`).toBe(nums(text));
     }
-    // 本语料确实会触发合并（否则这条反向对照没意义）
-    expect(merged, "这段语料没有触发过段落合并，反向对照形同虚设").toBeGreaterThan(0);
   });
 });

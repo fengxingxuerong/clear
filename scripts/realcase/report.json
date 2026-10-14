@@ -2,12 +2,12 @@
   "rows": [
     {
       "id": "C1-work-summary",
-      "aiScore": "54→8",
-      "len": "274→291",
+      "aiScore": "54→6",
+      "len": "274→289",
       "段落": "1→1",
       "HARD": "0",
       "SOFT": "0",
-      "ms": "2"
+      "ms": "1"
     },
     {
       "id": "C2-opinion-wechat",
@@ -57,11 +57,11 @@
     {
       "id": "C7-story-dialogue",
       "aiScore": "8→0",
-      "len": "208→207",
-      "段落": "6→5",
+      "len": "208→209",
+      "段落": "6→6",
       "HARD": "0",
-      "SOFT": "1",
-      "ms": "1"
+      "SOFT": "0",
+      "ms": "2"
     },
     {
       "id": "C8-social-post",
@@ -88,17 +88,8 @@
       "段落": "1→1",
       "HARD": "0",
       "SOFT": "0",
-      "ms": "1"
+      "ms": "0"
     }
   ],
-  "findings": [
-    {
-      "id": "C7-story-dialogue",
-      "f": {
-        "level": "SOFT",
-        "kind": "段落数变化",
-        "detail": "6 → 5"
-      }
-    }
-  ]
+  "findings": []
 }
