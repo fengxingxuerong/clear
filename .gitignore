@@ -42,7 +42,17 @@ scripts/zhuque-calibration-v4.txt
 
 # 扫描输出 / 临时测试目录
 _scan_out.txt
-artifacts/
+artifacts/*
+# —— 但 LLM 实验基建要进版本控制（2026-10-14）——
+# 理由：这些脚本是可复现资产 + 踩坑记录（变异器/裁判校准/真值审计/确定性语体探针）。
+# 三条结论的证据全靠它们重跑验证，只留在 artifacts 里等于结论无法被第三人复核。
+# ⚠️ 只放行 *.ts：**产出数据（pairs.json / results/*.json）仍然忽略**，它们体积大且可重生成。
+!artifacts/mutator/
+artifacts/mutator/*
+!artifacts/mutator/*.ts
+!artifacts/judge-calib/
+artifacts/judge-calib/*
+!artifacts/judge-calib/*.ts
 .tmp-p1/
 .tmp-submit/
 .tmp-ppl-cache/
