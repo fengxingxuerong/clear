@@ -43,17 +43,39 @@ describe("本地引擎输出质量（v0.8.4 反指纹回归）", () => {
     }
   });
 
-  it("对照组：普通句尾照常可软化（守卫只挡「X道」，软化分支未被关掉）", () => {
+  it("对照组：dialogue 语体句尾照常可软化（软化分支未被整个关掉）", () => {
     // 若哪天有人图省事把 SOFT_ENDINGS 分支整个关掉，上面的用例会假绿——这条防它。
+    //
+    // v0.9.44：语体门控收紧为**只 dialogue 允许**句尾语气词（此前 main 也给）。
+    // 依据见 humanize.ts tailForbiddenGenre 处注释：21 篇真人文本实测 main 下
+    // 向书面文本注入 354 处（4.5 处每百句），且方向与去 AI 味相反。
+    // ⇒ 这条对照必须显式传 genre="dialogue"，否则它测的是**已禁用的路径**。
     let hit = false;
     for (let seed = 0; seed < 30; seed++) {
-      const out = humanize("他放下手里的茶杯，语气很坚定。", { intensity: 0.9, seed });
+      const out = humanize("他放下手里的茶杯，语气很坚定。", {
+        intensity: 0.9,
+        seed,
+        genre: "dialogue",
+      });
       if (/[吧嘛呢呀哈][。！？]/.test(out)) {
         hit = true;
         break;
       }
     }
     expect(hit).toBe(true);
+  });
+
+  it("v0.9.44：main/默认体裁**不再**向陈述句尾注入语气词（书面语体病句）", () => {
+    // 回归守卫：21 篇真人文本实测该缺陷 4.5 处每百句（「改为北平吧。」）。
+    // scan-bugs 的「陈述句尾语气词」探针只覆盖自有 14 段语料，这里补一条单点回归。
+    for (const genre of [undefined, "main", "narrative", "humanHand"] as const) {
+      for (let seed = 0; seed < 30; seed++) {
+        const out = humanize("1928年国民政府将北京改为北平。", { intensity: 0.9, seed, genre });
+        expect(out, `genre=${genre} seed=${seed} 不该注入口语语气词：${out}`).not.toMatch(
+          /[吧嘛呢呀哈][。！？]$/,
+        );
+      }
+    }
   });
 
   it("「通过对N」不再产出「借对/靠对/用对」病句", () => {

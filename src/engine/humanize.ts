@@ -1386,7 +1386,23 @@ function humanizeSingle(text: string, opts: HumanizeOptions = {}): string {
       // 为什么此前保留单字尾：注释（见下）说「A/B 显示不贡献污染分」，
       //   但那是在 humanizeSingle 单层测的；全文级（含朱雀层）复测推翻了该结论。
       //   对 casual 的论说/对话体裁仍保留——那里「嘛」「吧」是有效的人味信号。
-      const tailForbiddenGenre = opts.genre === "humanHand" || opts.genre === "narrative";
+      // v0.9.44：收敛到**只 dialogue 允许**句尾语气词（此前是 humanHand/narrative 禁、
+      // main 照给）。
+      //
+      // 为什么连 main 一起禁（2026-10-14 引擎行为审计，21 篇真人文本/17.2 万字）：
+      //   main 是**默认/通用**语体，同时承载口语化自媒体文案**与**书面说明文/公文。
+      //   实测在 main 下向 19 篇**书面**文本注入了 354 处句尾语气词
+      //   （4.5 处每百句，密度最高的《老舍》10.6 处每百句）：
+      //     「1928年國民政府将北京改为北平**吧**。」「…视为北京城的源头**呢**。」
+      //   ⇒ 书面/公文语体里的**明确病句**，而且方向是反的——AI 文本最爱加语气词，
+      //     给书面稿加语气词等于**替 AI 加特征**。
+      //
+      // 与本函数下方评分器自相矛盾的事实：`humanize-metrics.ts` 把句尾语气词列为
+      // 「3a 硬插，一次即定性」，**W_TAIL_PARTICLE = 12 分/处**（真污染扣分）。
+      // 引擎此前是在**注入自己判定为污染的东西**。
+      //
+      // 需要口语人味的用户有 dialogue 这个显式选项，不必由 main 兜底。
+      const tailForbiddenGenre = opts.genre !== "dialogue";
       // v0.9.36：引述标记「X道」（说道/问道/答道…）收尾不加语气词——「说道吧。」「问道呢。」
       // 是引述标记与口语气词的错位组合（对话体语料实测全种子复现，min repro: artifacts/_repro-v8.ts）。
       // 与 scan-bugs v8.0 探针「引述动词+语气词」共用 REPORTING_DAO_RE，判据天然对齐。
