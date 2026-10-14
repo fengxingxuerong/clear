@@ -69,11 +69,11 @@
       "note": "seed=20260826, intensity=0.9, zhuque=true, genre=纯人写稿"
     },
     "O2": {
-      "score": 2,
+      "score": 3,
       "note": "seed=20260826, intensity=0.7, zhuque=false, genre=论说文"
     },
     "O3": {
-      "score": 2,
+      "score": 3,
       "note": "seed=20260826, intensity=0.9, zhuque=true, genre=论说文"
     }
   },
@@ -121,6 +121,14 @@
       "changes": [
         "E/O2:1→2",
         "E/O3:1→2"
+      ]
+    },
+    {
+      "at": "2026-10-14",
+      "reason": "【接受恶化 O2/O3】v0.9.44 主语承前省略链守卫（较/共/光杆承前动词/将字句/时间名词）拦掉论说文部分病句式切分，E 组 O2/O3 代理分 2→3（+1）。收益侧：新闻通稿体裁 20/20 复现的 6 类无主残句归零。走 --accept-worse 正规通道点名放行。",
+      "changes": [
+        "E/O2:2→3",
+        "E/O3:2→3"
       ]
     }
   ]
