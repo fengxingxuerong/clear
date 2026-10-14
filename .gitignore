@@ -53,6 +53,9 @@ artifacts/mutator/*
 !artifacts/judge-calib/
 artifacts/judge-calib/*
 !artifacts/judge-calib/*.ts
+!artifacts/human-corpus/
+artifacts/human-corpus/*
+!artifacts/human-corpus/*.ts
 .tmp-p1/
 .tmp-submit/
 .tmp-ppl-cache/
