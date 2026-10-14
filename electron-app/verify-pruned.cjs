@@ -107,6 +107,22 @@ try {
   bad(`版本核对失败：${e.message}`);
 }
 
+/* 3b. Key 池随包形态（v0.9.46）
+ * 这里只做**醒目标注**，不判失败：含 Key 的本地自用包是合法形态。
+ * 真正把这一形态挡在 GitHub 之外的是 artifacts/_make-zip.cjs 的 fail-closed 拦截
+ * （打公开 zip 时检测到 Key 文件直接中止）。
+ */
+console.log("\n[3b] 随包 Key 池形态");
+const PRESET_KEYS = path.join(APP, "preset-keys.txt");
+if (fs.existsSync(PRESET_KEYS)) {
+  const count = fs.readFileSync(PRESET_KEYS, "utf8").split(/\r?\n/).filter(Boolean).length;
+  console.log(`  ⚠️  含 ${count} 条 Key（resources/app/preset-keys.txt）—— 这是**本地自用包**形态：`);
+  console.log("      桌面端「填入 SenseNova 常驻通道」开箱可用，但**此包绝不可公开发 GitHub**。");
+  console.log("      要打公开包：删掉 electron-app/preset-keys.txt 后重新 build + repack。");
+} else {
+  console.log("  ℹ️  无 Key 文件 —— 公开包形态（常驻通道由用户自己填 Key）");
+}
+
 /* 4. 新鲜度：产物必须来自当前代码树 */
 // 起因（2026-09-20）：这一节存在之前，产物已经落后 7 个提交——里面还带着当天刚修掉的
 // 两个病句（外部样本 44% / 32.9%）和「检测器故障被读成 0 分=完全人类」那个 bug，

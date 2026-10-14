@@ -39,6 +39,11 @@ const APP_ENTRIES = [
   "package.json",
   "index.html",
   "assets",
+  // preset-keys.txt（**可选**）：随包分发的 SenseNova Key 池，每行一个 Key。
+  //   没有它 = 公开包形态（桌面端「常驻通道」按钮置灰，用户自己填 Key）—— 正常，不算缺失。
+  //   有它   = 本地/自用包（开箱即用常驻 LLM 通道）。
+  // ⚠️ 含明文凭证：打公开 zip 之前必须确认这一轮要不要 Keys（_make-zip.cjs 会拦截）。
+  "preset-keys.txt",
   // 源码指纹章，由 npm run build 的最后一环（scripts/sync-dist.mjs）盖。
   // 它必须来自 build 而不是 repack：见 build-fingerprint.cjs 头部说明。
   "build-info.json",
