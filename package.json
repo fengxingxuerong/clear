@@ -1,6 +1,6 @@
 {
   "name": "ai-humanizer",
-  "version": "0.9.43",
+  "version": "0.9.44",
   "type": "module",
   "description": "趣AI味 · 本地离线可用、可选接 LLM 的中文 AI 文本拟人化工具，对标朱雀",
   "bin": {
