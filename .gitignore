@@ -56,6 +56,7 @@ artifacts/judge-calib/*
 !artifacts/human-corpus/
 artifacts/human-corpus/*
 !artifacts/human-corpus/*.ts
+!artifacts/experiments/
 .tmp-p1/
 .tmp-submit/
 .tmp-ppl-cache/
@@ -88,3 +89,4 @@ electron-app/build-info.json
 # 但会让 sync-dist 的"工作区是否干净"盖章判定误报，故在此忽略
 .box-agent/
 *.artifact.json
+

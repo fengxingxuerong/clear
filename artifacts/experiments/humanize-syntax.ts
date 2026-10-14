@@ -1,5 +1,9 @@
 /**
- * humanize-syntax.ts —— 「句式工整度」独立指标 ⚠️ **未通过验收，已废弃，不接入产品**
+ * humanize-syntax.ts —— 「句式工整度」独立指标 ⚠️ **未通过验收，已废弃**
+ *
+ * 📍 **已移出 src/engine/ → artifacts/experiments/**（2026-10-14）：
+ *    未接入任何产品路径，留在源码目录只会被误 import。相对 import 路径已失效，
+ *    要复现实验请改回 src/engine/ 或用 tsx 直接跑（它无外部依赖）。
  *
  * ## 状态：作废（2026-10-14）
  *
