@@ -1,0 +1,12 @@
+import { readFileSync } from "node:fs";
+import { classifyGenre } from "../../src/engine/classify-genre.ts";
+const m = JSON.parse(readFileSync("artifacts/human-corpus/manifest.json", "utf8")) as { items: { title: string; file: string }[] };
+const it = m.items.find(i => i.title === "疫苗")!;
+const prose = readFileSync(it.file, "utf8").split("\n\n").slice(1).join("\n\n");
+const r = classifyGenre(prose);
+console.log("判定:", r.genre, "置信度:", r.confidence, "命中规则:", r.ruleHit);
+console.log("features:", JSON.stringify(r.features));
+const corner = (prose.match(/「[^」]{2,60}」/g) ?? []);
+const dbl = (prose.match(/"[^"]{2,60}"/g) ?? []);
+console.log("\n书名号「」对话匹配:", corner.length, corner.slice(0,3));
+console.log("双引号对话匹配:", dbl.length, dbl.slice(0,3));

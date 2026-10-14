@@ -826,7 +826,33 @@ export function humanize(text: string, opts: HumanizeOptions = {}): string {
   const rawIntensity = opts.intensity ?? 0.6;
   if (rawIntensity <= 0) return text;
   // P7-A：体裁判定——显式 opts.genre 优先，否则自动识别（纯人写不自动判，必须用户显式传 humanHand）
-  const effectiveGenre: EffectiveGenre = opts.genre ?? classifyGenre(text).genre;
+  const classified = opts.genre ? null : classifyGenre(text);
+  let effectiveGenre: EffectiveGenre = opts.genre ?? classified!.genre;
+  // v0.9.45 防御：自动识别把**非对话文本**判成 dialogue 时降级为 main。
+  //
+  // 证据（artifacts/human-corpus/_probe-classify2.ts，21 篇真人文本）：
+  // 《疫苗》被判 dialogue，命中的是 Rule 1 的**单特征**路径 `dlgColonRatio >= 0.06`
+  // （实测 0.082）—— 百科条目里的「症状：…」「病毒：…」这类**列举标签**触发的。
+  // 而真正的对话特征**全部为 0**：
+  //   dlgQuoteRatio 0.00062（无引语）、dlgShortTurn 0（无短对话轮）、
+  //   dlgSceneBlockRatio 0（无场景块）。
+  // ⇒ 单靠冒号比例就判 dialogue 的那部分，是百科列举的假信号。
+  //
+  // ⚠️ 为什么在 humanize() 降级而**不去改 classifyGenre**：
+  //   classifyGenre 是独立模块、自带测试基线，改它的阈值会波及 exposition/narrative
+  //   两条判据的基线；而且这里需要的判据是「**要不要注入碎片**」，
+  //   属于使用侧策略而非识别侧定义。
+  // ⚠️ 方向刻意保守：宁可少注入（对话体少了语气词），不可错注入（书面体被加语气词）。
+  if (
+    classified &&
+    effectiveGenre === "dialogue" &&
+    classified.features.dlgQuoteRatio < 0.002 &&
+    classified.features.dlgShortTurn === 0 &&
+    classified.features.dlgSceneBlockRatio === 0 &&
+    classified.features.dlgColonRatio < 0.15
+  ) {
+    effectiveGenre = "main";
+  }
   const knobs = getGenreKnobs(effectiveGenre);
   // P7-D：humanHand 强约束——强度硬钳制到 ≤0.48（该体裁斜率为负，越去味官分越高）
   const intensity = Math.min(Math.max(0, Math.min(1, opts.intensity ?? 0.6)), knobs.intensityCap);
