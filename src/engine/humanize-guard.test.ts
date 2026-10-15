@@ -8,6 +8,8 @@
  */
 import { describe, expect, it } from "vitest";
 import { VERB_PHRASE_AFTER, MEDIUM_NOUN_AFTER, guardBlocks } from "./humanize-guard.ts";
+import { humanize } from "./humanize.ts";
+import { VOCAB } from "./humanize-vocab.ts";
 
 /**
  * 混排守卫（行 184-188）
@@ -161,5 +163,78 @@ describe("「落地」只能站谓语位（行 215-219）", () => {
     // 源码注释给的实证：「在产业落地层面」被拒绝替换
     expect(guardBlocks("落地", "这件事", "在产业")).toBe(true);
     expect(guardBlocks("落地", "这件事", "")).toBe(true);
+  });
+});
+
+/**
+ * v0.9.50 三条新守卫（由 scripts/realcase 扩语料抓出，每条都有真实产出作证据）
+ *
+ * 收录顺序 = 严重程度：**改写事实** > 病句 > 语体崩。
+ */
+describe("v0.9.50 新增守卫", () => {
+  it("书名号里的文件标题一字都不得替换（改一个字就是篡改事实）", () => {
+    const TITLE = "现将《合肥市智能制造成熟度评估实施细则》印发给你们。";
+    for (let seed = 1; seed <= 12; seed++) {
+      const out = humanize(TITLE, { intensity: 0.9, seed, genre: "main" });
+      expect(out, `seed=${seed}`).toContain("《合肥市智能制造成熟度评估实施细则》");
+    }
+    // 对照组：同一个词出了书名号照样要换，否则等于"看见《》就整体免改"
+    const PLAIN = "公司制定了详细实施细则，请各部门遵照执行。";
+    const changed = [1, 2, 3, 4, 5, 6, 7, 8].some(
+      (seed) => humanize(PLAIN, { intensity: 0.9, seed, genre: "main" }) !== PLAIN,
+    );
+    expect(changed, "书名号外的同一词条必须还能被改写").toBe(true);
+  });
+
+  it("叠字守卫：替身不得与紧随其后的原文重复（「生态环境」→「环境环境」）", () => {
+    const SRC = "由生态环境主管部门责令改正。";
+    for (let seed = 1; seed <= 12; seed++) {
+      const out = humanize(SRC, { intensity: 0.9, seed, genre: "main" });
+      expect(out, `seed=${seed}`).not.toContain("环境环境");
+    }
+  });
+
+  it("规范性从句不补「了」（「请结合实际认真贯彻落实」不该写成已完成）", () => {
+    const CLAUSES = [
+      "请结合实际认真贯彻落实。",
+      "企业应当按照排污许可证的要求排放污染物。",
+      "本细则自印发之日起三十日后施行。",
+    ];
+    for (const c of CLAUSES) {
+      for (let seed = 1; seed <= 8; seed++) {
+        const out = humanize(c, { intensity: 0.9, seed });
+        const addedLe = /[^了]*[^。！？]了。/.test(out) && !c.includes("了");
+        expect(addedLe, `${c} seed=${seed} 产出：${out}`).toBe(false);
+      }
+    }
+  });
+
+  it("对照：论文叙述里的正常完成态仍要保留（别把「了」一刀切）", () => {
+    // 这条守的是"上面那条守卫被写成体裁级开关"的过矫正——
+    // 正式体裁里也有完全正常的完成态，砍掉它们是把时态整体抹平。
+    const NARRATIVE = "我们提出该方法并在三个数据集上验证了效果。";
+    const anyLe = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].some((seed) =>
+      humanize(NARRATIVE, { intensity: 0.9, seed }).includes("了"),
+    );
+    expect(anyLe).toBe(true);
+  });
+
+  it("并列复合词只替半边 ⇒ 整处跳过替换（「贯彻落实」→「照做落实」）", () => {
+    const SRC = "请结合实际认真贯彻落实。";
+    for (let seed = 1; seed <= 12; seed++) {
+      const out = humanize(SRC, { intensity: 0.9, seed, genre: "main" });
+      expect(out, `seed=${seed}`).toContain("贯彻落实");
+    }
+    // 守卫必须可直接验证：这条 guarantee 是这条缺陷的唯一 enforce 点
+    expect(guardBlocks("贯彻", "落实发展理念", "认真")).toBe(true);
+  });
+
+  it("共享：定语位置的替身必须是能进定语槽的那一个（不是动宾短语）", () => {
+    const SRC = "使共享表征逐步具备领域不变性。";
+    for (let seed = 1; seed <= 12; seed++) {
+      const out = humanize(SRC, { intensity: 0.9, seed });
+      expect(out, `seed=${seed}`).not.toContain("一起用");
+    }
+    expect(VOCAB["共享"]).not.toContain("一起用");
   });
 });

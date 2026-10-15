@@ -10,7 +10,7 @@ import { humanizeBestOf } from "../src/engine/humanize-bestof.ts";
 // 免得出现"守卫否掉的比签名抓的多/少"这类两边对不齐。
 import { DIR_MODIFIER_VERB_CLASH_RE } from "../src/engine/humanize.ts";
 // v0.9.33：未然从句补「了」探针与引擎守卫共用同一条正则（见 humanize.ts 的注释）
-import { PURPOSE_LE_RE } from "../src/engine/humanize.ts";
+import { PURPOSE_LE_RE, NORMATIVE_LE_RE } from "../src/engine/humanize.ts";
 // v0.9.36：从属从句残句 / 引述结构残句 / 引述动词+语气词 三条探针与引擎守卫共用正则
 import {
   SUBORDINATE_LEAD_RE,
@@ -1202,6 +1202,15 @@ const V8_COUNT = { n: 0 };
       // ⚠️ 不含「使得」：「这使得效率提升了。」是合法完成态。
       PURPOSE_LE_RE,
       "类别级：目的/未然从句里的完成态动词被补上「了」",
+    ],
+    [
+      "规范性从句补了",
+      // v0.9.50：同一机制的另一类形态（本次扩语料 C11 行政通知抓到）。
+      // 「请结合实际认真贯彻落实了。」——条款所述动作是**规定**而非已发生事实，
+      // 补「了」等于把规定改写成语气笃定的已完成行为。
+      // 引擎侧守卫与探针共用 NORMATIVE_LE_RE ⇒ 判据天然对齐（与 PURPOSE_LE_RE 同一条纪律）。
+      NORMATIVE_LE_RE,
+      "类别级：规范性/祈使性从句里的完成态动词被补上「了」",
     ],
     // ---- 以下 4 条 v0.9.36 补（2026-10-13 扩语料池时人眼审查抓到，旧 8 条一条都没盖住）----
     // 三条与引擎守卫共用正则（拼接构造），第 2 条是纯产出形态签名（守卫侧做的是"不产出"）。

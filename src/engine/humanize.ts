@@ -105,6 +105,8 @@ import {
   fixBrokenCollocations,
 } from "./anti-fingerprint.ts";
 
+// v0.9.50 书名号/结构化串区间保护（URL、邮箱、文件标题一律不改写）
+import { citedTitleSpans, spanGuard } from "./text-shield.ts";
 // P7 引擎级体裁联动：自动体裁识别 + 每体裁参数旋钮
 import { classifyGenre, AutoGenre, suppressSelfQA } from "./classify-genre.ts";
 import { keepOnlyIfDetectDrops } from "./detector.ts";
@@ -550,8 +552,15 @@ function replaceVocab(
   const p = intensity <= 0 ? 0 : Math.min(1, REPLACE_VOCAB_BASE + REPLACE_VOCAB_SLOPE * intensity);
   const academic = style === "academic";
   const formalSubstituteBlocked = formal || academic;
+  // v0.9.50 书名号保护：《…》内的字面不得改写（文件标题改一个字就是篡改事实，
+  // 比语体崩严重一档，与 URL 不得丢同性质）。
+  // ⚠️ 每个词条重算一次：替换会平移下标，用循环外的旧区间会错位。
+  //    代价 O(词条数 × 文本长)，实测单篇亚毫秒，不值得为它维护增量结构。
+  const hasTitle = text.includes("《");
+  let inCitedTitle: (idx: number) => boolean = () => false;
   let base = text;
   for (const [from, candidates] of REPLACE_VOCAB_CANDIDATES) {
+    if (hasTitle) inCitedTitle = spanGuard(citedTitleSpans(base));
     let idx = base.indexOf(from);
     if (idx === -1) continue;
     // P5：academic 冻结表——学术语义词的口语替身（调顺/推一把/没停过/拉总账）
@@ -566,6 +575,9 @@ function replaceVocab(
         rng() < p &&
         // v0.8.6 术语保护：命中位置落在受保护术语内则跳过（不影响 rng 消耗节奏）
         !isProtectedTerm(base, idx, end) &&
+        // v0.9.50 书名号保护：文件/作品标题内部的字样一个都不能改
+        //（C11 实测：《…评估实施细则》→《…评估执行细则》，等于编了一份不存在的文件）
+        !inCitedTitle(idx) &&
         // 前窗取 6 字而非 3 字：够着"受到广泛"这类隔了状语的搭配。
         // judgeGuardBlocks 里所有前缀判据都是尾锚定（endsWith / /…$/），加宽不改变既有行为。
         !guardBlocks(from, base.slice(end, end + 8), base.slice(Math.max(0, idx - 6), idx)) &&
@@ -640,6 +652,17 @@ function replaceVocab(
         const clashParticle =
           "了地得着".includes(nextCh) &&
           ("了地得着".includes(rep[rep.length - 1]) || "了地得着".includes(rep[rep.length - 2]));
+        /**
+         * v0.9.50 叠字守卫：替身与**紧随其后的原文**相同 ⇒ 换成重复两遍。
+         *
+         * 真实案例 C15 政策问答实测：「**生态环境**主管部门」→ 生态→环境 ⇒「**环境环境**主管部门」。
+         * 这条比前面几条都便宜，因为它不需要语言知识：产出的前 n 字 == 紧邻原文的前 n 字，
+         * 就是字面意义上的"写了两遍"，任何语体都不通。
+         *
+         * ⚠️ 只比**紧邻窗口**（rep 自身长度），不做全句搜重：
+         * 远距离重复是作者自己的行文问题，不该由替换层背锅。
+         */
+        const clashDuplicate = base.startsWith(rep, end);
         // v0.9.31：方向修饰语 + 行为动词 = 搭配不当（见 DIR_MODIFIER_VERB_CLASH_RE 注释）。
         // 只测 `替身 + 右邻 2 字`：够判定"正向"后面接的是不是行为动词。
         const clashDirVerb = DIR_MODIFIER_VERB_CLASH_RE.test(rep + base.slice(end, end + 2));
@@ -659,6 +682,7 @@ function replaceVocab(
           !clashLeft &&
           !clashAbstract &&
           !clashParticle &&
+          !clashDuplicate &&
           !clashDirVerb &&
           !clashFormalSub &&
           !clashInformalEntry
@@ -788,6 +812,25 @@ function relaxIntensifierVerb(text: string, rng: () => number, p: number): strin
 export const PURPOSE_LE_RE =
   /(?:\u4ee5\u786e\u4fdd|\u4ee5\u4fdd\u8bc1|\u4e3a\u4e86|\u4ee5\u4fbf|\u65e8\u5728|\u529b\u6c42|\u4ee5\u671f|\u624d\u80fd|\u9700\u8981|\u5e94\u5f53|\u5e94\u8be5|\u5fc5\u9808|\u6709\u5f85|\u5373\u5c06|\u5c06\u8981)[^\u3002\uff01\uff1f\n]{2,40}\u4e86[\u3002\uff01\uff1f]/;
 
+/**
+ * v0.9.50：规范性/祈使性子句里的完成态动词**不许补「了」**。
+ *
+ * 与 PURPOSE_LE_RE 同机制、另一类形态：那条守的是"动作尚未发生"，这条守的是
+ * "子句所述动作是**规定**，不是已发生的事实"。
+ *
+ * 实测（scripts/realcase C11 行政通知，本次扩语料抓到）：
+ *   「请结合实际认真贯彻落实。」→「请结合实际认真贯彻落实**了**。」
+ * 一纸尚未执行的规定，被改写成一件已完成的事。
+ *
+ * 为什么**不**按体裁一刀切（这是一个 v0.9.50 试过又放弃的方案）：
+ *   正式体裁里也有完全正常的完成态——论文「本文提出该方法并验证了其效果」里的
+ *   「了」正是人写的样子；按 genre 关掉会把这一类时态一并砍掉。
+ *   ⇒ 与项目一贯口径一致：**判形态，不判体裁**（同界线：坏替身还原被体裁门控
+ *     这个坑已经踩过一次，见 anti-fingerprint.ts 的 fixBrokenCollocations 注释）。
+ */
+export const NORMATIVE_LE_RE =
+  /(?:\u8bf7|\u5e94\u5f53|\u4e0d\u5f97|\u4e25\u7981|\u7981\u6b62|\u987b|\u5e94|\u6309\u7167|\u4f9d\u636e|\u53c2\u7167|\u9002\u7528\u4e8e|\u81ea[^\u3002\uff01\uff1f\n]{0,12}\u8d77|\u7b2c[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\u767e\u5343]+\u6761)[^\u3002\uff01\uff1f\n]{2,40}\u4e86[\u3002\uff01\uff1f]/;
+
 /** 预编译：补"了"口语化正则（依赖导入的 LE_VERBS） */
 const LE_RE = new RegExp(
   "(?<!\u7684[\\u4e00-\\u9fa5]{0,3})(?<!\u4e86[\\u4e00-\\u9fa5]{0,3})(" +
@@ -809,7 +852,12 @@ function relaxLe(text: string, rng: () => number, p: number): string {
       str.lastIndexOf("\n", offset),
       -1,
     );
-    if (PURPOSE_LE_RE.test(str.slice(clauseStart + 1, offset) + verb + "\u4e86" + end)) {
+    const candidateClause = str.slice(clauseStart + 1, offset) + verb + "\u4e86" + end;
+    if (
+      PURPOSE_LE_RE.test(candidateClause) ||
+      // v0.9.50 规范性子句：与上面同一机制，只多一类引导形态（见 NORMATIVE_LE_RE 注释）
+      NORMATIVE_LE_RE.test(candidateClause)
+    ) {
       rng(); // 守卫命中也抽一次：少抽会让后续随机序列整体错位（同 replaceWithDevelopment 的做法）
       return m;
     }
@@ -1727,6 +1775,7 @@ function humanizeSingle(text: string, opts: HumanizeOptions = {}): string {
     "le",
     "补完成态「了」",
     "AI 文本极少使用完成态。按概率补「了」，让叙述有时态落点。",
+    // v0.9.50：正式语体下不补。
     () => relaxLe(working, rng, 0.6 * intensity), // 补"了"概率从 0.4 提到 0.6，人味更强
   );
   // 必须排在 replaceVocab 之前：否则"受到广泛关注"的"关注"先被换成"留意"，

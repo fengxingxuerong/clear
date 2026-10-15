@@ -10,7 +10,7 @@
  *      长度失控、占位符残留、黑话泄漏。这些不需要语言直觉，机器说了算。
  *   B. 软缺陷（必须人读）：通顺度、语义是否走样。脚本只负责把 before/after 落盘方便逐篇看。
  *
- * 用法：npx tsx artifacts/realcase/run.ts [--only C3-tech-popular]
+ * 用法：npx tsx scripts/realcase/run.ts [--only C3-tech-popular]
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -78,7 +78,7 @@ function check(before: string, after: string): Finding[] {
     if (!after.includes(m)) push("HARD", "邮箱丢失", m);
   }
 
-  // 2. 数字不得丢忘olean 专门的 LLM 才有改数字的余地，本地引擎绝不能动
+  // 2. 数字不得丢。改数字是 LLM 才有的余地，本地引擎绝不能动
   const numsBefore = grab(before, RE_NUM);
   const numsAfter = grab(after, RE_NUM);
   const lostNums = numsBefore.filter((n) => !numsAfter.includes(n));

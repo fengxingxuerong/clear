@@ -82,6 +82,34 @@ export function spanGuard(spans: TextSpan[] | null | undefined): (idx: number) =
   };
 }
 
+/**
+ * v0.9.50：书名号引用的区间（《…》）。
+ *
+ * 起因（scripts/realcase C11 行政通知实测）：标题里的词被 VOCAB 改了——
+ *   《合肥市智能制造成熟度评估**实施细则**》 → 《…评估**执行细则**》
+ * 这是**改写事实**：文件标题是专名，改动它等于把一份不存在的文件塞给读者。
+ * 比"语体崩"严重一档，和"URL/邮箱不得丢"同性质 ⇒ 与 URL 一样用区间保护。
+ *
+ * 为什么只收《》不收引号：引号里的多半是台词/发言，那正是要去味的对象；
+ * 书名号里的是**作品名/文件名的字面本身**，动它一个字都叫篡改。
+ */
+const CITED_TITLE_RE = /《[^》]*》/g;
+
+export function citedTitleSpans(text: string): TextSpan[] {
+  if (!text) return [];
+  const out: TextSpan[] = [];
+  CITED_TITLE_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = CITED_TITLE_RE.exec(text)) !== null) {
+    if (m[0].length === 0) {
+      CITED_TITLE_RE.lastIndex++;
+      continue;
+    }
+    out.push({ start: m.index, end: m.index + m[0].length });
+  }
+  return out;
+}
+
 /** 一步到位：`structuredSpans(text)` + `spanGuard(...)` */
 export function guardFor(text: string): (idx: number) => boolean {
   return spanGuard(structuredSpans(text));
