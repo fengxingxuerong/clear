@@ -535,33 +535,38 @@ describe("句尾锚点注入收口", () => {
  * "不帮 CommonJS"、"预搭阶段" 这类语义错误。
  *
  * 探针实测的对照（intensity 0.9 + zhuqueMode，seed 固定）：
- *   「优化 CommonJS」→「调好 CommonJS」  ← 放行
- *   「优化CommonJS」 → 原样不动        ← before 末尾是 ASCII，守卫拦下
+ *   「提升 CommonJS」→「提高 CommonJS」  ← 放行
+ *   「提升CommonJS」 → 原样不动        ← before 末尾是 ASCII，守卫拦下
+ *
+ * ⚠️ v0.9.49 载体从「优化」换成「提升」：优化进了 INFORMAL_ONLY_KEYS
+ * （有效池 [调好] 整池口语），正式体裁整条冻结——若沿用旧载体，
+ * 三条「期望不变」的用例会被冻结策略**假绿**（没变，但拦它的不是守卫）。
+ * 提升是混合池（[提高, 拔高]），正式体裁走安全候选「提高」，是真替换。
  */
 describe("混排守卫：中文动词紧贴 ASCII 标识符时不替换", () => {
   const run = (s: string) => humanize(s, { intensity: 0.9, zhuqueMode: true, seed: 42 });
 
   it("带空格 → 正常替换", () => {
-    expect(run("优化 CommonJS")).not.toBe("优化 CommonJS");
-    expect(run("优化 CommonJS")).toContain("CommonJS"); // 标识符本身必须完好
+    expect(run("提升 CommonJS")).not.toBe("提升 CommonJS");
+    expect(run("提升 CommonJS")).toContain("CommonJS"); // 标识符本身必须完好
   });
 
   it("紧贴 ASCII → 整个替换被拦下，原样返回", () => {
-    expect(run("优化CommonJS")).toBe("优化CommonJS");
+    expect(run("提升CommonJS")).toBe("提升CommonJS");
   });
 
   it("守卫不区分 ASCII 的具体种类（字母/点/斜杠/数字/下划线/连字符）", () => {
     // 判据是单个字符类 /[A-Za-z0-9._\-/]$/，所以这些都该被拦
-    for (const s of ["优化CommonJS", "优化node.js", "优化a/b", "优化v2", "优化a_b", "优化a-b"]) {
+    for (const s of ["提升CommonJS", "提升node.js", "提升a/b", "提升v2", "提升a_b", "提升a-b"]) {
       expect(run(s)).toBe(s);
     }
   });
 
   it("守卫不误伤：不含英文的普通中文照样被改写", () => {
     // 这条防的是「守卫扩大到所有句子」的退化写法。
-    // 探针实测（seed 42）：「我们要持续优化这项工作」→「我们要始终调好这项工作」。
+    // 探针实测（seed 42）：「我们要持续提升这项工作」→「我们要始终提高这项工作」。
     // 另一条对照：「这个方案很不错」实测**不变**——短句里没有可替换的目标，
     // 不是守卫拦的，所以不能拿它当「会被改写」的样本。
-    expect(run("我们要持续优化这项工作")).toBe("我们要始终调好这项工作");
+    expect(run("我们要持续提升这项工作")).toBe("我们要始终提高这项工作");
   });
 });

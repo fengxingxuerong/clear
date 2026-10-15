@@ -119,7 +119,9 @@ describe("简洁模式：去味闭环与结果条", () => {
     expect(scoreBox.textContent).toContain(String(before));
 
     // 结论必须是四种人话之一，不能是空白或技术术语
-    expect(scoreBox.textContent).toMatch(/几乎没有 AI 味|已经落在人写区间|还有点味道|AI 味偏重/);
+    expect(scoreBox.textContent).toMatch(
+      /套话清得很干净|剩下的多是正常书面词|还有一批套话|AI 味偏重/,
+    );
 
     expect(utils.getByText("复制结果")).toBeTruthy();
     expect(utils.getByText("导出 .docx")).toBeTruthy();

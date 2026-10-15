@@ -18,6 +18,7 @@
 import {
   VOCAB,
   VOCAB_ENTRIES,
+  INFORMAL_ONLY_KEYS,
   OPENERS,
   INTERJECTIONS,
   startsWithConnector,
@@ -105,7 +106,7 @@ import {
 } from "./anti-fingerprint.ts";
 
 // P7 引擎级体裁联动：自动体裁识别 + 每体裁参数旋钮
-import { classifyGenre, AutoGenre } from "./classify-genre.ts";
+import { classifyGenre, AutoGenre, suppressSelfQA } from "./classify-genre.ts";
 import { keepOnlyIfDetectDrops } from "./detector.ts";
 // v0.8.6 术语保护：受保护术语位置禁止替换/拆句
 import { isProtectedTerm } from "./term-protect.ts";
@@ -451,6 +452,22 @@ export const FORMAL_FORBIDDEN_SUBSTITUTES = new Set([
   "使劲", // 努力 → 使劲：「使劲在下一季度取得更加优异的成绩」——总结体里的语体崩
   "环绕", // 围绕 → 环绕：「紧紧环绕公司年度战略目标」——FORMAL_RESTORE 只写了「环绕年度」这一组合
   "看得出来", // 体现 → 看得出来：「主要看得出来在跨部门…」——谓词位置的错配
+  // —— v0.9.49：C1 剩余两条缺陷。这两条的源词条是**混合池**（含正式安全替身），
+  //    按收词口径不进 INFORMAL_ONLY_KEYS，坏的那一个替身在这里毙——
+  //    两条线各管各的：整池口语走词条级，混合池走替身级。
+  "做到位", // 落实 → 做到位：「方方面面做到位各项重点工作任务」——动补结构套名词短语
+  "一起", // 协同 → 一起：「跨部门一起效率有待提升」；通力 → 一起 同样毙（一起在正式体是语体崩）
+  // —— v0.9.49：赋能/心智的口语三人组。这两个源词是 LEAK_WORDS 营销黑话，
+  //    强度 1.0 下无论体裁都必须换掉（verify-quality 零泄漏门禁），所以不能整条冻结；
+  //    v0.9.49 给池子补了正式安全候选（赋能+「助力」、心智+「思路」），
+  //    其余口语替身在这里毙掉 ⇒ 正式体只可能挑中安全候选。
+  //    证据类别见 vocab-formal-substitutes.test.ts 的 LEAK_WORD_PROVEN。
+  "助攻", // 赋能 → 助攻（正式体语体崩）
+  "帮衬", // 赋能 → 帮衬
+  "帮着", // 赋能 → 帮着
+  "心思", // 心智 → 心思
+  "脑子", // 心智 → 脑子
+  "心神", // 心智 → 心神
 ]);
 
 /** v0.9 专家修复 P5：academic 文风下禁止的口语替身（书面语体错位签名）。
@@ -528,7 +545,20 @@ function replaceVocab(
         // 「取得」会立刻在同一位置顶上来，替换词干并把助词留成病句。
         !PARTICLE_PREFIX_BLOCK.has(from)
       ) {
-        let rep = pick(rng, candidates);
+        // v0.9.49 正式语体候选**预滤**：被否决的替身在 pick 之前就滤出候选池，
+        // 而不是 v0.9.46 的"挑了再毙"。后者在强度 1.0（p=1.0，每个命中都过门）
+        // 等于按池子比例直接不换——实测赋能（池 4 个毙 3 个）19/25 seed 泄漏、
+        // 心智 16/25，verify-quality 的零泄漏门禁当场红。预滤后 pick 永远落在
+        // 安全候选上，强度 1.0 恢复 100% 替换。
+        // ⚠️ 不违反 rng 纪律：pick 固定只调一次 rng()，滤池子不改变消耗次数，
+        //    随机序列与此前逐位一致（变的是"这次挑中谁"，不是"何时挑"）。
+        // 整池口语词条（INFORMAL_ONLY_KEYS）不走预滤——它们在下面 clashInformalEntry
+        // 整条否决；那些池子里剩下的"次口语"替身（围着/下功夫）同样不许上场。
+        const formalPool =
+          formalSubstituteBlocked && !INFORMAL_ONLY_KEYS.has(from)
+            ? candidates.filter((c) => !FORMAL_FORBIDDEN_SUBSTITUTES.has(c))
+            : candidates;
+        let rep = pick(rng, formalPool);
         // v0.9.41 替身降级（MEDIUM_DOWNGRADE）：「通过」后紧邻媒介/渠道名词时，
         // 「靠/借」崩坏（"靠短信通知"×）——但与 VERB_PHRASE_AFTER 的处置不同：
         // 那条是「跳过替换」（宁保留原词），本条**降级到「用」**（"用短信通知"√），
@@ -585,8 +615,14 @@ function replaceVocab(
         // 只测 `替身 + 右邻 2 字`：够判定"正向"后面接的是不是行为动词。
         const clashDirVerb = DIR_MODIFIER_VERB_CLASH_RE.test(rep + base.slice(end, end + 2));
         // v0.9.46 正式语体守卫：口语替身在替换阶段就否掉（详见 FORMAL_FORBIDDEN_SUBSTITUTES）。
-        // ⚠️ 只否决、不重挑：pick 已消耗过 rng，再调一次会让全仓 seed 敏感断言整体漂移。
+        // ⚠️ v0.9.49 起这条是**兜底**：正式体的候选池已在 pick 前预滤（见上方 formalPool），
+        //    正常路径走不到这里；留着是防将来有人改预滤条件时静默失效。
         const clashFormalSub = formalSubstituteBlocked && FORMAL_FORBIDDEN_SUBSTITUTES.has(rep);
+        // v0.9.49 词条级正式语体守卫：整池口语的词条（数据见 humanize-vocab.ts 的
+        // INFORMAL_ONLY_KEYS）在正式体裁下不发起替换——治本替代身级逐条打补丁。
+        // 位置刻意放在 pick **之后**：pick 消耗的 rng 必须照常发生，否则正式体裁下的
+        // 随机序列与 v0.9.48 不同，全仓 seed 敏感断言整体漂移（与 clashFormalSub 同哲学）。
+        const clashInformalEntry = formalSubstituteBlocked && INFORMAL_ONLY_KEYS.has(from);
         if (
           rep &&
           !cascade &&
@@ -595,7 +631,8 @@ function replaceVocab(
           !clashAbstract &&
           !clashParticle &&
           !clashDirVerb &&
-          !clashFormalSub
+          !clashFormalSub &&
+          !clashInformalEntry
         )
           hits.push({ at: idx, rep });
       }
@@ -1025,6 +1062,12 @@ export function humanize(text: string, opts: HumanizeOptions = {}): string {
     );
   }
   const knobs = getGenreKnobs(effectiveGenre);
+  // v0.9.49：自问自答的体裁门控。C1 工作总结与 C6 学术摘要的自动体裁都是 main，
+  // getGenreKnobs 的体裁旋钮分不开它们（实测 C1/C2/C4/C6/C9 全判 main），
+  // 而 C2 观点文的自问自答是设计意图、C1/C6 的是语体崩 ⇒ 用文档签名补一层判据。
+  // 判据取原始输入 text：签名词理论上可能被管线中途改写，且注入决策本就该看
+  // "用户给的是什么稿"。实测分离见 classify-genre.ts 两个签名的注释。
+  const officialDoc = suppressSelfQA(text);
   // P7-D：humanHand 强约束——强度硬钳制到 ≤0.48（该体裁斜率为负，越去味官分越高）
   const intensity = Math.min(Math.max(0, Math.min(1, opts.intensity ?? 0.6)), knobs.intensityCap);
   // P7-D：humanHand 强制关闭朱雀增强
@@ -1074,7 +1117,7 @@ export function humanize(text: string, opts: HumanizeOptions = {}): string {
     // v0.9.8 P0 收敛（七）：兜底风格 casual → plain（与 DEFAULT_API.style 对齐）。
     result = applyZhuqueFeatures(result, intensity, opts.seed, opts.style ?? "plain", {
       skipSceneInject: knobs.skipSceneInject,
-      skipSelfQA: knobs.skipSelfQA,
+      skipSelfQA: knobs.skipSelfQA || officialDoc,
     });
     zqRan = true;
   }
@@ -1130,7 +1173,7 @@ export function humanize(text: string, opts: HumanizeOptions = {}): string {
       zhuqueMode: zhuqueOn,
       expoForceP3: knobs.expoForceP3(intensity),
       skipSceneInject: knobs.skipSceneInject,
-      skipSelfQA: knobs.skipSelfQA, // v0.9.1：narrative/humanHand 跳过结构层自问自答
+      skipSelfQA: knobs.skipSelfQA || officialDoc, // v0.9.1：narrative/humanHand 跳过结构层自问自答；v0.9.49：公文/学术签名同样跳过
       // v0.9 专家修复 P5：文风透传到结构层（academic 禁口语承接头/自问自答）
       // v0.9.8 P0 收敛（七）：兜底风格对齐 DEFAULT_API（casual → plain）
       style: opts.style ?? "plain",

@@ -166,10 +166,14 @@ describe("v0.9.22 类别级语言质量守卫", () => {
   });
 
   it("守卫不误伤：谓语位「推动方案落地」仍会被替换（前置使役判据没把整条打死）", () => {
+    // v0.9.49：显式 dialogue 体裁。落地已进 INFORMAL_ONLY_KEYS（有效池
+    // [真正做出来, 真做出来] 整池口语），正式体裁整条冻结——若沿用默认自动
+    // 体裁（这句判为 main），本用例会被冻结策略假绿/假红，测不到使役守卫本身。
+    // 守卫严格性是体裁无关机制，dialogue 下观测它才是本用例的目的。
     const src = "下一步要推动方案落地，让流程真正跑起来，这需要各部门一起配合完成。";
     let replaced = 0;
     for (let seed = 0; seed < 30; seed++) {
-      const out = humanize(src, { intensity: 0.9, seed });
+      const out = humanize(src, { intensity: 0.9, seed, genre: "dialogue" });
       if (out.includes("真正做出来") || out.includes("真做出来")) replaced++;
     }
     expect(
@@ -179,18 +183,23 @@ describe("v0.9.22 类别级语言质量守卫", () => {
   });
 
   it("定语位「在产业落地层面」不再产出「真正做出来那一摊」", () => {
+    // v0.9.49：同上显式 dialogue——正式体裁下落地已整条冻结，那条路上
+    // 「不产出」是被冻结保证的，测不到定语位守卫；要测守卫就得到能替换的体裁。
     const src = "在产业落地层面，各家企业的进度差别很大，这一点在调研里体现得很清楚。";
     for (let seed = 0; seed < 30; seed++) {
-      const out = humanize(src, { intensity: 0.9, seed });
+      const out = humanize(src, { intensity: 0.9, seed, genre: "dialogue" });
       expect(out, `seed=${seed}：${out}`).not.toContain("真正做出来");
     }
   });
 
   it("「致力于」的新替身是副词性的，能接动词短语（不再是「忙着服务用户」式病句）", () => {
+    // v0.9.49：显式 dialogue。致力于进 INFORMAL_ONLY_KEYS 后在正式体裁不替换，
+    // 本用例测的是 v0.9.22 的**池子质量**（副词性替身能接动词短语），与体裁政策
+    // 无关；默认自动体裁（main）下会被冻结挡住，观测不到池子。
     const src = "该产品致力于为用户创造长期价值，并且持续投入基础能力的建设。";
     let replaced = 0;
     for (let seed = 0; seed < 30; seed++) {
-      const out = humanize(src, { intensity: 0.9, seed });
+      const out = humanize(src, { intensity: 0.9, seed, genre: "dialogue" });
       expect(out, `seed=${seed}：${out}`).not.toContain("忙着");
       expect(out, `seed=${seed}：${out}`).not.toContain("长期好处");
       if (out.includes("一门心思") || out.includes("就盯着")) replaced++;

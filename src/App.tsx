@@ -88,12 +88,20 @@ function intensityWord(v: number): string {
 
 /**
  * 把 AI 味分数翻译成一句结论。
- * 判据沿用引擎自己的分档：≤27 是人写区间，29 是判定线（AI_SCORE_HUMAN_MAX / CUTOFF）。
+ *
+ * ⚠️ v0.9.49 措辞降调（原措辞「已经落在人写区间」超出证据，已改）：
+ * aiScore 是**套话命中计数器**，不是人写度标尺。项目自己的审计
+ * （artifacts/human-corpus，21 篇维基真人正文 17.2 万字）实测：
+ * 真人文本 aiScore **中位 35、最高 95，10/21 篇超过 27**——
+ * 而 27 这条线（AI_SCORE_HUMAN_MAX）来自 H6/H8 两个小样本（公文/技术说明），
+ * 换个体裁就不成立。所以 ≤27 的正确表述是"套话清得干净"，
+ * 而不是"像人写的"——后者是这枚指标证明不了的结论。
+ * 分档数值仍沿用引擎口径（12 / 27 / 45），只改说法，不改判据。
  */
 function scoreVerdict(score: number): string {
-  if (score <= 12) return "几乎没有 AI 味，可以直接交";
-  if (score <= 27) return "已经落在人写区间，基本没问题";
-  if (score <= 45) return "还有点味道，可以把强度调高一档再跑一次";
+  if (score <= 12) return "套话清得很干净，可以直接交";
+  if (score <= 27) return "剩下的多是正常书面词，基本可以交";
+  if (score <= 45) return "还有一批套话，可以把强度调高一档再跑一次";
   return "AI 味偏重，建议提到「彻底」重跑";
 }
 
