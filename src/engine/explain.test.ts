@@ -18,8 +18,13 @@ const SRC =
   "值得注意的是，在当今社会，人工智能技术的发展至关重要。事实上，它在一定程度上改变了我们的生活方式。综上所述，这一趋势具有十分重要的意义。";
 const SEED = 20260905;
 
+// v0.9.50：SRC 自动体裁判为 main ⇒ 正式语体门控生效，而「值得注意的是」已按
+// INFORMAL_ONLY_KEYS 整条冻结（它的三个替身都是自媒体装置，进正式稿是语体崩）。
+// 所以这条清单从 6 处降到 5 处 —— **降得有理由**：下面专门补一条用例盯住这个行为，
+// 免得将来有人只看到数字变了就顺手改回去。
+
 describe("explainChanges（真引擎输出上的归因）", () => {
-  it("6 处改动全部归因出来，且都命中明确规则表（certain 全 true）", () => {
+  it("5 处改动全部归因出来，且都命中明确规则表（certain 全 true）", () => {
     const out = humanize(SRC, { intensity: 0.6, seed: SEED });
     const items = explainChanges(SRC, out);
 
@@ -27,7 +32,6 @@ describe("explainChanges（真引擎输出上的归因）", () => {
     const pairs = items.map((i) => `${i.before}→${i.after}`).sort();
     expect(pairs).toEqual(
       [
-        "值得注意的是→说起来",
         "在当今社会→如今",
         "在一定程度上→多少",
         "事实上→平心来说",
@@ -45,7 +49,19 @@ describe("explainChanges（真引擎输出上的归因）", () => {
 
     // 「具有十分重要的意义」在 MECH_CLICHE_REWRITE 里，若被词表的短词先命中就会归错类
     expect(cliche.map((i) => i.before)).toEqual(["具有十分重要的意义"]);
-    expect(explainSummary(items)).toEqual({ vocab: 5, cliche: 1 });
+    expect(explainSummary(items)).toEqual({ vocab: 4, cliche: 1 });
+  });
+
+  it("正式语体下整池口语的词条不替换 ⇒ 归因清单里不该有它（v0.9.50）", () => {
+    const out = humanize(SRC, { intensity: 0.6, seed: SEED });
+    const pairs = explainChanges(SRC, out).map((i) => `${i.before}→${i.after}`);
+    expect(pairs).not.toContain("值得注意的是→说起来");
+    // 三个口语装置一个都不许出现。注意别写成 expect(out).toContain("值得注意的是")：
+    // 它虽不在词表层被替换，但作为开头连接短语会被另一层剥掉，断言它还在必红。
+    expect(out).not.toMatch(/说起来|顺带一提|有个细节/);
+    // 对照组：同一批句子在非正式体裁下仍应正常替换（别把「冻结」写成「全局删除」）
+    const casual = humanize(SRC, { intensity: 0.6, seed: SEED, genre: "dialogue" });
+    expect(casual).not.toContain("值得注意的是");
   });
 
   it("每条的依据都要指到具体文件，不许含糊其辞", () => {
@@ -149,7 +165,7 @@ describe("汇总与渲染", () => {
     const out = humanize(SRC, { intensity: 0.6, seed: SEED });
     const txt = formatExplain(explainChanges(SRC, out));
     expect(txt).toContain("依据：");
-    expect(txt).toContain("值得注意");
+    expect(txt).toContain("在当今社会");
   });
 
   it("lookupVocab 查不到就返回 null —— 不编一个替身出来", () => {
