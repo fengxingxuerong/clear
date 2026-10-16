@@ -433,7 +433,7 @@ export function isSceneBlockLine(line: string): boolean {
  */
 const SCENE_DIALOGUE_LINE_RE = /^[\u4e00-\u9fa5A-Za-z0-9]{1,12}(?:[（(][^）)]{0,12}[）)])?[：:]/;
 
-export function isSceneDialogueLine(line: string): boolean {
+function isSceneDialogueLine(line: string): boolean {
   return SCENE_DIALOGUE_LINE_RE.test(line.trimStart());
 }
 

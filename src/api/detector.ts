@@ -69,7 +69,7 @@ function failureSignal(data: Record<string, unknown>): string | null {
   return why.length ? why.join("；") : null;
 }
 
-export function getPath(obj: unknown, path: string): unknown {
+function getPath(obj: unknown, path: string): unknown {
   return path.split(".").reduce((o: unknown, k: string) => {
     // 中途断裂必须显式返回 undefined：若原样返回 null，外层 Number(null) === 0，
     // 检测器故障会被静默读成「0 分 = 完全人类」——失败方向最危险的一种。

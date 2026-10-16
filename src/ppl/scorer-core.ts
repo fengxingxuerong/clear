@@ -32,9 +32,9 @@ export interface PplFeature {
 }
 
 /** 滑窗参数：中文 bert-base-chinese 上限 512 token，留出 [CLS]/[SEP]/[MASK] 余量取 384 */
-export const WIN_TOKENS = 384;
+const WIN_TOKENS = 384;
 /** 相邻窗口重叠 token 数：保证跨窗词不被切断漏判 */
-export const STRIDE_TOKENS = 320;
+const STRIDE_TOKENS = 320;
 
 /**
  * 把原文按字符切成模型窗口序列。
@@ -140,7 +140,7 @@ export function maskGroups<T>(items: T[], groups: number): T[][] {
  * bert-base-chinese 特殊 token id（官方 WordPiece 词表固定值，已实测核对）：
  * [PAD]=0、[UNK]=100、[CLS]=101、[SEP]=102、[MASK]=103
  */
-export const SPECIAL_TOKEN_IDS = { pad: 0, unk: 100, cls: 101, sep: 102, mask: 103 } as const;
+const SPECIAL_TOKEN_IDS = { pad: 0, unk: 100, cls: 101, sep: 102, mask: 103 } as const;
 
 /**
  * 从分词序列挑出打分目标：全部非特殊、非 UNK 的位置。

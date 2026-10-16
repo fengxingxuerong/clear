@@ -71,7 +71,7 @@ const K_SEM_CACHE = "quaiwei.zhuque.semcache";
 const SEM_CACHE_MAX = 50;
 
 /** FNV-1a 32 位文本指纹 + 长度后缀（零依赖，长文碰撞概率可忽略） */
-export function textHash(s: string): string {
+function textHash(s: string): string {
   let h = 0x811c9dc5;
   for (let i = 0; i < s.length; i++) {
     h ^= s.charCodeAt(i);

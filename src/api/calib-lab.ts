@@ -199,7 +199,7 @@ export function clearOfficialResults(): void {
  * 诚实提醒（同 truthcheck）：这两点参与拟合属于「自证」，真评估要靠后续留出样本。
  */
 
-export const TRUTH_ANCHORS: Array<{
+const TRUTH_ANCHORS: Array<{
   name: string;
   text: string;
   official: number;
