@@ -104,7 +104,7 @@ const IDIOM_LIKE = reIdiomLike();
 
 /* ----------------------------- 工具 ----------------------------- */
 
-function splitSentences(text: string): string[] {
+export function splitSentences(text: string): string[] {
   // v0.9.25：与 humanize-text.ts 同一份「切点不得落在 URL/邮箱内部」的判据。
   // 此前这里按 `(?<=[。！？!?；;])` 直接切，URL 里的 `?` 会造出一个假句
   // ⇒ 句数虚高、句长分布被歪曲（实测样本1：5 句 → 4 句）。
@@ -374,7 +374,7 @@ function featureList(text: string, r: Raw, chars: number): FeatureItem[] {
 const FORMULAIC_RES: RegExp[] = FORMULAIC.map((p) => new RegExp(p));
 const SKELETON_RES: RegExp[] = SKELETON.map((s) => new RegExp("^" + s));
 
-function segmentRisk(sent: string): { risk: number; reason: string } {
+export function segmentRisk(sent: string): { risk: number; reason: string; reasons: string[] } {
   const reasons: string[] = [];
   let risk = 0;
 
@@ -441,6 +441,10 @@ function segmentRisk(sent: string): { risk: number; reason: string } {
   return {
     risk: Math.max(0, Math.min(100, Math.round(risk + 20))),
     reason: reasons[0] || "无明显痕迹",
+    // v0.9.52：审题模式（--detect-only）要给人看「这句为什么危险」的完整清单，
+    // 而 DetectReport.topSegments 只需要最重的一条。两者共用同一个 scoring，
+    // 保留 reason 单值以免动到 UI 既有渲染。
+    reasons: reasons.length ? reasons : ["无明显痕迹"],
   };
 }
 

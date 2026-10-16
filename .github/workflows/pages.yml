@@ -1,0 +1,63 @@
+name: Pages
+
+# 在线试玩：把 dist/ 静态站发到 GitHub Pages，让人不用装 Node 就能试用。
+#
+# ⚠️ 这里**故意不加 concurrency 的 cancel-in-progress**，理由同 ci.yml 的实测结论：
+#     本机网络不稳时多个推送会一次性进来，runner 排队超过 15 分钟会被判 cancelled；
+#     cancel-in-progress: true 会让新推送杀掉正在验证上一个提交的 run，得不到有效结论。
+#     这里用 group 做排队串行化（不取消），而不是互相打断。
+
+on:
+  # 首次启用 Pages 或想手动重发时用，避免白占 runner
+  workflow_dispatch:
+  push:
+    branches: [master]
+    # 只有真会影响静态站的改动才触发；改 docs/CHANGELOG 不必重发
+    paths:
+      - "src/**"
+      - "index.html"
+      - "vite.config.ts"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/pages.yml"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # ci.yml 踩过的坑：不能 --omit=optional，会把 rollup 的 linux 平台二进制一起省掉
+      - run: npm ci --no-fund --no-audit
+
+      - run: npm run build
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -18,7 +18,7 @@
  *       [--api [--base-url <url>] [--model <name>] [--api-key <key>] [--judge-model <name>]]
  *       [--alt-model <name>] [--no-deep] [--contest <n>] [--max-calls <n>] [--max-wait <sec>]
  *       [--strict] [--persona default|netgen|classic] [--report <file.json>]
- *       [--out-format follow|txt|docx] [--explain]
+ *       [--out-format follow|txt|docx] [--explain] [--detect-only]
  *       [--recursive] [--jobs <n>] [--dry-run]
  *
  * 示例：
@@ -59,6 +59,7 @@ import { humanize, adviceFor } from "../src/engine/humanize";
 import { aiScore } from "../src/engine/humanize-metrics.ts";
 import { detectAI } from "../src/engine/detector";
 import { explainChanges, formatExplain, type ExplainItem } from "../src/engine/explain";
+import { formatReview, reviewText, type ReviewReport } from "../src/engine/review";
 import { runHumanize } from "../src/api/llm";
 import { DEFAULT_API, loadPresetKeys, type ApiConfig } from "../src/api/llm-config";
 import { readDocxText, writeDocxText } from "../src/docx-io";
@@ -165,6 +166,12 @@ interface Args {
   stdin: boolean;
   /** v0.9.40：--help / -h。打印用法后正常退出（0），不再落进「未知参数」的错误分支 */
   help: boolean;
+  /**
+   * v0.9.52：审题模式。只输出「AI 味痕迹地图」（哪些句、为什么、怎么改），
+   * **一个字都不改、一个文件都不落盘**。与 `--dry-run` 的区别：后者列的是待处理文件清单，
+   * 这里列的是本文的问题清单。
+   */
+  detectOnly: boolean;
 }
 
 const USAGE =
@@ -173,13 +180,15 @@ const USAGE =
   " [--api [--base-url <url>] [--model <name>] [--api-key <key>] [--judge-model <name>]]" +
   " [--alt-model <name>] [--no-deep] [--contest <n>] [--max-calls <n>] [--max-wait <sec>]" +
   " [--strict] [--persona default|netgen|classic] [--report <file.json>]" +
-  " [--out-format follow|txt|docx] [--explain]" +
+  " [--out-format follow|txt|docx] [--explain] [--detect-only]" +
   " [--recursive] [--jobs <n>] [--dry-run]\n" +
   "  输入参数给 - 或整个省略时走标准输入：cat 稿.txt | ai-humanizer -s 0.8（正文 stdout，诊断 stderr）\n" +
   "  --base-url 填网关绝对地址（如 https://token.sensenova.cn/v1）。UI 设置里的 /sensenova/v1" +
   " 是同源代理专用写法（代理会剥掉 /sensenova 前缀再转发），CLI 直连勿带这段前缀。\n" +
   "  --recursive 目录扫描进子目录（默认不进）；--jobs 仅 --api 模式生效（并发路数）；" +
   "  --dry-run 只列出将处理的文件不落盘。目录批量默认跳过已带输出后缀的产物（重跑幂等）。" +
+  "\n  --detect-only 审题模式：只给「AI 味痕迹地图」（哪句、为什么命中、怎么改），" +
+  "一个字都不改也不落盘，无需 API Key。与 --dry-run（列待处理文件清单）不是一回事。" +
   "\n  --help / -h 打印本用法（退出码 0）。";
 
 function parseArgs(argv: string[]): Args {
@@ -211,6 +220,7 @@ function parseArgs(argv: string[]): Args {
     dryRun: false,
     stdin: false,
     help: false,
+    detectOnly: false,
   };
   const a = argv.slice(2);
   // v0.9.40：--help / -h 在最前面拦截。此前它落进 default 分支 →「未知参数」+ 退出码 1，
@@ -353,6 +363,9 @@ function parseArgs(argv: string[]): Args {
         break;
       case "--dry-run":
         args.dryRun = true;
+        break;
+      case "--detect-only":
+        args.detectOnly = true;
         break;
       default:
         console.error(`未知参数: ${a[i]}\n${USAGE}`);
@@ -541,6 +554,12 @@ async function runStdinMode(args: Args): Promise<void> {
     console.error("✗ 标准输入为空（用法示例：cat 稿.txt | ai-humanizer -）");
     process.exit(1);
   }
+  // v0.9.52：审题模式优先。stdin 只要痕迹地图——不做改写、不消耗额度、不改一个字
+  if (args.detectOnly) {
+    process.stdout.write(`${formatReview(reviewText(raw))}\n`);
+    return;
+  }
+
   const t0 = Date.now();
   const before = detectAI(raw).probability;
   const out = humanize(raw, {
@@ -617,6 +636,44 @@ async function main() {
       console.log(`（另跳过 ${collected.skipped} 个已带输出后缀「${args.suffix}」的既有产物）`);
     return;
   }
+  // v0.9.52：审题模式。位置同 --dry-run——在 Key 校验与建目录之前返回：
+  // 看自己的稿子有哪些 AI 味痕迹，不该被网关配置挡住，也不该留下空目录。
+  if (args.detectOnly) {
+    console.log(
+      `审题模式（--detect-only）：${files.length} 个文件 · 只出痕迹地图，一个字都不改、不落盘`,
+    );
+    console.log("─".repeat(64));
+    const reps: ReviewReport[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      const name = path.basename(f);
+      const step = files.length > 1 ? `[${i + 1}/${files.length}] ` : "";
+      try {
+        const raw = await readInputText(f);
+        if (!raw.trim()) {
+          console.log(`${step}⏭  ${name}：空文件，跳过`);
+          continue;
+        }
+        const r = reviewText(raw);
+        reps.push(r);
+        console.log(`${step}── ${name} ──`);
+        console.log(formatReview(r));
+        console.log("");
+      } catch (e) {
+        console.log(`${step}✗  ${name}：读失败（${(e as Error).message}）`);
+      }
+    }
+    if (reps.length > 1) {
+      const avg = Math.round(reps.reduce((s, r) => s + r.probability, 0) / reps.length);
+      const total = reps.reduce((s, r) => s + r.marked, 0);
+      console.log("─".repeat(64));
+      console.log(`汇总：${reps.length} 篇 · 平均代理分 ${avg} · 痕迹句合计 ${total}`);
+    }
+    if (collected.skipped)
+      console.log(`（另跳过 ${collected.skipped} 个带输出后缀「${args.suffix}」的产物）`);
+    return;
+  }
+
   fs.mkdirSync(args.out, { recursive: true });
 
   let cfg: ApiConfig | null = null;

@@ -52,6 +52,8 @@ import { ZhuquePanel } from "./components/ZhuquePanel";
 import { CalibLabModal } from "./components/CalibLabModal";
 import { LocalDetectPanel } from "./components/LocalDetectPanel";
 import { ExplainPanel } from "./components/ExplainPanel";
+import { ReviewPanel } from "./components/ReviewPanel";
+import { reviewText, type ReviewReport } from "./engine/review";
 import {
   loadHistory,
   saveHistory,
@@ -154,6 +156,8 @@ export default function App({
   const [showDetectFeatures, setShowDetectFeatures] = useState(false);
   // ---- 「为什么这么改」清单（事后比对，随任一稿更新而失效） ----
   const [explainItems, setExplainItems] = useState<ExplainItem[] | null>(null);
+  /** v0.9.52：审题模式的痕迹地图。null = 没在审题 */
+  const [review, setReview] = useState<ReviewReport | null>(null);
   // 流水线追踪：本地引擎这一稿真实跑过的步骤（LLM 路径为 null，面板不渲染）
   const [trace, setTrace] = useState<PipelineTrace | null>(null);
   // 上一稿的来源元信息：面板用它解释「为什么没有逐步记录」（LLM 远端执行 / 多候选择优）
@@ -280,6 +284,7 @@ export default function App({
       });
       setOutput(r.text);
       setExplainItems(null);
+      setReview(null); // 已经决定改写，痕迹地图退场（它是"改之前看"的东西）
       setBefore(r.before);
       setAfter(r.after);
       setJudgeScore(null);
@@ -453,6 +458,7 @@ export default function App({
   const handleInputChange = useCallback((v: string) => {
     setInput(v);
     setExplainItems(null); // 原文一改，旧的 diff 归因就作废了
+    setReview(null); // 痕迹地图也是按旧原文出的，一并作废
   }, []);
   const handleOutputChange = useCallback((v: string) => {
     setOutput(v);
@@ -465,6 +471,7 @@ export default function App({
     setOutput("");
     setNote("");
     setExplainItems(null);
+    setReview(null);
     setBefore(null);
     setAfter(null);
     setJudgeScore(null);
@@ -495,6 +502,15 @@ export default function App({
   function handleExplain() {
     if (!input.trim() || !output.trim()) return;
     setExplainItems(explainChanges(input, output));
+  }
+
+  /**
+   * 审题（detector-only）：只跑一次本地 heuristic，出一个只读的痕迹地图。
+   * 刻意不去碰 input / output / note——这是「看看」不是「改」，用户的稿一个字都不许动。
+   */
+  function handleReview() {
+    if (!input.trim()) return;
+    setReview(reviewText(input));
   }
 
   /* ---------------- 文件导入 / 导出（v0.9.15） ----------------
@@ -655,6 +671,14 @@ export default function App({
         )}
         <button className="primary" onClick={handleHumanize} disabled={loading}>
           {loading ? "处理中…" : "去味"}
+        </button>
+        <button
+          className="ghost"
+          onClick={handleReview}
+          disabled={!inputHasText}
+          title="只看不看改：列出第几句有 AI 味、命中哪类特征、建议怎么动"
+        >
+          审题
         </button>
         <button className="ghost" onClick={copy} disabled={!output}>
           复制
@@ -837,6 +861,18 @@ export default function App({
 
       {!simple && explainItems && (
         <ExplainPanel items={explainItems} onClose={() => setExplainItems(null)} />
+      )}
+
+      {/* 审题面板不藏进简洁档——它就是给"只想看看问题在哪"的人用的 */}
+      {review && (
+        <ReviewPanel
+          report={review}
+          onClose={() => setReview(null)}
+          onRun={() => {
+            setReview(null);
+            void handleHumanize();
+          }}
+        />
       )}
 
       {!simple && (detectIn || detectOut) && (

@@ -2,6 +2,73 @@
 
 > 完整版本历史，细节以对应 Git 提交为准。
 
+## v0.9.52 更新（补开源对标查出来的四项差距）
+
+起因是对 GitHub 同类做了一轮实测复查（2026-10-17：`scripts/scan-github-sector.mjs`）。
+结论是**引擎侧仍是能力超集**，差距全在发现性与分发，于是按这个顺序补了四条。
+
+### 一、detector-only 审题模式（对标 `no-ai-slop` 的 detect 模式）
+
+同赛道 `petergyang/no-ai-slop`（12.4k★）除改写外还有一个 dry-run 的 detect 模式；
+本仓库此前只有「改完才知道改了什么」（`--explain`）。本版补上**改之前先看**这一步：
+
+- `src/engine/review.ts`（新）：逐句出「第几句 / 风险 / 命中哪类特征 / 建议怎么动」。
+- `src/components/ReviewPanel.tsx`（新）+ 界面「审题」按钮；刻意**不藏进简洁档**——
+  它恰恰是给「只想看看问题在哪」的人用的。
+- CLI `--detect-only`（位置同 `--dry-run`：在 Key 校验与建目录**之前**返回 ⇒ 不留空目录、
+  也不需要 Key）。注意与 `--dry-run` 区分：后者列的是**待处理文件清单**，这里列的是**问题清单**。
+
+两条设计取舍：
+
+1. **不另写一套打分**。直接复用 `detector.ts` 的 `segmentRisk`（为此补导出 + 补 `reasons[]` 全量返回），
+   让「评分」与「痕迹地图」永远用同一个判据——分两套迟早漂移。
+   `review.test.ts` 有一条专门锁这件事：`reviewText(t).probability === detectAI(t).probability`。
+2. **按文档顺序输出，不按风险排序**。`DetectReport.topSegments` 是按风险降序的（给快速看最重的几句），
+   痕迹地图却要让人顺着读下去改东西。两者定位不同，`marked` 的写法不能互相套。
+
+**只列门槛以上的句子**（门槛 40，取在 detector 的 medium 判档线 32 之上一点）。
+**正向特征不给建议**：「有主观视角 / 有具体细节 / 短句 / 疑问句」是减风险的项，
+它们出现在 reasons 里是解释为什么这句分数低，不是待办。
+
+### 二、开源对标表刷新到 2026-10-17 实测
+
+- 全部 star 重抓，补上早期漏掉的 4 个相关项目：`no-ai-slop`（12.4k）、
+  `zenstory-ai/oh-story-claudecode`（7.7k）、`KKKKhazix/human-writing`（4.1k）、
+  `hexiecs/talk-normal`（1.9k）。
+- **作废一条过时口径**：早期对标写「本仓库还没有面向用户的『为什么这么改』清单」——
+  v0.9.15 起就有 `--explain` + ExplainPanel，v0.9.47 又加了 `PipelineTrace`。已在 README 里改正。
+- ⚠️ **本轮我自己的一处误判，如实登记**：上一版诊断里说「补 GitHub topics」是错的——
+  topics 早就填了 12 个（含 `ai-humanizer` / `chinese-nlp` / `writing-tools`）。
+  真没开的是 `has_pages` 与 `has_discussions`（这两项要 GitHub 写操作）。
+
+### 三、发现性基建
+
+| 新增 | 说明 |
+|---|---|
+| `.github/workflows/pages.yml` | 在线试玩（静态站托管）。`concurrency` **刻意只排队不取消**——沿用 ci.yml 那次实测教训：`cancel-in-progress: true` 会让新推送杀掉正在验证上一个提交的 run，两边都拿不到结论 |
+| `.github/ISSUE_TEMPLATE/` | 「去味缺陷」模板强制带原文 / 产物 / 参数三项，并**要求先脱敏**——我们只要语法现象，不要真文本；另有一个「其他」模板 |
+| `CONTRIBUTING.md` | 把 CI 管不了的硬纪律写实：判形态不判体裁、动 VOCAB 必跑 `gen-skill-rules`、多种子验收、变异检验、断言不许反查生产表、话术红线 |
+| `README_EN.md` | 英文精简版 + README 顶部双语入口与在线试玩链接 |
+| `scripts/scan-github-sector.mjs` | 赛道扫描器入仓。走 `github.com` 页面内嵌的 `stargazerCount`，**绕开 `api.github.com` 的 60 次/小时匿名限额**——该限额实测常被本机出口 IP 打满（`remaining=0`，要等约 50 分钟），旧脚本 `_gh-scan.cjs` 因此整轮失效，已删 |
+
+### 四、过程纪律
+
+- 新增 14 条用例（`review.test.ts` 10 + `review-panel.test.tsx` 4），
+  **两处变异检验均报红**：①改成按风险排序 → 「按文档顺序」用例红；
+  ②清空 `POSITIVE` 集合 → 「正向特征不给建议」用例红。
+- 加了 CLI 参数就得同步 `SKILL.md`（`skill-md.test.ts` 双向锁：不许文档造参数、不许文档落后于代码）——已同步。
+- 门槛与建议都是**独立常量断言**，不从 `review.ts` 的 `ADVICE` 表反查：否则删掉某条建议会连带删掉对它的检查。
+- 校验：tsc / eslint / prettier 全绿；`src/` 全量 **1580/1580 绿**（含 `App.test.tsx` 62 条——加「审题」按钮没碰坏现有交互）。
+
+### 五、仍欠的四项（下一个版本）
+
+| 项 | 卡点 |
+|---|---|
+| 语气克隆（喂样本文字学作者口吻，对标 blader 语气校准 / no-ai-slop） | 已设计未完成，本版跳过 |
+| **缺信息就提问**代替事后否决 | 现在是「编造否决 + 回退」，写完了才发现，成本高 |
+| **动作级禁令**（禁这个修辞动作，不管穿什么句式） | 守卫仍在字面 / 形态层 |
+| 仓库名 `clear` 不含产品关键词 | 改名是 GitHub 侧动作，待决策 |
+
 ## v0.9.51 更新（第三弹：语料扩容到 20 篇，抓出五类新缺陷）
 
 `leak-scan.ts` 这台仪器建好后的第三轮扩容：前两批 15 篇里正式体只有「工作总结/行政通知/

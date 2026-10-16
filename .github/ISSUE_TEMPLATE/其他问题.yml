@@ -1,0 +1,33 @@
+name: 其他（建议 / 安装失败 / 文档问题）
+description: 不是具体某句话改错，而是安装失败、功能建议、文档或 README 有错。
+title: "[其他] "
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: 类型
+      options:
+        - 功能建议
+        - 安装 / 启动失败
+        - 文档或 README 有错
+        - 性能问题
+        - 其他
+    validations:
+      required: true
+
+  - type: textarea
+    id: detail
+    attributes:
+      label: 具体情况
+      description: 装失败请把完整报错贴进来（建议加 --verbose 的输出）。建议请说清你要解决的场景。
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: env
+    attributes:
+      label: 运行环境
+      description: 系统 + 版本 + Node 版本。例：`Windows 11 / v0.9.51 / node 20.11`
+    validations:
+      required: false

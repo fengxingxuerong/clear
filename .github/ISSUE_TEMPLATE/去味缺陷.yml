@@ -1,0 +1,77 @@
+name: 去味缺陷（漏改 / 误杀 / 语体崩）
+description: 报告一处「改错了」或「该改没改」的具体原文与产物。本项目的每处缺陷都会进语料库配 regression 用例。
+title: "[缺陷] "
+labels: ["defect"]
+body:
+  - type: markdown
+    value: |
+      > 只贴**能公开**的片段。涉及真实人名 / 金额 / 内部数据的，请先改成等价的假数据——我们只要语法现象，不要真文本。
+      > 一句话说清「书面上看错了什么」，比长描述有用。
+
+  - type: textarea
+    id: input
+    attributes:
+      label: 原文片段
+      description: 改动**之前**的文本。请给到能复现的最小片段（一句话或一段）。
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: 实际产物
+      description: 工具给出的文本。若问题与 heredoc 无关，直接粘结果即可。
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 你期望的产物（可选）
+      description: 同一个可以写人类答这样的话也可以写希望它能保持原样。
+      render: text
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: 缺陷类型
+      options:
+        - 漏改（AI 味还在）
+        - 误杀（本来就是人话，被改成别扭）
+        - 语体崩（正式稿被改成口语稿，或反之）
+        - 改写事实（人名 / 数字 / 术语 / 文件标题变了）
+        - 重复或叠字（同一个词写了两遍）
+        - 标点 / 格式破坏
+        - 读着更啰嗦（字变多了，信息没多）
+        - 其他
+    validations:
+      required: true
+
+  - type: dropdown
+    id: engine
+    attributes:
+      label: 走的哪条路径
+      options:
+        - 本地引擎（默认，不联网）
+        - LLM 深度闭环（--api / UI 里开了 API）
+        - 不确定
+    validations:
+      required: true
+
+  - type: input
+    id: params
+    attributes:
+      label: 当时的参数
+      description: 版本 + 强度 + 文风 + seed。不确定就填版本。例：`v0.9.51 / intensity 0.9 / plain / seed 默认`
+    validations:
+      required: false
+
+  - type: input
+    id: env
+    attributes:
+      label: 运行环境
+      description: 例：`Windows 桌面版 v0.9.51`、`Firefox + Pages 在线试玩`、`CLI node 20`
+    validations:
+      required: false
