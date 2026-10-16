@@ -28,9 +28,9 @@ The tools you compare this against at the top of the topic (`blader/humanizer`, 
 
 ## Install
 
-**Try it in your browser** — no install needed: **[online demo](https://fengxingxuerong.github.io/clear/)** (live)
+**Try it in your browser** — no install needed: **[online demo](https://fengxingxuerong.github.io/quaiwei/)** (live)
 
-**Desktop (Windows, no install, ~474 MB):** [latest release](https://github.com/fengxingxuerong/clear/releases/latest)
+**Desktop (Windows, no install, ~474 MB):** [latest release](https://github.com/fengxingxuerong/quaiwei/releases/latest)
 — unzip, double-click `QuAiWei.exe`.
 
 **CLI:**
@@ -45,7 +45,7 @@ Input can be a file or a directory (`.txt` / `.md` / `.docx`). Encoding is auto-
 **As an Agent Skill:**
 
 ```bash
-npx skills add fengxingxuerong/clear
+npx skills add fengxingxuerong/quaiwei
 ```
 
 ---

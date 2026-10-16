@@ -24,7 +24,7 @@ const REPOS = [
   "KKKKhazix/human-writing",
   "zenstory-ai/oh-story-claudecode",
   "hexiecs/talk-normal",
-  "fengxingxuerong/clear",
+  "fengxingxuerong/quaiwei",
 ];
 
 const UA = { "User-Agent": "Mozilla/5.0" };

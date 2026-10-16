@@ -1,14 +1,14 @@
 # 趣AI味 · QuAiWei v0.9.52
 
-[![CI](https://github.com/fengxingxuerong/clear/actions/workflows/ci.yml/badge.svg)](https://github.com/fengxingxuerong/clear/actions/workflows/ci.yml)
+[![CI](https://github.com/fengxingxuerong/quaiwei/actions/workflows/ci.yml/badge.svg)](https://github.com/fengxingxuerong/quaiwei/actions/workflows/ci.yml)
 
 把 AI 写的文章改得更像人写的。**默认不配置任何 API 也能用**（本地引擎离线运行、零成本），
 想更强就接一个 OpenAI 兼容的 LLM（各家通吃，实测支持 OpenRouter / SenseNova / OpenAI）。
 定位：中文 AI 文本**去味预处理工具 + 送检前自检清单**——可接入朱雀（网页版半自动 / EdgeOne API 全自动）等真实检测器做闭环验证。
 
-**在线试玩**（无需安装，浏览器直接跑，✅ 已上线）：<https://fengxingxuerong.github.io/clear/> ｜
-**下载**：[Windows 免安装包](https://github.com/fengxingxuerong/clear/releases/latest)——解压双击 `QuAiWei.exe` 即用 ｜
-[English](README_EN.md) ｜ [贡献指南](CONTRIBUTING.md) ｜ [Discussions](https://github.com/fengxingxuerong/clear/discussions)
+**在线试玩**（无需安装，浏览器直接跑，✅ 已上线）：<https://fengxingxuerong.github.io/quaiwei/> ｜
+**下载**：[Windows 免安装包](https://github.com/fengxingxuerong/quaiwei/releases/latest)——解压双击 `QuAiWei.exe` 即用 ｜
+[English](README_EN.md) ｜ [贡献指南](CONTRIBUTING.md) ｜ [Discussions](https://github.com/fengxingxuerong/quaiwei/discussions)
 
 > ⚠️ 诚实声明：本项目**不承诺"通过朱雀检测"**——aiScore → 朱雀官方分的换算**不可靠**：
 > 现有 18 个送检点为人工抄录，且账本启用（`scripts/zhuque-evidence.ts`）**之前**没有留下页面截图等
@@ -641,7 +641,7 @@ Claude Code / Codex）。历经三次复测：首测 2026-10-03、2026-10-05 用
 | [baibanbao/qu-ai-wei](https://github.com/baibanbao/qu-ai-wei) | 71 | 2026-09-23 | Agent Skill | 同名撞车；合并三家规则并**逐条裁决 7 处矛盾** |
 | [qoqu/anti-zhuque](https://github.com/qoqu/anti-zhuque) / [weiyinerzui/humanize-cn](https://github.com/weiyinerzui/humanize-cn) | 28 / 25 | 2026-02 / 2026-05 | 工具 | 直接冲朱雀/知网/维普，**均已停更** |
 | [pengong101/ai-humanizer-cn](https://github.com/pengong101/ai-humanizer-cn) | 1 | 2026-03-25 | Python 包 | pip；质量评分而非 AI 检测 |
-| **本项目**（[fengxingxuerong/clear](https://github.com/fengxingxuerong/clear)） | **3** | 2026-10-16 | **Electron + Web + CLI + Skill** | 内置启发式检测打分 + 朱雀官方 API 闭环 + 1907 条用例回归；免安装 exe / 静态站 / CLI / SKILL.md |
+| **本项目**（[fengxingxuerong/quaiwei](https://github.com/fengxingxuerong/quaiwei)） | **3** | 2026-10-16 | **Electron + Web + CLI + Skill** | 内置启发式检测打分 + 朱雀官方 API 闭环 + 1907 条用例回归；免安装 exe / 静态站 / CLI / SKILL.md |
 
 **同名撞车（2026-10-17 复核，仍未解）**：GitHub 上另有两个也叫 `qu-ai-wei` 的仓库
 （`LifelongLazyLearner` 660★、`baibanbao` 71★），与本项目 Electron **包名**同名，

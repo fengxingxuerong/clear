@@ -4,7 +4,7 @@ description: 去 AI 味（简体中文）——调用本仓库自带的本地离
 license: MIT
 metadata:
   version: 0.9.52
-  repo: https://github.com/fengxingxuerong/clear
+  repo: https://github.com/fengxingxuerong/quaiwei
 ---
 
 # 去 AI 味 · QuAiWei

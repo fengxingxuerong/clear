@@ -31,4 +31,4 @@ description: 中文 AI 文本去味规则集。改写成人口语、消除 AI �
 
 本目录 rules/*.md 由 QuAiWei 仓库 `scripts/gen-skill-rules.ts` 从引擎源码
 （词表/旋钮/守卫正则）**自动生成**，与引擎同源、随引擎更新。
-引擎本体：https://github.com/fengxingxuerong/clear （Electron 桌面 + CLI + Web 三端）。
+引擎本体：https://github.com/fengxingxuerong/quaiwei （Electron 桌面 + CLI + Web 三端）。
