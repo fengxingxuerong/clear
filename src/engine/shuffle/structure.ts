@@ -12,6 +12,7 @@ import {
 import { fragmentCanStand } from "../humanize-vocab.ts";
 import { keepOnlyIfDetectDrops } from "../detector.ts";
 import { classifyExpositionScore } from "./fingerprint.ts";
+import { isSpecTableParagraph } from "../anti-fingerprint.ts";
 
 /** 承接词黑名单：以这些词开头的句子「必须」等在前句之后，不能参与重排（否则出病句） */
 const SEQUENCE_HEAD_RE =
@@ -516,6 +517,13 @@ export function structuralShuffleParagraph(
   if (intensity < 0.5) return paragraph;
   const sents = splitSentences(paragraph);
   if (sents.length < 3) return paragraph;
+  // v0.9.51：参数表/技术规格表段落整段跳过结构层。
+  // C18 招标参数表实测（0.9 档 seed 20261015）：条目被打散成 5 句、
+  // 「实质性要求」条款被搬进参数中间（改写事实级）、参数后挂「为什么呢？」。
+  // 本层的设计目标是拆解**论说文**结构指纹，对参数表没有对应结构可拆。
+  // 判据是双条件（≥2 条目头 + ≥2 参数谓词），行政通知 C11（「第一条」形态）
+  // 不受影响——详见 anti-fingerprint.ts 的 isSpecTableParagraph 注释。
+  if (isSpecTableParagraph(paragraph)) return paragraph;
   const style = opts.style ?? "plain";
   let working = sents;
   working = breakEnumerationStructure(working, rng, intensity, style);

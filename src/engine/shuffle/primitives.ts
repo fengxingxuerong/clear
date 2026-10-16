@@ -35,8 +35,18 @@ export function relaxDunhao(text: string, rng: () => number, p: number): string 
     // 修前「二、」被换成「二以及」/「二，」）。
     // 枚举骨架的打散归 breakEnumerationStructure 管（它 v0.9.34 起也认顿号编号），
     // 两层各司其职，不在这里越权。
+    // v0.9.51 法条编号守卫（续）：C17 判决书实测「第十条、第八十二条之规定」
+    // 被换成「第十条，第八十二条之规定」5/13 seed，且 A/B 证明与体裁无关
+    // （auto/forced-main 均 4/12）⇒ 守卫必须认「第X条」。
+    // ⚠️ 首版写成「prevSeg **是**编号」（^…$ 全串锚定）不生效——artifacts/
+    //    _probe-dunhao-debug.ts 实测：run 的实际匹配是
+    //    「人民共和国劳动合同法》第十条、第八十二条之规定」（书名号长名词
+    //    也在字符类里），prevSeg 是整条左段而非「第十条」。
+    //    改为「左段**以**编号结尾」（只锚 $）：「……》第十条」命中、
+    //    「加强制度建设」不命中（普通并列照换，不误伤）。
     const prevSeg = run.slice(0, last).split("、").pop() ?? "";
-    if (/^(?:[一二三四五六七八九十]+|\d+)$/.test(prevSeg)) return run;
+    if (/(?:第?[一二三四五六七八九十百千零\d]+条?|[一二三四五六七八九十]+|\d+)$/.test(prevSeg))
+      return run;
     // v0.8.5 去掉"跟"：「X拓宽跟搭台子」式连读拗口且命中接跟探针
     const joint = hasConj || verbish ? "，" : pick(rng, ["以及", "和", "，"]);
     return run.slice(0, last) + joint + run.slice(last + 1);

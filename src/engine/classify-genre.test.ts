@@ -243,6 +243,86 @@ describe("冒号台词特征（字符类修复的防复发）", () => {
   });
 });
 
+/**
+ * v0.9.51 标签冒号形态排除（诉讼判项标签 / 条目字段标签）
+ *
+ * 背景：Rule 1 的「台词冒号」在 v0.9.46 排掉了三种非台词形态（新闻转述动词/
+ * URL scheme/说明标签），第三批语料又暴露两种同源形态：
+ *   C17 判决书    「上诉请求：」「事实和理由：」   → colon=0.286 判 dialogue
+ *   C18 招标参数表「项目名称：」「招标编号：」     → colon=0.286 判 dialogue
+ * 标签冒号把正式文书打成对话体后，formalRegister（genre==="main"）整层失效：
+ * 句尾语气词「呢/呀/嘛」注入判决书（6/13 seed）、条款位移进参数表。
+ *
+ * 修法口径与 v0.9.46 三条排除一致：只排除「冒号左边白纸黑字是这些形态」的
+ * 确定性证据，不碰阈值。本块锁五件事：
+ *   ① C17 → main 且 colon 归零（修前 0.286 → dialogue）；
+ *   ② C18 → main 且 colon 归零（同源）；
+ *   ③ 单标签级：四个诉讼/字段标签逐个排除，不留「靠全文其他句摊薄」的侥幸；
+ *   ④ 裸「项目：」刻意不收——对话里真有人说「项目：预算批了」；
+ *   ⑤ 「本院认为」由 REPORT_VERB_RE 的「认为」分支覆盖，不重复收（源码级 +
+ *      行为级双锁）；真台词不误伤（Rule 1 没被废除）。
+ */
+describe("v0.9.51 标签冒号排除：诉讼判项与条目字段", () => {
+  // 语料与 scripts/realcase/cases.json 同源（src 测试不跨层 import scripts，故抄录）
+  const C17_VERDICT =
+    "上诉人北京某科技有限公司因与被上诉人李某劳动争议一案，不服北京市海淀区人民法院（2025）海0105民初12345号民事判决，向本院提起上诉。本院于二〇二六年三月十八日立案后，依法组成合议庭进行了审理。本案现已审理终结。某科技公司上诉请求：撤销一审判决，依法改判驳回李某的全部诉讼请求。事实和理由：双方签订的劳动合同约定李某担任算法工程师，试用期为三个月。李某辩称，其在职期间存在加班事实，公司未足额支付加班工资。本院认为，根据《中华人民共和国劳动合同法》第十条、第八十二条之规定，用人单位自用工之日起超过一个月不满一年未与劳动者订立书面劳动合同的，应当向劳动者每月支付二倍的工资。";
+  const C18_TENDER =
+    "项目名称：智慧园区综合管理平台建设项目。招标编号：HFZB-2026-089。以下技术参数为实质性要求，投标文件须逐项响应，不允许负偏离。一、服务器：2U 机架式，配置不少于 2 颗 32 核处理器，内存容量不低于 512GB，硬盘容量不低于 4TB NVMe SSD，支持 RAID 0/1/5/6。二、网络设备：核心交换机交换容量不低于 12.8Tbps，支持 IPv4/IPv6 双栈。三、软件平台：支持不少于 5000 个物联网终端并发接入，系统可用性不低于 99.99%。投标人须提供所投产品制造商出具的本项目授权及售后服务承诺函原件。";
+
+  it("①C17 判决书 → main 且 dlgColonRatio=0（修前 0.286 判 dialogue）", () => {
+    const r = classifyGenre(C17_VERDICT);
+    expect(r.genre).toBe("main");
+    expect(r.features.dlgColonRatio).toBe(0);
+  });
+
+  it("②C18 招标参数表 → main 且 dlgColonRatio=0（同源：修前 0.286）", () => {
+    const r = classifyGenre(C18_TENDER);
+    expect(r.genre).toBe("main");
+    expect(r.features.dlgColonRatio).toBe(0);
+  });
+
+  it("③单标签级排除：诉讼判项标签与条目字段标签逐个不计冒号", () => {
+    // 每个样本只有一个标签冒号句 + 一句无冒号正文：若对应排除失效，colon 必 = 0.5
+    const cases: string[] = [
+      "上诉请求：撤销一审判决，依法改判驳回被上诉人的全部诉讼请求，二审诉讼费用由被上诉人承担。本案现已审理终结。",
+      "事实和理由：双方签订的劳动合同约定试用期为三个月，公司未足额支付加班工资。上述事实有证据支持。",
+      "项目名称：智慧园区综合管理平台建设项目，本项目已经完成立项批复，技术参数详见附件。",
+      "招标编号：HFZB-2026-089，本项目已经完成立项批复，技术参数详见后续附件说明。",
+    ];
+    for (const t of cases) {
+      expect(classifyGenre(t).features.dlgColonRatio, `标签句被当成台词：${t.slice(0, 12)}…`).toBe(
+        0,
+      );
+    }
+  });
+
+  it("④裸「项目：」刻意不收——字段名必须带「名称/编号」这类确定性后缀", () => {
+    // 对话里真有人说「项目：预算批了」。收裸词会把这类真台词误排除。
+    const t = "项目：预算批了，下周可以启动，相关的技术参数表已经发到各位手里，请尽快反馈意见。";
+    expect(classifyGenre(t).features.dlgColonRatio).toBe(1);
+  });
+
+  it("⑤「本院认为」不重复收：由 REPORT_VERB_RE 的「认为」分支覆盖（源码+行为双锁）", () => {
+    // 行为面：「本院认为：」必须被排掉（不是漏判）
+    const t =
+      "本院认为：原审判决认定事实清楚，适用法律正确，应予维持。本案二审诉讼费用由上诉人负担。";
+    expect(classifyGenre(t).features.dlgColonRatio).toBe(0);
+    // 源码面：LITIGATION_LABEL_RE 里确实没有「本院认为」（重复收会让两条正则
+    // 耦合，将来动 REPORT_VERB_RE 时以为还有诉讼标签兜底）
+    const src = readFileSync(new URL("./classify-genre.ts", import.meta.url), "utf8");
+    const m = /const LITIGATION_LABEL_RE =\s*\/(.+?)\/;/.exec(src);
+    expect(m, "前置：classify-genre.ts 里必须还能找到 LITIGATION_LABEL_RE").not.toBeNull();
+    expect(m![1]).not.toContain("本院认为");
+  });
+
+  it("⑥真台词不误伤：角色前缀冒号照旧判 dialogue（Rule 1 没被排除项废除）", () => {
+    const t = `王姐（测试主管）：提测之后记得同步一份变更清单给我。
+张总（项目经理）：好的，我记下了，明天上午统一发给相关同事。
+李工（前端负责人）：我今晚加个班，把最后的边界用例补齐再提交。`;
+    expect(classifyGenre(t).genre).toBe("dialogue");
+  });
+});
+
 describe("classifyGenre 短文本兜底（覆盖行 64/121）", () => {
   it("空串 → 全零特征 + ruleHit=4 兜底", () => {
     const r = classifyGenre("");

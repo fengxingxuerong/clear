@@ -415,3 +415,37 @@ export function fixOrphanConnectiveLeads(text: string): string {
 export function isSceneMetaSentence(sentence: string): boolean {
   return SCENE_LINE_RE.test(sentence);
 }
+
+/* =========================================================
+   D2) 参数表条目段保护（v0.9.51，C18 招标参数表实测新增）
+   =========================================================
+   为什么单开一个判据：结构层（structuralShuffleParagraph）的设计目标是拆解
+   **论说文**的三段式/排比/编号指纹，对参数表没有对应结构可拆——动刀只会
+   破坏规格表述。C18 招标参数表实测（强度 0.9，seed 20261015）：
+     ① 「一、服务器：2U 机架式，配置不少于 2 颗 32 核处理器，内存容量不低于
+         512GB，硬盘容量不低于 4TB NVMe SSD，支持 RAID 0/1/5/6。」被
+         breakEnumerationStructure + shuffleSentencesSafe 打散成 5 句；
+     ② 「以下技术参数为实质性要求，投标文件须逐项响应，不允许负偏离。」
+         整句被搬进条目参数中间 = **改写条款顺序（改写事实级）**；
+     ③ injectSelfQA 在参数后面挂「为什么呢？」（5/13 seed，语体崩）。
+   ①②③ 都发生在同一层 ⇒ 整段跳过结构层一并根治。
+
+   判据刻意做成**双条件**，防止把无缺陷的条款文本一起误伤：
+     · ≥2 个「一、」式条目头（「第一条 本细则…」是「第X条」形态，不算——
+       行政通知 C11 实测无缺陷，不跳过）；
+     · ≥2 处参数谓词（不少于/不低于/不超过…）——公文条文的谓词是
+       「适用/负责/遵循」，参数表才是「不少于/不低于」。
+   C11 行政通知：条目头 0（「第一条」不匹配「一、」）⇒ 不跳，行为不变。
+   ========================================================= */
+/** 段落是否为「参数表/技术规格表」形态（是则结构层整段跳过） */
+export function isSpecTableParagraph(paragraph: string): boolean {
+  // ⚠️ 前置字符必须是「句号/分号/换行」而不能只是行首：单段文本里
+  //    「……不允许负偏离。一、服务器：……」的条目头跟在句号后，
+  //    只锚 ^|\n 会 0 匹配（v0.9.51 首版实测判据恒 false，残留全没治住）。
+  //    刻意不收「了/的」等前置——「修订了一、二号文件」不是条目头。
+  const itemHeads =
+    paragraph.match(/(?:^|[。\n；])\s*(?:[一二三四五六七八九十]+|\d+)\s*[、.．]\s*\S/g) ?? [];
+  if (itemHeads.length < 2) return false;
+  const specPreds = paragraph.match(/不(?:少于|低于|高于|超过|小于|大于|足于)/g) ?? [];
+  return specPreds.length >= 2;
+}

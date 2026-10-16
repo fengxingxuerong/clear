@@ -103,6 +103,7 @@ import {
   fixOrphanConnectiveLeads,
   isSceneMetaSentence,
   fixBrokenCollocations,
+  isSpecTableParagraph,
 } from "./anti-fingerprint.ts";
 
 // v0.9.50 书名号/结构化串区间保护（URL、邮箱、文件标题一律不改写）
@@ -479,6 +480,13 @@ export const FORMAL_FORBIDDEN_SUBSTITUTES = new Set([
   "抓紧", // 同上
   "联手", // 协同 / 通力 → 联手：「配合 / 合力」正式安全（跨篇累计 14 次命中）
   "这么一来", // 从而 → [这么一来, 借此]：学术摘要实测「这么一来增强了模型的迁移能力」
+  // —— v0.9.51 曾把六个序数词替身加在这里，又被 vocab-formal-substitutes.test.ts
+  //    的第 ② 条当场抓出，已移除。教训：「首先/其次/最后」的口语替身
+  //    （先说一个/头一件/一来/最后说一句/收个尾/末了）走的是 replaceOpener
+  //    的 **OPENERS 平行路径**，根本不是 VOCAB 候选——加进这张表一个都拦不住
+  //    （首轮实测 C20 照旧泄漏），真修法在 humanizeSingle 的
+  //    `if (!formalRegister) s = replaceOpener(...)` 门控（见该处注释）。
+  //    表必须从「当前词表」倒推：VOCAB 里不存在的词，写进来只是死重。
 ]);
 
 /* ------------------------------------------------------------------
@@ -1153,7 +1161,7 @@ export function humanize(text: string, opts: HumanizeOptions = {}): string {
   const tPara = nowMs();
   let result: string;
   if (paragraphs.length <= 1) {
-    result = humanizeSingle(text, { ...opts, intensity, genre: effectiveGenre });
+    result = humanizeSingle(text, { ...opts, intensity, genre: effectiveGenre, officialDoc });
   } else {
     const baseSeed = opts.seed;
     result = paragraphs
@@ -1163,6 +1171,7 @@ export function humanize(text: string, opts: HumanizeOptions = {}): string {
           intensity,
           genre: effectiveGenre,
           para: i,
+          officialDoc,
           seed: baseSeed === undefined ? undefined : (baseSeed + i * 2654435761) >>> 0,
         }),
       )
@@ -1312,6 +1321,15 @@ export function humanize(text: string, opts: HumanizeOptions = {}): string {
       result,
     );
 
+  // v0.9.51：参数表段落不参与节奏兜底切句。C18 招标参数表实测：条目句的参数
+  // 并列（「配置不少于 2 颗 32 核处理器，内存容量不低于 512GB，硬盘容量不低于
+  // 4TB NVMe SSD，支持 RAID 0/1/5/6」）被 boostBurstinessByCutting 在每个
+  // 逗号处劈开，规格表述碎成散文——单点跑测（seed 20261015）与 12 seed 复扫
+  // 均稳定复现。逐段判定（判据是段级形态：条目头 + 参数谓词），
+  // 详见 anti-fingerprint.ts 的 isSpecTableParagraph 注释。
+  const burstCut = (p: string, target: number, cuts: number): string =>
+    isSpecTableParagraph(p) ? p : boostBurstinessByCutting(p, target, cuts);
+
   // 全文级句长节奏兜底
   const tRhythm = nowMs();
   if (intensity > 0.4) {
@@ -1341,9 +1359,9 @@ export function humanize(text: string, opts: HumanizeOptions = {}): string {
     result = result.includes("\n\n")
       ? result
           .split(/\n\n+/)
-          .map((p) => boostBurstinessByCutting(p, 0.55, 8))
+          .map((p) => burstCut(p, 0.55, 8))
           .join("\n\n")
-      : boostBurstinessByCutting(result, 0.55, 8);
+      : burstCut(result, 0.55, 8);
   }
   if (onStage)
     emitStage(
@@ -1419,8 +1437,16 @@ export function humanize(text: string, opts: HumanizeOptions = {}): string {
   // P7-C + P5-A：按体裁压 avgLen（论说23 / 叙事28 / 对话32 / 人写36 不触发硬切）
   // v0.9 专家修复 P2 连带：切点守卫收紧后长句切分机会变少，maxCuts 5→8 补偿——
   // 只放宽「尝试次数」，每刀仍逐点过守卫，不会切出残句
+  // v0.9.51：参数表跳过钳制——C18 招标参数表实测条目句「配置不少于 2 颗 32 核
+  // 处理器，内存容量不低于 512GB……」被「最长句中央逗号处切段」打散成五句，
+  // 且这是**最后一道**切句路径（前面 rhythm/burst/结构层都跳过之后仍复现）。
+  // avgLen 对参数表是错指标：条目句长是规格表述的天然长度，压它等于压内容。
+  // 整篇级判定（不逐段）——宁可整体跳过钳制，不可把参数表段落和普通段落
+  // 混在同一决策里（混合稿件极少，保守方向是少切）。
   const tClamp0 = nowMs();
-  result = clampAvgSentenceLenUnder25(result, knobs.avgLenTarget, 8);
+  if (!isSpecTableParagraph(result)) {
+    result = clampAvgSentenceLenUnder25(result, knobs.avgLenTarget, 8);
+  }
   // P7-C + P4-B（P5 增强版）：按体裁拉 burstiness CV（论说0.63 / 叙事0.59 / 对话0.57 / 人写0.50）
   //       （原全局固定 0.61 → 现按体裁分档，论说最严、人写最松，避免负斜率体裁被过度注入锚点）
   // P4-A：最终保险整篇破折号/省略号硬上限，解决指纹自检"破折号超标×2/×3"红项
@@ -1472,9 +1498,9 @@ export function humanize(text: string, opts: HumanizeOptions = {}): string {
     result = result.includes("\n\n")
       ? result
           .split(/\n\n+/)
-          .map((p) => boostBurstinessByCutting(p, knobs.burstTarget, 8))
+          .map((p) => burstCut(p, knobs.burstTarget, 8))
           .join("\n\n")
-      : boostBurstinessByCutting(result, knobs.burstTarget, 8);
+      : burstCut(result, knobs.burstTarget, 8);
   }
   // v0.9 专家修复 P3（补刀）：capParticle 必须在最终 boost 之后再次收口——
   // boost 的 P5-B 尾挂会回填新的极短语气句，先 cap 后 boost 会漏掉这批。
@@ -1496,9 +1522,9 @@ export function humanize(text: string, opts: HumanizeOptions = {}): string {
       result = result.includes("\n\n")
         ? result
             .split(/\n\n+/)
-            .map((p) => boostBurstinessByCutting(p, 0.55, 8))
+            .map((p) => burstCut(p, 0.55, 8))
             .join("\n\n")
-        : boostBurstinessByCutting(result, 0.55, 8);
+        : burstCut(result, 0.55, 8);
     }
   }
   if (onStage)
@@ -1694,6 +1720,11 @@ function humanizeSingle(text: string, opts: HumanizeOptions = {}): string {
   const style = opts.style ?? "plain";
   const isAcademic = style === "academic";
   const isCasual = style === "casual";
+  // v0.9.51：参数表/技术规格表段落判定（一次算好，劈句/合并/节奏兜底共用）。
+  // C18 招标参数表实测：条目句被劈成五句、条款被搬位移、参数后挂「为什么呢？」
+  // ——三条路分别在逐句劈句（下方）、结构层与节奏兜底，同判据一起堵。
+  // 判据与注释见 anti-fingerprint.ts 的 isSpecTableParagraph。
+  const specTablePara = isSpecTableParagraph(text);
 
   if (!text || !text.trim()) return "";
 
@@ -1838,7 +1869,12 @@ function humanizeSingle(text: string, opts: HumanizeOptions = {}): string {
     () => {
       let r = relaxEmDash(working, rng, 0.6 * intensity);
       r = relaxDunhao(r, rng, 0.5 * intensity);
-      r = relaxColon(r, rng, 0.4 * intensity);
+      // v0.9.51：参数表段不松冒号——「三、软件平台：支持不少于……」的条目冒号
+      // 被 relaxColon 换成逗号后，字段分隔符消失（C18 实测）。其余三项对
+      // 参数表无害（顿号已有编号守卫，破折号/引号参数表基本不出现）。
+      // ⚠️ 跳过会少消耗一次 rng——只影响参数表段的随机序列，其余篇目逐字不变
+      //    （多种子验收基线不受影响，因为参数表语料是本轮新增的）。
+      if (!specTablePara) r = relaxColon(r, rng, 0.4 * intensity);
       return relaxQuotes(r, rng, 0.3 * intensity);
     },
   );
@@ -1876,7 +1912,26 @@ function humanizeSingle(text: string, opts: HumanizeOptions = {}): string {
       continue;
     }
 
-    s = replaceOpener(s, rng, intensity);
+    // v0.9.51：正式稿件的句首结构标记不做口语化。「首先/其次/最后/第一/第二」
+    // 在致辞、判项、条款、论文里是**结构标记**（C20 大会致辞实测
+    // 「首先，我谨代表主办方……」→「先说一个，我谨代表……」，同篇
+    // 「最后，预祝……」→「最后说一句，预祝……」——都是语体崩）。
+    //
+    // ⚠️ 这是 replaceVocab 之外的**平行路径**（OPENERS 表），
+    //    FORMAL_FORBIDDEN_SUBSTITUTES 盖不到这里，必须单独门控——
+    //    v0.9.51 首轮把六个替身加进黑名单后 C20 照旧泄漏，根因就在这。
+    //
+    // ⚠️ 门控判据是**文档签名**（suppressSelfQA：公文/学术/致辞/诉讼/参数表），
+    //    不是体裁。首版写成 `if (!formalRegister)`（genre==="main" 一律冻），
+    //    全量门禁当场抓出附带损害：无签名的普通论说样本（injection-overlap.test.ts
+    //    固定 seed 20260905）detectAI 基线 26→40——「首先/其次/最后」被冻在稿里，
+    //    而论说稿的去味收益恰恰包括换掉它们。而五个正式语料案例（C1 工作总结/
+    //    C6 学术摘要/C17 判决书/C18 参数表/C20 致辞）全部命中签名，缺陷覆盖不减。
+    //    ⇒ 「判形态，不判体裁」：签了名的正式稿件冻，观点文/营销文的口语替身
+    //    仍是设计意图（casual 营销文「先说一个」有效）。
+    //    另：academic 文风是用户显式声明的正式体，与签名并列冻结。
+    const openerFrozen = (opts.officialDoc ?? suppressSelfQA(text)) || style === "academic";
+    if (!openerFrozen) s = replaceOpener(s, rng, intensity);
 
     // v0.9.8 P0 收敛：句首垫词注入的三重门控。
     //
@@ -1917,7 +1972,16 @@ function humanizeSingle(text: string, opts: HumanizeOptions = {}): string {
     }
 
     // 长句偶尔劈成两句
-    if (s.length > SPLIT_SENTENCE_THRESHOLD && rng() < SPLIT_SENTENCE_RATE * intensity) {
+    // v0.9.51：参数表段不劈——C18 招标参数表实测条目句「配置不少于 2 颗 32 核
+    // 处理器，内存容量不低于 512GB，硬盘容量不低于 4TB NVMe SSD，支持 RAID
+    // 0/1/5/6」被这条路径劈成五句，规格表述碎成散文。与结构层
+    // （structuralShuffleParagraph）/ 节奏兜底（boostBurstinessSingle）的
+    // 参数表跳过同判据，三条路一起堵。
+    if (
+      !specTablePara &&
+      s.length > SPLIT_SENTENCE_THRESHOLD &&
+      rng() < SPLIT_SENTENCE_RATE * intensity
+    ) {
       const mid = findSplitPoint(s, SPLIT_SENTENCE_THRESHOLD + 1);
       if (mid !== -1) {
         const tail = s.slice(mid + 1).trim();
@@ -1963,6 +2027,7 @@ function humanizeSingle(text: string, opts: HumanizeOptions = {}): string {
       continue;
     }
     if (
+      !specTablePara &&
       !mergeForbiddenGenre &&
       out.length > 0 &&
       s.length < MERGE_SENTENCE_THRESHOLD &&
@@ -2135,7 +2200,11 @@ function humanizeSingle(text: string, opts: HumanizeOptions = {}): string {
 
   // 5) 句长节奏兜底
   const tBurst = on ? nowMs() : 0;
-  if (intensity > 0.4) {
+  // v0.9.51：参数表段落跳过节奏兜底。C18 招标参数表实测：条目句的参数并列
+  // （「配置不少于 2 颗 32 核处理器，内存容量不低于 512GB，硬盘容量不低于
+  //   4TB NVMe SSD，支持 RAID 0/1/5/6」）被 findGuardedCutNear 在每个逗号处
+  // 劈开，规格表述碎成散文。参数表的节奏就是枚举节奏，不需要句长方差。
+  if (intensity > 0.4 && !specTablePara) {
     const rng2 = makeRng(opts.seed, 3333);
     result = boostBurstinessSingle(result, rng2, 0.5 * intensity);
   }

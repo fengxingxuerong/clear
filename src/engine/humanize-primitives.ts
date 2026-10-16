@@ -57,6 +57,20 @@ export interface HumanizeOptions {
   onStage?: (stage: StageTrace) => void;
   /** 段落序号：humanize() 逐段调用 humanizeSingle 时注入，供 trace 标注来源段 */
   para?: number;
+  /**
+   * v0.9.51：文档签名判定（公文/学术/致辞/诉讼/参数表，即 suppressSelfQA 的返回值），
+   * 由 humanize() 对**全文**计算后透传给各段。签名命中的正式稿件里，句首结构标记
+   * （首先/其次/最后/第一/第二…）不做口语化替换——那些词在致辞、判项、条款、论文里
+   * 是结构标记而非套话，换成「先说一个/末了」是语体崩。
+   *
+   * ⚠️ 判据取**全文**而非单段：多段致辞只在首段出现「尊敬的」，按段判定会漏掉正文段
+   * （与 officialDoc 在 humanize() 主函数里的计算口径一致）。
+   * ⚠️ 刻意不用体裁门控（genre==="main"）：v0.9.51 实测宽门控把无签名的普通论说
+   * 也一并冻住，detectAI 基线 26→40（见 injection-overlap.test.ts 同 seed 对照）——
+   * 「判形态，不判体裁」是本项目两次踩过的钉子，签署文档走签名、观点文/营销文
+   * 的口语化替身仍是设计意图。
+   */
+  officialDoc?: boolean;
 }
 
 /**

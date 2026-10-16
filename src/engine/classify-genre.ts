@@ -25,6 +25,7 @@
  * 返回 { genre, confidence, rawFeatures }，BenchmarkPanel 用 genre 选下拉、confidence 展示徽章。
  */
 import { classifyExpositionScore } from "./humanize-shuffle.ts";
+import { isSpecTableParagraph } from "./anti-fingerprint.ts";
 import { guardFor } from "./text-shield";
 
 export type AutoGenre = "main" | "narrative" | "dialogue";
@@ -163,13 +164,27 @@ export function classifyGenre(text: string): GenreResult {
   //   ① 新闻间接引语：「公司首席执行官王建国在发布会上表示：“……”」——陈述动词+冒号，不是台词；
   //   ② URL scheme：「接口地址变更为 https://api.example.com/…」——协议分隔符；
   //   ③ 说明文标签：「本次 API 升级说明如下：」「调用示例：」——说明体例，不是对话。
-  // 下方三条排除逐一对应。口径刻意保守：只排除"冒号左边白纸黑字是这些形态"的确定性证据，
+  // 下方各条排除逐一对应。口径刻意保守：只排除"冒号左边白纸黑字是这些形态"的确定性证据，
   // 不碰阈值本身（动阈值会连带 exposition/narrative 判据的测试基线）。
   const REPORT_VERB_RE =
     /(?:表示|指出|强调|认为|认为|介绍|宣布|透露|补充|解释|说明|总结|写道|宣称|回应|提醒|建议)$/;
   const EXPLAIN_LABEL_RE =
     /(?:如下|示例|例如|举例|步骤|注意|备注|附注|要点|清单|说明|介绍|用法|示例如下)$/;
   const URL_SCHEME_RE = /\b(?:https?|ftp|mailto|file):\/\//i;
+  // ④ 诉讼文书判项标签（「上诉请求：」「事实和理由：」「本院认为：」）——法律文书的
+  //    固定段落标签，冒号后接判项/事实陈述，不是台词。
+  //    v0.9.51 真实案例（C17 判决书）：「某科技公司上诉请求：」「事实和理由：」
+  //    两个标签冒号把整篇判决书打成 dialogue（colon=0.286 ≥ 0.06），
+  //    正式语体治理层整层失效——句尾语气词「呢/呀/嘛」注入判决书（6/13 seed），
+  //    切句层还把法条引用打散。口径与上面三条排除一致：只排除"冒号左边
+  //    白纸黑字是这些形态"的确定性证据，不碰阈值。
+  //    注：「本院认为」已被 REPORT_VERB_RE 的「认为」分支覆盖，这里不重复收。
+  const LITIGATION_LABEL_RE = /(?:上诉请求|事实和理由|辩称|裁判结果|判决如下|裁决如下|原审认定)$/;
+  // ⑤ 条目字段标签（「项目名称：」「招标编号：」）——表格/招标/条款文本的字段名，
+  //    冒号后接字段值不是台词。同源：C18 招标参数表被打成 dialogue（colon=0.286）。
+  //    刻意不收裸「项目：」——对话里真有人说「项目：预算批了」，字段名必须带
+  //    「名称/编号」这类确定性后缀。
+  const FIELD_LABEL_RE = /(?:项目名称|项目编号|招标编号|标的|工期|开标时间|投标文件|招标文件)$/;
 
   for (const s of sents) {
     const trimmed = s.trimStart();
@@ -183,6 +198,10 @@ export function classifyGenre(text: string): GenreResult {
     if (REPORT_VERB_RE.test(head)) continue;
     // ③ 说明性标签收尾（"升级说明如下："、"调用示例："）
     if (EXPLAIN_LABEL_RE.test(head)) continue;
+    // ④ 诉讼文书判项标签（"上诉请求："、"事实和理由："）
+    if (LITIGATION_LABEL_RE.test(head)) continue;
+    // ⑤ 条目字段标签（"项目名称："、"招标编号："）
+    if (FIELD_LABEL_RE.test(head)) continue;
     colonHits++;
   }
   f.dlgColonRatio = colonHits / Math.max(1, sents.length);
@@ -296,15 +315,17 @@ export const GENRE_ZH: Record<AutoGenre, string> = {
    v0.9.49 文档体裁签名（自问自答注入门控用）
    ------------------------------------------------------------------
    背景：自问自答（「是不是只有这一种解释？未必，但这一种最直接。」）是
-   口语修辞装置，落在公文/总结/学术摘要里是语体崩。真实案例实测
+   口语修辞装置，落在公文/总结/学术摘要/致辞里是语体崩。真实案例实测
    （scripts/realcase，默认设置 0.9 档）：
      C1 季度工作总结 → 注入 1 处（缺陷，findings 未修第 5 项）
      C6 学术摘要     → 20/20 seed 全部注入（本轮新发现）
+     C20 大会致辞    → 5/13 seed「为什么呢？」+ 2/13「是不是只有这一种解释？未必」
+       （v0.9.51 第三批语料新发现；致辞是 main 但签名另立，见 SPEECH_DOC_RE）
      C2 公众号观点文 → 注入正是设计意图（人味装置），必须保留
-   而 C1/C2/C6 自动体裁**同为 main**，getGenreKnobs 的体裁旋钮分不开它们
-   （实测 classifyGenre：C1/C2/C4/C6/C9 全判 main）⇒ 需要签名级判据。
+   而 C1/C2/C6/C20 自动体裁**同为 main**，getGenreKnobs 的体裁旋钮分不开它们
+   （实测 classifyGenre：C1/C2/C4/C6/C9/C20 全判 main）⇒ 需要签名级判据。
 
-   两个签名都从项目自己的分类学里长出来，不发明新启发式：
+   三个签名都从项目自己的分类学里长出来，不发明新启发式：
    · OFFICIAL_DOC_RE 是 Rule 4 的 OFFICIAL_RE 的**严格子集**——
    删掉「为了/关于/按照/下一步/根据」五个在非公文散文里也高频的词。
    Rule 4 用的是「密度 ≥0.006 才否决」（防叙事误判），门控要的是
@@ -313,6 +334,8 @@ export const GENRE_ZH: Record<AutoGenre, string> = {
    · ACADEMIC_DOC_RE 收学术/技术论文的不含糊标记（本文/实验结果表明/
    消融实验/基线模型…）。刻意**不收**「验证了/探讨了/阈值/算法」——
    那几个词观点文也用，收了会把 C2 一起误拦。实测只命中 C6（7 处）。
+   · SPEECH_DOC_RE（v0.9.51）收致辞/开幕词的场合套语（尊敬的/值此/谨代表/
+   预祝…）。与公文签名零重叠——实测 C20 不命中 OFFICIAL_DOC_RE。
 
    方向与 v0.9.45 的语气词门控一致：宁可少注入，不可错注入。
    误伤的代价是少一处人味装置；漏放的代价是正式稿里出现辩论句式。
@@ -326,10 +349,44 @@ export const OFFICIAL_DOC_RE =
 export const ACADEMIC_DOC_RE = /(本文档?|本研究|实验结果表明|消融实验|基线模型|提出了?一种|数据集)/;
 
 /**
- * 自问自答注入的体裁门控（v0.9.49）：公文/总结/学术摘要返回 true（不注入）。
- * 判据取**原始输入文本**——签名词可能被管线中途改写（虽然这两个签名里的词
+ * 致辞/讲话签名（v0.9.51，C20 大会致辞实测新增）。
+ *
+ * 背景：自问自答在致辞里同样是语体崩——「值此大会召开之际，为什么呢？」
+ * 「是不是只有这一种解释？未必」落在开幕词上是事故（实测 5/13 + 2/13 seed）。
+ * 致辞与公文的共同点是**场合正式**，但套语系统不同（「尊敬的/谨代表/预祝」
+ * 是致辞专属，公文签名一个都不命中）。
+ *
+ * 方向与另两个签名一致：宁可少注入，不可错注入。误伤的代价是少一处人味装置；
+ * 漏放的代价是正式场合的稿子出现辩论句式。
+ * 刻意不收「首先/最后/回顾/展望」——观点文（C2）也用，收了会把 C2 一起误拦。
+ */
+export const SPEECH_DOC_RE =
+  /(尊敬的|各位领导|各位来宾|各位同志|值此|谨代表|预祝|表示衷心的感谢|热烈的欢迎|谢谢大家)/;
+
+/**
+ * 诉讼文书签名（v0.9.51，C17 判决书实测新增）。
+ *
+ * 背景：判决书被注入「撤销一审判决，依法改判驳回李某的全部诉讼请求，
+ * **这意味着什么？往下看会更清楚。**」——判项后面挂辩论句式，在法律文书里
+ * 是事故（13 seed 实测该 seed 命中）。判决书没有致辞套语也没有学术标记，
+ * 三个签名都不覆盖 ⇒ 用诉讼文书自己的专属词立签名。
+ * 刻意不收「法院/律师/合同」——观点文和新闻也用，收了会误伤 C2/C5。
+ */
+export const LITIGATION_DOC_RE =
+  /(上诉人|被上诉人|民事判决|劳动争议|诉讼请求|本院认为|判决书|裁定书|起诉状)/;
+
+/**
+ * 自问自答注入的体裁门控（v0.9.49）：公文/总结/学术摘要/致辞/参数表/诉讼文书
+ * 返回 true（不注入）。
+ * 判据取**原始输入文本**——签名词可能被管线中途改写（虽然这几个签名里的词
  * 都不在 VOCAB 里，用原文是最稳的），且注入决策本就该看"用户给的是什么稿"。
  */
 export function suppressSelfQA(text: string): boolean {
-  return OFFICIAL_DOC_RE.test(text) || ACADEMIC_DOC_RE.test(text);
+  return (
+    OFFICIAL_DOC_RE.test(text) ||
+    ACADEMIC_DOC_RE.test(text) ||
+    SPEECH_DOC_RE.test(text) ||
+    LITIGATION_DOC_RE.test(text) ||
+    isSpecTableParagraph(text)
+  );
 }

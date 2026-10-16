@@ -33,6 +33,8 @@ import { splitSentences } from "./humanize-text.ts";
 const rngMid = () => 0.5;
 const rngLow = () => 0.4;
 const rngHigh = () => 0.95;
+/** 固定 rng=0：门限必过、pick 必取 0（v0.9.51 参数表跳过用例用） */
+const rng0 = () => 0;
 /** 固定 rng=0.2：fixParallelRun 里 pickIdx=0 且 roll<0.3 → 走「破坏1：前加自问自答」 */
 const rngQA = () => 0.2;
 /** 固定 rng=0.32：pickIdx=0 且 0.3≤roll<0.65 → 走「破坏2：改反问句」 */
@@ -85,6 +87,31 @@ describe("structuralShuffleParagraph（P0~P3 编排主链路）", () => {
     expect(structuralShuffleParagraph(p, rngMid, 0.8)).toBe(
       structuralShuffleParagraph(p, rngMid, 0.8),
     );
+  });
+
+  it("v0.9.51 参数表段落整段跳过（rng0 全触发也不动；负向对照防退化）", () => {
+    // C18 招标参数表实测（0.9 档 seed 20261015）：条目被打散成 5 句、
+    // 「实质性要求」条款被搬进参数中间（改写事实级）、参数后挂「为什么呢？」——
+    // 三条破坏路径都在本层，整段跳过一并根治。判据是双条件形态
+    // （≥2 条目头 + ≥2 参数谓词），见 anti-fingerprint.ts 的 isSpecTableParagraph。
+    const spec =
+      "项目名称：智慧园区综合管理平台建设项目。招标编号：HFZB-2026-089。" +
+      "以下技术参数为实质性要求，投标文件须逐项响应，不允许负偏离。" +
+      "一、服务器：2U 机架式，配置不少于 2 颗 32 核处理器，内存容量不低于 512GB。" +
+      "二、网络设备：核心交换机交换容量不低于 12.8Tbps，支持 IPv4/IPv6 双栈。";
+    // rng0：breakEnumerationStructure / shuffleSentencesSafe / injectSelfQA 全触发
+    for (let i = 0; i < 20; i++) {
+      expect(structuralShuffleParagraph(spec, rng0, 0.9), `第 ${i} 次：参数表段被结构层改动`).toBe(
+        spec,
+      );
+    }
+    // 负向对照：同样两条「一、二、」条目头但**无参数谓词**（公文条文体）⇒ 不跳，
+    // 照旧重排。防的是「整段跳过」退化成「本层永不重排」——那会静默废掉 P3。
+    const articles =
+      "一、本细则适用于本市行政区域内规模以上制造业企业的评估工作。" +
+      "二、评估工作应当遵循自愿申报、分级认定、动态管理的原则，结果有效期为三年。" +
+      "三、市经济和信息化局负责统筹协调，委托第三方机构组建专家库。";
+    expect(structuralShuffleParagraph(articles, rng0, 0.9)).not.toBe(articles);
   });
 });
 

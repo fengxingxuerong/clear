@@ -9,7 +9,13 @@
  * 第 42 行是**死分支**，任何测试都覆盖不到，原因写在 relaxColon 的用例注释里。
  */
 import { describe, it, expect } from "vitest";
-import { relaxColon, relaxQuotes, splitOnConnectors, varyParagraphs } from "./primitives.ts";
+import {
+  relaxColon,
+  relaxDunhao,
+  relaxQuotes,
+  splitOnConnectors,
+  varyParagraphs,
+} from "./primitives.ts";
 
 /** 全 0：门限必过、下标必取 0 */
 const rng0 = (): number => 0;
@@ -71,6 +77,65 @@ describe("splitOnConnectors（连接词断句）", () => {
     expect(splitOnConnectors("双方僵持了很久与此同时局面转好", rng0, 1)).toBe(
       "双方僵持了很久。与此同时局面转好",
     );
+  });
+});
+
+/**
+ * relaxDunhao（顿号放松）的编号守卫
+ *
+ * 两条守卫、两个版本，都出自真实案例实测：
+ * · v0.9.34 枚举守卫：紧邻最后一个顿号的前一段若是**纯编号**（「一、二、三、
+ *   四四个季度」），这个顿号是枚举序列标记，换掉出「二以及完善制度体系」畸形。
+ * · v0.9.51 法条守卫（续）：C17 判决书「第十条、第八十二条之规定」被换成
+ *   「第十条，第八十二条之规定」5/13 seed，A/B 证明与体裁无关（auto/forced-main
+ *   均 4/12）⇒ 守卫必须认「第X条」。
+ *   ⚠️ 首版写成「prevSeg **是**编号」（全串 ^…$ 锚定）不生效——artifacts/
+ *   _probe-dunhao-debug.ts 实测 run 是「人民共和国劳动合同法》第十条、第八十二条
+ *   之规定」（书名号长名词也在字符类里），prevSeg 是整条左段。改为只锚 `$`
+ *   （左段**以**编号结尾）后才生效：「……》第十条」命中、
+ *   「加强制度建设」不命中（普通并列照换，守卫不过宽）。
+ *
+ * 断言纪律：守卫不能过宽——普通并列必须照换（用 rng0 钉死确定性输出），
+ * 否则「为了防误伤把顿号松弛整个废掉」也会让这组测试全绿。
+ */
+describe("relaxDunhao（顿号放松）：编号守卫", () => {
+  it("法条引用「第十条、第八十二条」：200 次不换（v0.9.51 守卫）", () => {
+    const law = "根据《中华人民共和国劳动合同法》第十条、第八十二条之规定，用人单位应当承担责任。";
+    for (let i = 0; i < 200; i++) {
+      expect(relaxDunhao(law, rng0, 1), `第 ${i} 次：法条顿号被换掉`).toBe(law);
+    }
+  });
+
+  it("阿拉伯数字法条「第10条、第20条」同样不换（第?\\d+条? 分支）", () => {
+    const law = "根据《民法典》第10条、第20条之规定，当事人应当遵循诚信原则。";
+    expect(relaxDunhao(law, rng0, 1)).toBe(law);
+  });
+
+  it("纯编号枚举「一、二、三、四」：不换（v0.9.34 守卫不回归）", () => {
+    const t = "全年任务分为一、二、三、四四个阶段推进，每阶段设置明确的验收节点。";
+    expect(relaxDunhao(t, rng0, 1)).toBe(t);
+  });
+
+  it("守卫不过宽：普通并列「制度建设、能力建设」照换（rng0 确定性输出）", () => {
+    // hasConj（「和」在run里）⇒ joint=「，」。若这条变红，说明守卫把正常顿号
+    // 松弛整个废掉了——那是另一种缺陷（AI 标点特征不再被治理）。
+    expect(relaxDunhao("要加强制度建设、能力建设和作风建设，不断提升治理水平。", rng0, 1)).toBe(
+      "要加强制度建设，能力建设和作风建设，不断提升治理水平。",
+    );
+  });
+
+  it("守卫只锚编号结尾：编号在左段中段（「第十条规定的制度」）不误伤普通并列", () => {
+    // 首版失败形态的边界：左段含「第十条」但不以编号结尾 ⇒ 是普通并列，照换。
+    // joint=「，」而非「以及」：run 里「建设」的「建」命中 verbish 字符类
+    // （推干办做化走抓建拉提打治整修铺）⇒ 走 hasConj||verbish 分支。实测值。
+    expect(relaxDunhao("第十条规定的制度、能力建设都需要进一步完善。", rng0, 1)).toBe(
+      "第十条规定的制度，能力建设都需要进一步完善。",
+    );
+  });
+
+  it("门限不过（rng≥p）→ 顿号原样", () => {
+    const t = "要加强制度建设、能力建设和作风建设，不断提升治理水平。";
+    expect(relaxDunhao(t, () => 1, 0.5)).toBe(t);
   });
 });
 

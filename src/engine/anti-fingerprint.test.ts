@@ -12,8 +12,10 @@ import {
   isSceneMetaSentence,
   isSceneMetaLine,
   fixBrokenCollocations,
+  isSpecTableParagraph,
 } from "./anti-fingerprint";
 import { humanize } from "./humanize";
+import { splitSentences } from "./humanize-text";
 import { SELF_QA_POOLS } from "./shuffle/structure";
 
 describe("capLongTemplateRepetition（模板复读封顶）", () => {
@@ -206,6 +208,91 @@ describe("复读表与模板池对齐（默认风格转 plain 后漏掉的整池
       });
     }
   }
+});
+
+/**
+ * isSpecTableParagraph（v0.9.51）——参数表/技术规格表形态判据
+ *
+ * 背景：C18 招标参数表实测（0.9 档 seed 20261015）三层破坏全溯源到
+ * structuralShuffleParagraph 一层：条目被打散成 5 句、「实质性要求」条款
+ * 被搬进参数中间（改写事实级）、参数后挂「为什么呢？」。修法是用一个
+ * 双条件形态判据把参数表段整段跳过，并顺带堵住六条切句/重排/注入路径
+ * （结构层、劈句、合并、boostBurstinessSingle、三处 boostBurstinessByCutting、
+ * clampAvgSentenceLenUnder25，见 humanize.ts）。
+ *
+ * 判据刻意双条件（≥2 条目头 + ≥2 参数谓词），防把无缺陷的条款文本一起误伤。
+ * ⚠️ 首版条目头正则只锚 `^|\n`，而单段文本里「……不允许负偏离。一、服务器：」
+ * 的条目头跟在**句号**后 ⇒ 判据恒 false、残留全没治住。前置字符
+ * `(?:^|[。\n；])` 是这次修复的核心，用例 ⑤ 专门锁它。
+ */
+describe("isSpecTableParagraph（参数表形态判据）", () => {
+  // 与 scripts/realcase/cases.json 同源（src 测试不跨层 import scripts，故抄录）
+  const C18_TENDER =
+    "项目名称：智慧园区综合管理平台建设项目。招标编号：HFZB-2026-089。以下技术参数为实质性要求，投标文件须逐项响应，不允许负偏离。一、服务器：2U 机架式，配置不少于 2 颗 32 核处理器，内存容量不低于 512GB，硬盘容量不低于 4TB NVMe SSD，支持 RAID 0/1/5/6。二、网络设备：核心交换机交换容量不低于 12.8Tbps，支持 IPv4/IPv6 双栈。三、软件平台：支持不少于 5000 个物联网终端并发接入，系统可用性不低于 99.99%。投标人须提供所投产品制造商出具的本项目授权及售后服务承诺函原件。";
+  const C11_NOTICE =
+    "各区县工业和信息化主管部门，各有关单位：现将《合肥市智能制造成熟度评估实施细则》印发给你们，请结合实际认真贯彻落实。第一条　本细则适用于本市行政区域内规模以上制造业企业的智能制造成熟度评估工作。第二条　评估工作应当遵循自愿申报、分级认定、动态管理的原则，评估结果有效期为三年。第三条　市经济和信息化局负责统筹协调，委托第三方机构组建专家库，每批次随机抽取不少于七名专家。第四条　申报单位需提交近三个会计年度的财务审计报告、不少于五个智能化改造场景的说明材料。第五条　本细则自印发之日起三十日后施行，原合经信〔2024〕36 号文件同时废止。合肥市经济和信息化局　二〇二六年九月二十八日";
+
+  it("①C18 招标参数表命中（双条件齐：3 条目头 + 5 参数谓词）", () => {
+    expect(isSpecTableParagraph(C18_TENDER)).toBe(true);
+  });
+
+  it("②C11 行政通知不误伤（「第一条」是第X条形态，不算「一、」条目头）", () => {
+    expect(isSpecTableParagraph(C11_NOTICE)).toBe(false);
+  });
+
+  it("③条目头够但参数谓词不够 → 不命中（公文条文体）", () => {
+    const articles =
+      "一、本细则适用于本市行政区域内规模以上制造业企业的评估工作。" +
+      "二、评估工作应当遵循自愿申报、分级认定、动态管理的原则，结果有效期为三年。" +
+      "三、市经济和信息化局负责统筹协调，委托第三方机构组建专家库。";
+    expect(isSpecTableParagraph(articles)).toBe(false);
+  });
+
+  it("④谓词够但条目头不够 → 不命中（单规格段的散文式表述）", () => {
+    const single =
+      "服务器配置不少于 2 颗 32 核处理器，内存容量不低于 512GB，硬盘容量不低于 4TB NVMe SSD。";
+    expect(isSpecTableParagraph(single)).toBe(false);
+  });
+
+  it("⑤条目头跟在句号后（单段无换行）必须计数——首版恒 false 的回归", () => {
+    // 前置字符 `(?:^|[。\\n；])`：句号/分号/换行/行首都算。
+    // 只锚 `^|\\n` 时这段 0 匹配（C18 正是单段文本）。
+    const afterPeriod =
+      "以下技术参数为实质性要求。一、服务器：配置不少于 2 颗 32 核处理器。二、网络设备：交换容量不低于 12.8Tbps。";
+    expect(isSpecTableParagraph(afterPeriod)).toBe(true);
+    // 对照组：条目头跟在「了」后（「修订了一、二号文件」）不是条目头
+    const afterLe = "修订了一、二号文件，下发了三、四号通知，均自发布之日起施行。";
+    expect(isSpecTableParagraph(afterLe)).toBe(false);
+  });
+
+  it("⑥C18 端到端：条目完整性 + 条目顺序 + 句数不变 + 零自问自答（0.9 档 7 seed 含门禁 seed）", () => {
+    const FRAGS = [
+      "项目名称：智慧园区综合管理平台建设项目", // 条目冒号（relaxColon 被门控）
+      "招标编号：HFZB-2026-089",
+      "配置不少于 2 颗 32 核处理器", // 条目句不被 boostBurstinessByCutting 劈开
+      "内存容量不低于 512GB",
+      "硬盘容量不低于 4TB NVMe SSD",
+      "支持 RAID 0/1/5/6",
+      "交换容量不低于 12.8Tbps",
+      "支持 IPv4/IPv6 双栈",
+      "支持不少于 5000 个物联网终端并发接入",
+      "系统可用性不低于 99.99%",
+    ];
+    // 劈句/合并两道门控的观测面：条目句 60+ 字 > SPLIT_SENTENCE_THRESHOLD(34)，
+    // 判据一摘就会被劈；短条目句会被 MERGE_SENTENCE_THRESHOLD(9) 吞并。
+    // 句数不变同时锁这两条（变异检验摘 isSpecTableParagraph 后必须变红）。
+    for (const seed of [1, 2, 3, 5, 8, 13, 20261015]) {
+      const out = humanize(C18_TENDER, { intensity: 0.9, seed });
+      for (const f of FRAGS) {
+        expect(out, `seed=${seed}：参数片段丢失/被拆散 → ${f}`).toContain(f);
+      }
+      expect(out, `seed=${seed}：参数表里出自问自答`).not.toContain("为什么呢");
+      expect(splitSentences(out).length, `seed=${seed}：句数被劈句/合并改动`).toBe(7);
+      // 条目顺序不被条款位移打乱（服务器 → 网络设备 → 软件平台）
+      expect(out.indexOf("服务器")).toBeLessThan(out.indexOf("网络设备"));
+      expect(out.indexOf("网络设备")).toBeLessThan(out.indexOf("软件平台"));
+    }
+  });
 });
 
 describe("v0.9 引擎集成（对话剧本场景块保护 + 指纹健康）", () => {
