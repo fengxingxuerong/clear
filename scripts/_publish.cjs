@@ -18,7 +18,7 @@ const path = require("path");
 const net = require("net");
 const { spawn } = require("child_process");
 
-const REPO = "fengxingxuerong/clear";
+const REPO = "fengxingxuerong/quaiwei";
 const ROOT = path.join(__dirname, "..");
 const { version: VERSION } = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf-8"));
 const TAG = `v${VERSION}`;

@@ -68,7 +68,7 @@ async function gitBlob(args) {
   return run(args, { binary: true });
 }
 
-const REPO = "fengxingxuerong/clear";
+const REPO = "fengxingxuerong/quaiwei";
 const REPO_PATH = "D:/projects/quaiwei";
 const BRANCH = "master";
 const DRY = process.argv.includes("--dry");
