@@ -28,7 +28,7 @@ The tools you compare this against at the top of the topic (`blader/humanizer`, 
 
 ## Install
 
-**Try it in your browser** — no install needed: **[online demo](https://fengxingxuerong.github.io/clear/)**
+**Try it in your browser** — no install needed: **[online demo](https://fengxingxuerong.github.io/clear/)** (live)
 
 **Desktop (Windows, no install, ~474 MB):** [latest release](https://github.com/fengxingxuerong/clear/releases/latest)
 — unzip, double-click `QuAiWei.exe`.

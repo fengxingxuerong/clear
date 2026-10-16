@@ -9,6 +9,7 @@
   "files": [
     "dist-cli",
     "README.md",
+    "README_EN.md",
     "LICENSE"
   ],
   "engines": {
