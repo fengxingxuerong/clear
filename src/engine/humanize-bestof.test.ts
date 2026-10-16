@@ -5,7 +5,7 @@ import { humanizeBestOf } from "./humanize-bestof";
 const AI_TEXT = `随着信息技术的不断发展，数字化转型成为了热议的话题。值得注意的是，数字化办公不仅极大地提升了工作效率，而且有效地降低了运营成本。然而，技术的变革也带来了一系列值得关注的挑战。与此同时，如何平衡创新与风险，成为至关重要的课题。综上所述，建立完善的监管体系，推动可持续发展，具有十分重要的意义。因此，我们需要在实践中逐步优化相关流程，进而实现更高质量的发展。`;
 
 describe("humanizeBestOf（多候选择优）", () => {
-  it("固定种子结果可复现", () => {
+  it("humanizeBestOf 固定种子结果可复现", () => {
     const a = humanizeBestOf(AI_TEXT, { seed: 42, candidates: 3 });
     const b = humanizeBestOf(AI_TEXT, { seed: 42, candidates: 3 });
     expect(a.text).toBe(b.text);

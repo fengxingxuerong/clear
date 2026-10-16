@@ -138,7 +138,7 @@ describe("loadSamples 脏数据容错", () => {
     expect(collectPoints()).toEqual([{ local: 5, official: 0, ts: 1 }]);
   });
 
-  it("非数组 / 坏 JSON 返回空数组而不是抛错", () => {
+  it("loadSamples：非数组 / 坏 JSON 返回空数组而不是抛错", () => {
     store.set(K_SAMPLES, "{ 不是数组");
     expect(loadSamples()).toEqual([]);
     store.set(K_SAMPLES, JSON.stringify({ a: 1 }));
@@ -229,7 +229,7 @@ describe("readLegacyPoints（全局唯一实现）", () => {
     expect(readLegacyPoints()).toEqual([{ local: 40, official: 55, ts: 2 }]);
   });
 
-  it("非数组 / 坏 JSON 返回空数组而不是抛错", () => {
+  it("readLegacyPoints：非数组 / 坏 JSON 返回空数组而不是抛错", () => {
     store.set(K_LEGACY, "{ 坏 json");
     expect(readLegacyPoints()).toEqual([]);
     store.set(K_LEGACY, JSON.stringify({ a: 1 }));

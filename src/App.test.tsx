@@ -154,13 +154,12 @@ afterEach(() => {
   delete (window as unknown as { secureStore?: unknown }).secureStore;
 });
 
-describe("App 渲染冒烟", () => {
-  it("主界面：标题、双输入区、去味按钮、强度滑块齐备", () => {
-    const { getByText, getByPlaceholderText, container } = render(<App />);
-    expect(getByText("趣AI味 · QuAiWei")).toBeTruthy();
-    expect(getByPlaceholderText(/把 AI 写的文章粘进来/)).toBeTruthy();
+// 标题 / 双输入面板 / 去味按钮 / ⚙设置 等整树渲染断言在 app-smoke.test.tsx 里；
+// 这里只留它没覆盖的两项，避免同一条断言两处维护。
+describe("App 渲染冒烟（补 app-smoke.test.tsx 未覆盖项）", () => {
+  it("主界面：输出区与强度滑块齐备", () => {
+    const { getByPlaceholderText, container } = render(<App />);
     expect(getByPlaceholderText(/点击「去味」生成/)).toBeTruthy();
-    expect(getByText("去味")).toBeTruthy();
     expect(container.querySelector('input[type="range"]')).toBeTruthy();
   });
 
@@ -170,16 +169,6 @@ describe("App 渲染冒烟", () => {
     const pane = getByPlaceholderText(/把 AI 写的文章粘进来/) as HTMLTextAreaElement;
     expect(pane.value.length).toBeGreaterThan(50);
     expect(getByText(/已载入示例文本/)).toBeTruthy();
-  });
-
-  it("「清空」按钮：清空输入并丢弃草稿", () => {
-    const { getByText, getByPlaceholderText } = render(<App />);
-    fireEvent.click(getByText("示例"));
-    expect(
-      (getByPlaceholderText(/把 AI 写的文章粘进来/) as HTMLTextAreaElement).value.length,
-    ).toBeGreaterThan(0);
-    fireEvent.click(getByText("清空"));
-    expect((getByPlaceholderText(/把 AI 写的文章粘进来/) as HTMLTextAreaElement).value).toBe("");
   });
 });
 

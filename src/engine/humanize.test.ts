@@ -177,7 +177,7 @@ describe("humanize 引擎", () => {
     expect(after.score).toBeLessThanOrEqual(before.score);
   });
 
-  it("固定种子结果可复现", () => {
+  it("humanize 固定种子结果可复现", () => {
     const sample = "综上所述，人工智能技术至关重要，它不仅极大地提升了效率，而且降低了门槛。";
     const a = humanize(sample, { intensity: 0.6, seed: 42 });
     const b = humanize(sample, { intensity: 0.6, seed: 42 });

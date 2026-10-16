@@ -189,7 +189,7 @@ describe("ensureEmDashCountHardCap（破折号硬上限）", () => {
     expect(ensureEmDashCountHardCap(t, -1)).toBe(t);
   });
 
-  it("未超限时原样返回", () => {
+  it("ensureEmDashCountHardCap 未超限时原样返回", () => {
     const t = "你可能会问——这靠谱吗？";
     expect(ensureEmDashCountHardCap(t, 1)).toBe(t);
   });
@@ -223,7 +223,7 @@ describe("ensureEmDashCountHardCap（破折号硬上限）", () => {
 });
 
 describe("capParticleSentenceDensity（语气词密度上限）", () => {
-  it("未超限时原样返回", () => {
+  it("capParticleSentenceDensity 未超限时原样返回", () => {
     const t = "这个功能确实好用。界面也挺清爽的。";
     expect(capParticleSentenceDensity(t, 1)).toBe(t);
   });

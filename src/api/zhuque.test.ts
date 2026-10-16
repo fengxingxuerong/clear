@@ -123,7 +123,7 @@ describe("parseOfficialResult（只有一半信息时互证）", () => {
 });
 
 describe("parseOfficialResult（异常与夹取）", () => {
-  it("超过 100 夹到 100", () => {
+  it("parseOfficialResult：超过 100 夹到 100", () => {
     expect(parseOfficialResult("150%").probability).toBe(100);
   });
 

@@ -59,7 +59,7 @@ describe("scoreViaDetector（正常路径）", () => {
 });
 
 describe("scoreViaDetector（夹取与边界）", () => {
-  it("超过 100 夹到 100", async () => {
+  it("scoreViaDetector：超过 100 夹到 100", async () => {
     stubFetch({ body: { score: 250 } });
     await expect(scoreViaDetector("文本", cfg())).resolves.toBe(100);
   });

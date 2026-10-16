@@ -139,7 +139,7 @@ describe("injectSelfQA（自问自答注入）", () => {
 });
 
 describe("dismantleExpositionTrilogy（论述三部曲拆毁）", () => {
-  it("强度 < 0.7 原样返回", () => {
+  it("dismantleExpositionTrilogy 强度 < 0.7 原样返回", () => {
     const sents = ["首先，成本低。", "其次，良率高。", "最后，交付快。"];
     expect(dismantleExpositionTrilogy(sents, rngMid, 0.6)).toEqual(sents);
   });

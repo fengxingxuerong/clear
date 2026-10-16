@@ -81,7 +81,7 @@ describe("structuralShuffleParagraph（P0~P3 编排主链路）", () => {
     expect(out).toContain("\n\n");
   });
 
-  it("确定性：同 rng 同输入输出一致", () => {
+  it("structuralShuffleParagraph 确定性：同 rng 同输入输出一致", () => {
     const p =
       "成本这一块其实比较好算。良率的表现也算稳定。交付的节奏同样跟得上。风险的部分有兜底。客户的反馈也一直不错。综上所述，这个方案整体是可行的。";
     expect(structuralShuffleParagraph(p, rngMid, 0.8)).toBe(
@@ -116,7 +116,7 @@ describe("structuralShuffleParagraph（P0~P3 编排主链路）", () => {
 });
 
 describe("hardNumberedEnumerationShuffle（P3-2 硬编号拆毁）", () => {
-  it("强度 < 0.7 原样返回", () => {
+  it("hardNumberedEnumerationShuffle 强度 < 0.7 原样返回", () => {
     const sents = ["开头一句。", "二、良率不错。", "三、成本很低。"];
     expect(hardNumberedEnumerationShuffle(sents, rngMid, 0.6)).toEqual(sents);
   });
@@ -171,11 +171,11 @@ describe("enforceParagraphLeadSentVariance（P3-3 段首方差）", () => {
   const paraB = "这一段的开头句。第二段的正文也继续写一些内容保证结构完整。";
   const twoParas = `${paraA}\n\n${paraB}`;
 
-  it("强度 < 0.7 原样返回", () => {
+  it("enforceParagraphLeadSentVariance 强度 < 0.7 原样返回", () => {
     expect(enforceParagraphLeadSentVariance(twoParas, rngMid, 0.6)).toBe(twoParas);
   });
 
-  it("不足 2 段原样返回", () => {
+  it("enforceParagraphLeadSentVariance 不足 2 段原样返回", () => {
     expect(enforceParagraphLeadSentVariance(paraA, rngMid, 0.9)).toBe(paraA);
   });
 
@@ -266,7 +266,7 @@ describe("resegmentParagraphsAggressive（段长强制方差，行 200/221）", 
     expect(resegmentParagraphsAggressive(t, rngMid, 0.5)).toBe(t);
   });
 
-  it("不足 2 段原样返回", () => {
+  it("resegmentParagraphsAggressive 不足 2 段原样返回", () => {
     const t = "只有一段内容。第二句补足长度。";
     expect(resegmentParagraphsAggressive(t, rngMid, 0.9)).toBe(t);
   });

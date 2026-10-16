@@ -121,7 +121,7 @@ describe("trimCommon（前后缀裁切）", () => {
     expect(r.midNew).toBe("乙乙乙乙");
   });
 
-  it("空串边界：不抛错", () => {
+  it("trimCommon 空串边界：不抛错", () => {
     const a = trimCommon("", "abc");
     expect(a.midOld).toBe("");
     expect(a.midNew).toBe("abc");
@@ -182,7 +182,7 @@ describe("diffInline（字符粒度）", () => {
     expect(right.some((p) => p.type === "ins")).toBe(true);
   });
 
-  it("空串边界：不抛错", () => {
+  it("diffInline 空串边界：不抛错", () => {
     expect(() => diffInline("", "")).not.toThrow();
     expect(() => diffInline("有内容的一句话。", "")).not.toThrow();
     expect(() => diffInline("", "有内容的一句话。")).not.toThrow();

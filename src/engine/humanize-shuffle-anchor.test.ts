@@ -98,7 +98,7 @@ describe("injectFirstPersonAnchorPoints（P3-4 第一人称锚点）", () => {
     expect(out.split(/(?<=[。！？])/).length).toBeGreaterThan(t.split(/(?<=[。！？])/).length);
   });
 
-  it("确定性：同 rng 同输入输出一致", () => {
+  it("injectFirstPersonAnchorPoints 确定性：同 rng 同输入输出一致", () => {
     const t = buildExpoText();
     expect(injectFirstPersonAnchorPoints(t, rngMid, 0.95)).toBe(
       injectFirstPersonAnchorPoints(t, rngMid, 0.95),

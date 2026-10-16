@@ -91,7 +91,7 @@ describe("localHardGate（本地指纹+忠实度硬门槛）", () => {
     expect(deletionStubIssues(original, "这条路要走很久。别急。")).toHaveLength(0);
   });
 
-  it("deletionStubIssues：删减残留孤词句（v0.9.5 P4）", () => {
+  it("localHardGate：删减残留孤词句上报（v0.9.5 P4 外层）", () => {
     const original = "数字化转型是构建企业核心竞争力的必由之路。这条路要走很久。";
     // 实测 s3 事故：修订轮把首句删剩「竞争力。」孤词 → localHardGate 应报
     const issues = localHardGate(original, "数字化这事要紧。竞争力。这条路要走很久。");
