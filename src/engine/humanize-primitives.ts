@@ -439,3 +439,33 @@ export function fragmentFrontCanStand(front: string): boolean {
     return false;
   return true;
 }
+
+/* --------------------- 流水线可观测：trace 发射器 --------------------- */
+
+/**
+ * 计时源：浏览器与 Node 都有 performance；被裁掉的环境退回 Date.now。
+ * 只在 opts.onStage 存在时才调用 —— 不传回调时这些代码路径根本不会执行。
+ */
+export const nowMs = (): number =>
+  typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
+
+/** 快照截断长度：够看清这一步动了哪里，又不至于把整篇原文塞进 trace */
+const TRACE_SNIPPET_LEN = 120;
+
+/** 发射一条阶段记录（onStage 未传时整体跳过，零开销） */
+export function emitStage(
+  on: ((s: StageTrace) => void) | undefined,
+  st: Omit<StageTrace, "ms" | "charsAfter" | "snippet">,
+  t0: number,
+  after: string,
+): void {
+  if (!on) return;
+  on({
+    ...st,
+    ms: Math.round((nowMs() - t0) * 1000) / 1000,
+    charsAfter: after.length,
+    snippet: after.slice(0, TRACE_SNIPPET_LEN),
+  });
+}
