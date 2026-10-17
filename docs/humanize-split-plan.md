@@ -172,5 +172,41 @@ env -u NODE_OPTIONS node D:/projects/quaiwei/node_modules/vitest/vitest.mjs run 
    靠 tsc 兜底抓出。更稳的做法：搬完后直接 tsc，把 TS2304/TS6133 当清单逐项清。
 3. **注释里/字符串字面量里的标识符会污染依赖扫描**（`humanize` 出现在 trace 的
    `why` 字符串里被误报为外部依赖）。剥注释要按块剥，且字符串内容要排除。
-4. `humanize.ts` 现为 **853 行**，不再是最大文件；下一阶段可考虑 492–994 的
-   守卫正则区（方案第 5 节问题 2，仍需单独版本评估）。
+4. `humanize.ts` 最终 **807 行**，不再是最大文件；守卫正则区的后续评估见第 8 节。
+
+## 8. 后续评估结论（2026-10-17 傍晚，1b 完成后）
+
+### 问题 2「拆 492–994 守卫正则区」——**已变成伪命题，不做**
+
+1b 的边界修正把该区域的大部分内容**已经搬走了**。实测各守卫正则的现居地：
+
+| 符号 | 现居 | 说明 |
+|---|---|---|
+| `PURPOSE_LE_RE` / `NORMATIVE_LE_RE` / `LE_RE` | `humanize-replace.ts` | 1b-2 随替换层整体迁入（消费者就在同文件） |
+| `PASSIVE_REWRITES` / `INTENSIFIER_*` / `RELAX_REDUNDANT_RES` / `ACADEMIC_FROZEN` | `humanize-replace.ts` | 同上 |
+| `GUARD_BEFORE/AFTER` / `VERB_PHRASE_AFTER` / `guardBlocks` / `isSceneBlockLine` | `humanize-guard.ts`（v0.9.43 老模块） | 从未在 humanize.ts 里 |
+| `FORMULAIC` / `SKELETON` / `segmentRisk` | `detector.ts` / `humanize-vocab*.ts` | 方案担心的"双向依赖"双方都不在 492–994 区，风险从未存在 |
+
+⇒ 原问题的前提（守卫正则堆在 humanize.ts 里且与 detector 双向依赖）在 1b 后已不成立。
+**无需再拆**。已知遗留小味：`SCENE_BLOCK_LINE_RE` 在 `humanize-replace.ts`（导出）与
+`humanize-guard.ts`（私有）各有一份同文正则——此重复先于拆分存在（guard.ts 自 v0.9.43），
+且**不可简单去重**：guard.ts 若改为 import replace.ts 会成环
+（guard → replace → humanize-data → guard）。留待将来重构 data 层时再收。
+
+### `humanize()` 本体（540 行）——**评估后决定不拆**
+
+结构实测（808 行态）：32 个局部声明、31 个条件分支、19 处 `emitStage` 埋点、
+4 个 return；是一条**共享可变状态**（`result` / `skipped` / `zqRan` / `effectiveGenre` /
+`knobs`）贯穿的线性流水线（体裁判定 → 逐段 humanizeSingle → 朱雀特征 → 结构 passes →
+去重 → 节奏 → 派生精修 → 清尾）。
+
+不拆的理由：
+
+1. **拆它 = 拆行为本身**。这个函数就是产品行为，抽stage 出去要传递/返回上述共享状态，
+   签名膨胀、回归风险实打实；与 1a/1b"纯搬运、输出逐字节不变"的可验证性完全不同类。
+2. **trace 埋点与流水线交织**（19 处 emitStage 的顺序与内容是 trace 测试的断言对象），
+   搬移极易改变可观测行为。
+3. 模块级拆分的核心收益（改一处不加载全部）已由 1a/1b 达成：humanize.ts 808 行、
+   最大模块 humanize-zhuque-apply.ts 973 行，都在合理区间。
+4. 真要动它，正确的形态不是拆模块而是**拆 stage 函数 + 显式状态对象**，属引擎重构，
+   需单独版本 + 单独的验收方案（含 trace 顺序断言），不塞进任何拆分尾巴里。
