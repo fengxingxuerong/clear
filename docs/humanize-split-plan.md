@@ -126,3 +126,51 @@ env -u NODE_OPTIONS node D:/projects/quaiwei/node_modules/vitest/vitest.mjs run 
 
 **遗留**：`scripts/_split-1a-fix.mjs`（就是写出坏 import 块的那个修复脚本）**未提交**——
 它对 1b 有害无益，留在工作区仅为留档。1b 应改用「搬完后按模块重建 import」的流程。
+
+### 阶段 1b（2026-10-17，已完成；**边界按实测修正，选项 A**）
+
+> ⚠️ 原文档第 2/3 节的 1b 边界**作废**：它假设 `applyZhuqueFeatures` 是 682 行的大函数、
+> 且"待搬符号都不是 humanize.ts 自家产物"。实测两条都错——
+> ① `applyZhuqueFeatures` 只有 **130 行**，真正调用替换层的是其后没人提到的
+> `humanizeSingle()`（538 行，本地引擎单遍主体）；
+> ② 替换层 27 个符号 / 589 行是 humanize.ts 自家产物，只被这两个函数调用。
+
+**修正后的架构实测**（v0.9.53，1737 行态）：
+
+| 函数 | 行段 | 行数 | 真实职责 |
+|---|---|---|---|
+| `humanize()` | 304–839 | 538 | 编排入口：调 `humanizeSingle` + `applyZhuqueFeatures` |
+| `applyZhuqueFeatures()` | 842–971 | 130 | 朱雀特征注入 |
+| `humanizeSingle()` | 972–1509 | 538 | 本地引擎主体，替换层唯一调用方 |
+| `injectDialect` 家族 | 1510–1688 | 179 | 已停用，留档 |
+
+**执行顺序（三步三 commit，每步全量门禁 + realcase 字节级比对）**：
+
+| 步 | 内容 | 结果 |
+|---|---|---|
+| 1 | `emitStage`/`nowMs`/`TRACE_SNIPPET_LEN` → `humanize-primitives.ts`（两边共用，留主文件会成环） | 2296→2260 |
+| 2 | 替换层（`replaceVocab` 家族 + 私有守卫正则，原 301–823）→ `humanize-replace.ts`（565 行） | 2260→1737 |
+| 3 | RAMP 斜坡 + `applyZhuqueFeatures` + `humanizeSingle` + `injectDialect` 家族 → `humanize-zhuque-apply.ts`（885 行） | **1737→853** |
+
+**最终形态**：`humanize.ts` **853 行**（只剩编排入口 `humanize()` + genre knobs + 建议/评分门面 +
+公开 API 面）；`humanize-replace.ts` 565 行；`humanize-zhuque-apply.ts` 885 行。
+
+**外部兼容零改动**：`applyZhuqueFeatures` / `injectDialect` 经 humanize.ts re-export；
+`PURPOSE_LE_RE` / `NORMATIVE_LE_RE`（scan-bugs.ts 依赖）同样 re-export；
+`getGenreKnobs` / `EffectiveGenre` / `GenreKnobs`（gen-skill-rules.ts 依赖）留主文件。
+
+**验证**：每步 tsc / eslint / prettier + 96 files / 1926 tests 全绿 + realcase 20 篇
+`report.json` 零 diff；三步完成后 `check:release` 全通过。
+
+**踩坑记录（供以后拆分参考）**：
+
+1. **搬运脚本的"字节级等价"只覆盖被搬运的代码体**。1a 坏在 import 块，1b 坏在
+   `export` 修饰符——`humanizeSingle` 搬过去忘了加 export，`humanize()` 主流程
+   立刻两处 TS2304。**搬完必须 tsc，且必须想到"谁调用被搬走的函数"**。
+2. **扫描 import 依赖的正则必须覆盖单行 import**（`import { x } from "..."`）。
+   1b 扫描漏了 `keepOnlyIfDetectDrops` / `suppressSelfQA`（单名单行/单行多名），
+   靠 tsc 兜底抓出。更稳的做法：搬完后直接 tsc，把 TS2304/TS6133 当清单逐项清。
+3. **注释里/字符串字面量里的标识符会污染依赖扫描**（`humanize` 出现在 trace 的
+   `why` 字符串里被误报为外部依赖）。剥注释要按块剥，且字符串内容要排除。
+4. `humanize.ts` 现为 **853 行**，不再是最大文件；下一阶段可考虑 492–994 的
+   守卫正则区（方案第 5 节问题 2，仍需单独版本评估）。
