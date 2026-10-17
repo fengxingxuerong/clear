@@ -40,7 +40,9 @@ import { labelFromPct, readLedger, sealApi, countChars } from "./zhuque-evidence
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = path.join(__dirname, "zhuque-v4-out"); // gitignore：临时产物，sealApi 会复制进 evidence/
 const CALIB_JSON = path.join(__dirname, "calibration-data.json");
-const V2_JSON = JSON.parse(fs.readFileSync(path.join(__dirname, "calibration-data-v2-genres.json"), "utf8"));
+const V2_JSON = JSON.parse(
+  fs.readFileSync(path.join(__dirname, "calibration-data-v2-genres.json"), "utf8"),
+);
 const SEED = 20260826;
 const MIN_CHARS = 350;
 
@@ -83,7 +85,8 @@ const ONLY = (() => {
   const i = argv.indexOf("--only");
   if (i < 0) return null;
   const v = argv[i + 1];
-  if (!v || v.startsWith("--")) throw new Error("--only 需要逗号分隔的 id 列表，如 --only O1,N1,D0");
+  if (!v || v.startsWith("--"))
+    throw new Error("--only 需要逗号分隔的 id 列表，如 --only O1,N1,D0");
   return new Set(
     v
       .split(",")
@@ -113,24 +116,110 @@ function recheckJobs(): Job[] {
 /** v4 中段点：优先用已备好的 scripts/zhuque-v4-out/<id>-*.txt，否则按 SAMPLES 重建 */
 function v4Jobs(): Job[] {
   // 与 zhuque-v4-pipeline.ts 的 SAMPLES 对齐（id → 体裁/档位/重建参数）
-  const spec: Array<Pick<Job, "id" | "genre"> & { intensity: number; zhuqueMode: boolean; seed?: number; src: string; level: string; note: string }> = [
-    { id: "O4", genre: "expository", level: "中段0.3档", intensity: 0.3, zhuqueMode: true, src: "EXPO", note: "v4·论说中段" },
-    { id: "O5", genre: "expository", level: "原文", intensity: 0, zhuqueMode: false, src: "EXPO", note: "v4·论说原文" },
-    { id: "N4", genre: "narrative", level: "中段0.1档", intensity: 0.1, zhuqueMode: true, src: "V2_NAR", note: "v4·叙事中段" },
-    { id: "D4", genre: "dialogue", level: "中段0.3档", intensity: 0.3, zhuqueMode: true, seed: SEED + 7, src: "V2_DIA", note: "v4·对话中段低" },
-    { id: "D5", genre: "dialogue", level: "中段0.1档", intensity: 0.1, zhuqueMode: true, seed: SEED + 14, src: "V2_DIA", note: "v4·对话中段高" },
+  const spec: Array<
+    Pick<Job, "id" | "genre"> & {
+      intensity: number;
+      zhuqueMode: boolean;
+      seed?: number;
+      src: string;
+      level: string;
+      note: string;
+    }
+  > = [
+    {
+      id: "O4",
+      genre: "expository",
+      level: "中段0.3档",
+      intensity: 0.3,
+      zhuqueMode: true,
+      src: "EXPO",
+      note: "v4·论说中段",
+    },
+    {
+      id: "O5",
+      genre: "expository",
+      level: "原文",
+      intensity: 0,
+      zhuqueMode: false,
+      src: "EXPO",
+      note: "v4·论说原文",
+    },
+    {
+      id: "N4",
+      genre: "narrative",
+      level: "中段0.1档",
+      intensity: 0.1,
+      zhuqueMode: true,
+      src: "V2_NAR",
+      note: "v4·叙事中段",
+    },
+    {
+      id: "D4",
+      genre: "dialogue",
+      level: "中段0.3档",
+      intensity: 0.3,
+      zhuqueMode: true,
+      seed: SEED + 7,
+      src: "V2_DIA",
+      note: "v4·对话中段低",
+    },
+    {
+      id: "D5",
+      genre: "dialogue",
+      level: "中段0.1档",
+      intensity: 0.1,
+      zhuqueMode: true,
+      seed: SEED + 14,
+      src: "V2_DIA",
+      note: "v4·对话中段高",
+    },
     // 人写 4 篇直接用已备好文本（语料在 scripts/calibrate/human/，重建参数=无处理）
-    { id: "H-NEW1", genre: "humanHand", level: "无处理", intensity: 0, zhuqueMode: false, src: "__FILE__", note: "v4·人写·夜宵碎念" },
-    { id: "H-NEW2", genre: "humanHand", level: "无处理", intensity: 0, zhuqueMode: false, src: "__FILE__", note: "v4·人写·宜家半日游" },
-    { id: "H-NEW3", genre: "humanHand", level: "无处理", intensity: 0, zhuqueMode: false, src: "__FILE__", note: "v4·人写·楼下早餐摊" },
-    { id: "H-NEW4", genre: "humanHand", level: "无处理", intensity: 0, zhuqueMode: false, src: "__FILE__", note: "v4·人写·搬家记" },
+    {
+      id: "H-NEW1",
+      genre: "humanHand",
+      level: "无处理",
+      intensity: 0,
+      zhuqueMode: false,
+      src: "__FILE__",
+      note: "v4·人写·夜宵碎念",
+    },
+    {
+      id: "H-NEW2",
+      genre: "humanHand",
+      level: "无处理",
+      intensity: 0,
+      zhuqueMode: false,
+      src: "__FILE__",
+      note: "v4·人写·宜家半日游",
+    },
+    {
+      id: "H-NEW3",
+      genre: "humanHand",
+      level: "无处理",
+      intensity: 0,
+      zhuqueMode: false,
+      src: "__FILE__",
+      note: "v4·人写·楼下早餐摊",
+    },
+    {
+      id: "H-NEW4",
+      genre: "humanHand",
+      level: "无处理",
+      intensity: 0,
+      zhuqueMode: false,
+      src: "__FILE__",
+      note: "v4·人写·搬家记",
+    },
   ];
   return spec.map((s) => {
     let text: string;
     if (s.src === "__FILE__") {
       // 人写语料：找 scripts/zhuque-v4-out/<id>-*.txt（prepare 已生成，≥350 字已保证）
       const f = fs.readdirSync(OUT_DIR).find((n) => n.startsWith(s.id + "-"));
-      if (!f) throw new Error(`找不到 ${s.id} 的备好文本，请先跑 npx tsx scripts/zhuque-v4-pipeline.ts prepare`);
+      if (!f)
+        throw new Error(
+          `找不到 ${s.id} 的备好文本，请先跑 npx tsx scripts/zhuque-v4-pipeline.ts prepare`,
+        );
       text = fs.readFileSync(path.join(OUT_DIR, f), "utf8");
     } else {
       text = rebuild(SRC[s.src], s.intensity, s.zhuqueMode, s.seed ?? SEED);
@@ -139,7 +228,10 @@ function v4Jobs(): Job[] {
       id: s.id,
       genre: s.genre,
       text,
-      rebuildSpec: s.src === "__FILE__" ? undefined : { src: s.src, intensity: s.intensity, zhuqueMode: s.zhuqueMode },
+      rebuildSpec:
+        s.src === "__FILE__"
+          ? undefined
+          : { src: s.src, intensity: s.intensity, zhuqueMode: s.zhuqueMode },
       note: s.note,
     };
   });
@@ -171,12 +263,31 @@ async function main(): Promise<number> {
   let selected = jobs;
   if (ONLY) {
     const unknown = [...ONLY].filter((id) => !jobs.some((j) => j.id === id));
-    if (unknown.length) console.error(`⚠️ --only 里有未知 id：${unknown.join(", ")}`);
+    /**
+     * v0.9.53：未知 id 一律抛错，不再只 warn 后继续跑。
+     *
+     * 实测（2026-10-17）：`--only BAD_ID` 走 warn 分支后 selected 为空 ⇒ todo 为空 ⇒
+     * 落到下面「全部已认证，无需送检」并 **return 0**。用户以为跑完了，其实一篇都没送，
+     * 而官方额度是按天算的——拼错一个 id 就白丢一天窗口。
+     * ⇒ 退出码必须非 0，且要把可用 id 列出来，省得用户回去翻文档。
+     */
+    if (unknown.length) {
+      const known = jobs.map((j) => j.id);
+      throw new Error(
+        `--only 里有未知 id：${unknown.join(", ")}\n` +
+          `  本次可用 id：${known.join(", ")}` +
+          (DO_V4 ? "" : "\n  （v4 的点要加 --v4 才进候选，例如 --v4 --only O4,N4）"),
+      );
+    }
     selected = jobs.filter((j) => ONLY.has(j.id));
   }
 
   // 幂等：已有 api-response 凭证的 id 跳过
-  const already = new Set(readLedger().filter((e) => e.proof === "api-response").map((e) => e.id));
+  const already = new Set(
+    readLedger()
+      .filter((e) => e.proof === "api-response")
+      .map((e) => e.id),
+  );
   const todo = selected.filter((j) => !already.has(j.id));
 
   console.log(`═══════════ 官方 API 一键送检（${DO_V4 ? "recheck + v4" : "recheck"}）═══════════`);
@@ -185,7 +296,9 @@ async function main(): Promise<number> {
   for (const j of todo) {
     const chars = countChars(j.text);
     const x = aiScore(j.text).score;
-    console.log(`  ${j.id.padEnd(8)} ${j.genre.padEnd(11)} ${String(chars).padStart(4)} 字  aiScore=${String(x).padStart(3)}  ${j.note}${chars < MIN_CHARS ? "  ⚠️<350" : ""}`);
+    console.log(
+      `  ${j.id.padEnd(8)} ${j.genre.padEnd(11)} ${String(chars).padStart(4)} 字  aiScore=${String(x).padStart(3)}  ${j.note}${chars < MIN_CHARS ? "  ⚠️<350" : ""}`,
+    );
   }
   if (DRY) {
     console.log(`\n[dry-run] 不送检、不入账。去掉 --dry-run 实跑。`);
@@ -222,24 +335,38 @@ async function main(): Promise<number> {
       const tk = tokensOf(raw);
       if (tk !== null) spent += tk;
       const label = labelFromPct(score);
-      console.log(`✓ ${tag.padEnd(8)} 官方 AI 概率 ${score}% (${label})  ${labelsRatio(raw)}  扣 ${tk ?? "?"} token  ${(Date.now() - t0) / 1000}s`);
+      console.log(
+        `✓ ${tag.padEnd(8)} 官方 AI 概率 ${score}% (${label})  ${labelsRatio(raw)}  扣 ${tk ?? "?"} token  ${(Date.now() - t0) / 1000}s`,
+      );
 
       // 落盘临时产物（gitignore），sealApi 会复制进 evidence/ 归档
       const txtPath = path.join(OUT_DIR, `official-${j.id}.txt`);
       const apiPath = path.join(OUT_DIR, `official-${j.id}.api.json`);
       fs.writeFileSync(txtPath, j.text, "utf8");
-      fs.writeFileSync(apiPath, JSON.stringify({ file: j.id, chars: countChars(j.text), score, raw }, null, 2), "utf8");
+      fs.writeFileSync(
+        apiPath,
+        JSON.stringify({ file: j.id, chars: countChars(j.text), score, raw }, null, 2),
+        "utf8",
+      );
 
       // --v4 的新点：先注册进 calibration-data.json，再入账（否则 audit 报孤儿凭证）
       if (DO_V4 && j.rebuildSpec) {
         const data = JSON.parse(fs.readFileSync(CALIB_JSON, "utf8"));
         if (!(data.points as any[]).some((p) => p.id === j.id)) {
           data.points.push({
-            id: j.id, genre: j.genre, level: j.note, x: aiScore(j.text).score, y: score,
-            source: "v4-api", rebuild: j.rebuildSpec, note: `${j.note}（API 送检）`,
+            id: j.id,
+            genre: j.genre,
+            level: j.note,
+            x: aiScore(j.text).score,
+            y: score,
+            source: "v4-api",
+            rebuild: j.rebuildSpec,
+            note: `${j.note}（API 送检）`,
           });
           fs.writeFileSync(CALIB_JSON, JSON.stringify(data, null, 2), "utf8");
-          console.log(`  → 已把 ${j.id} 追加进 calibration-data.json（x=${aiScore(j.text).score} y=${score}）`);
+          console.log(
+            `  → 已把 ${j.id} 追加进 calibration-data.json（x=${aiScore(j.text).score} y=${score}）`,
+          );
         }
       }
 
@@ -264,18 +391,31 @@ async function main(): Promise<number> {
     }
   }
 
-  console.log(`\n共 ${todo.length} 篇：成功 ${ok}，失败 ${fail}，本次累计扣减 ${spent} token（免费额度 50 万/月）。`);
+  console.log(
+    `\n共 ${todo.length} 篇：成功 ${ok}，失败 ${fail}，本次累计扣减 ${spent} token（免费额度 50 万/月）。`,
+  );
   if (DO_V4 && sealed.length) {
     console.log(`\n下一步：v4 新点已入账。跑 npx tsx scripts/zhuque-v4-fit.ts 看重拟合报告，`);
-    console.log(`确认新线拟合误差可接受后，再人工同步 src/engine/zhuque-calib.ts 与 calibration-data.json 的 tracks。`);
+    console.log(
+      `确认新线拟合误差可接受后，再人工同步 src/engine/zhuque-calib.ts 与 calibration-data.json 的 tracks。`,
+    );
     console.log(`（calib-sanity 若因新点转红，是"旧线拟合不了新数据"的诚实信号，不是脚本出错。）`);
   }
-  console.log(`\n凭证与账本都要入库，否则克隆后无法复算：git add evidence/ scripts/calibration-data.json`);
+  console.log(
+    `\n凭证与账本都要入库，否则克隆后无法复算：git add evidence/ scripts/calibration-data.json`,
+  );
   return fail ? 1 : 0;
 }
 
 const entry = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : "";
 if (entry === import.meta.url) {
-  const done = (code: number) => { process.exitCode = code; };
-  main().then(done).catch((e) => { console.error(`脚本自身出错：${(e as Error).stack ?? e}`); done(1); });
+  const done = (code: number) => {
+    process.exitCode = code;
+  };
+  main()
+    .then(done)
+    .catch((e) => {
+      console.error(`脚本自身出错：${(e as Error).stack ?? e}`);
+      done(1);
+    });
 }
