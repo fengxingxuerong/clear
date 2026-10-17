@@ -17,7 +17,6 @@
 
 import {
   VOCAB,
-  VOCAB_ENTRIES,
   INFORMAL_ONLY_KEYS,
   OPENERS,
   INTERJECTIONS,
@@ -43,6 +42,30 @@ import {
   HumanizeOptions,
   RewriteStyle,
 } from "./humanize-data.ts";
+
+// v0.9.53 拆分阶段 1a：替换规则 + 概率/阈值 + FORMAL_FORBIDDEN_SUBSTITUTES + wouldCascade
+// （原为本文件内联定义，详见 docs/humanize-split-plan.md）
+import {
+  REPLACE_VOCAB_BASE,
+  REPLACE_VOCAB_SLOPE,
+  SOFT_ENDING_PROB,
+  SOFT_TAIL_PROB,
+  SPLIT_SENTENCE_THRESHOLD,
+  SPLIT_SENTENCE_RATE,
+  MERGE_SENTENCE_THRESHOLD,
+  MERGE_SENTENCE_PREV_MAX,
+  MERGE_SENTENCE_RATE,
+  INTERJECTION_RATE,
+  DROP_CONNECTIVE_INTENSITY_THRESHOLD,
+  REPLACE_VOCAB_CANDIDATES,
+  VOCAB_KEY_SET,
+  PARTICLE_PREFIX_BLOCK,
+  wouldCascade,
+  COLLOQUIAL_RESULT_VERBS,
+  DIR_MODIFIER_VERB_CLASH_RE,
+  ABSTRACT_OBJECT_RE,
+  FORMAL_FORBIDDEN_SUBSTITUTES,
+} from "./humanize-rules.ts";
 
 import {
   relaxEmDash,
@@ -113,6 +136,7 @@ import { classifyGenre, AutoGenre, suppressSelfQA } from "./classify-genre.ts";
 import { keepOnlyIfDetectDrops } from "./detector.ts";
 // v0.8.6 术语保护：受保护术语位置禁止替换/拆句
 import { isProtectedTerm } from "./term-protect.ts";
+export { wouldCascade, DIR_MODIFIER_VERB_CLASH_RE, FORMAL_FORBIDDEN_SUBSTITUTES };
 
 // 公开 API 面：这些符号从本文件被 App.tsx / llm.ts / 测试文件导入
 export {
@@ -145,21 +169,6 @@ export type {
   FidelityReport,
   StageTrace,
 };
-
-/* ----------------------------- 常量：概率 / 阈值 ----------------------------- */
-
-/** 替换概率公式基数：强度0 时完全不动词；从 0.65 起步保证常用强度下替换更彻底 */
-const REPLACE_VOCAB_BASE = 0.65;
-const REPLACE_VOCAB_SLOPE = 0.45;
-const SOFT_ENDING_PROB = 0.06;
-const SOFT_TAIL_PROB = 0.12;
-const SPLIT_SENTENCE_THRESHOLD = 34;
-const SPLIT_SENTENCE_RATE = 0.45;
-const MERGE_SENTENCE_THRESHOLD = 9;
-const MERGE_SENTENCE_PREV_MAX = 16;
-const MERGE_SENTENCE_RATE = 0.35;
-const INTERJECTION_RATE = 0.22;
-const DROP_CONNECTIVE_INTENSITY_THRESHOLD = 0.45;
 
 /* ---------------- v0.9.8 强度斜坡（RAMP）---------------- */
 /**
@@ -291,203 +300,6 @@ export function getGenreKnobs(genre: EffectiveGenre): GenreKnobs {
 // P7-E：剧本场景块行头。无锚 + 按行扫描——前置方言/观点注入会在段首加垫词，
 // ^ 锚定的整段匹配会被击穿（台词区被塞自问自答的真实缺陷）
 const SCENE_BLOCK_LINE_RE = /【[^】]{0,80}(?:场景|人物|角色|地点|时间|背景|旁白|简介)[^】]{0,80}】/;
-
-/* ----------------------------- 替换规则 ----------------------------- */
-
-/** 启动时预计算剔除自替身后的候选列表，避免每次调用重复 filter 全表 */
-const REPLACE_VOCAB_CANDIDATES: [string, string[]][] = VOCAB_ENTRIES.map(([from, tos]) => {
-  const realTos = tos.filter((t) => t !== from);
-  return [from, realTos.length ? realTos : tos];
-});
-
-/**
- * v0.9.22 级联守卫：全部源词集合。
- *
- * `replaceVocab` 是**逐词条**循环的，且每轮都写回同一个 `base`——所以上一轮替换
- * **产出的替身**会成为下一轮 `indexOf(from)` 的命中目标。实测：
- *   「真正实现可持续的发展」→ 词条「实现→落地」产出"真正落地…"
- *   → 词条「落地→真正做出来」再替一次 → **"真正真正做出来可持续的发展"**。
- *
- * 单个词条看都没错，叠加就炸。全表扫一遍只有 4 条替身落回词表
- * （至关重要→举足轻重 / 实现→落地 / 推动→带动 / 持续→不断），
- * 且**没有任何一条的链式是设计意图**——链式只会让替身被二次口语化，越替越破。
- * 因此凡替身本身是源词的一律作废该次替换（保留原词），而不是等下游打补丁。
- */
-const VOCAB_KEY_SET: Set<string> = new Set(REPLACE_VOCAB_CANDIDATES.map(([k]) => k));
-
-/**
- * v0.9.24 **助词结尾词条的前缀闭包**：`前缀 → 至少一个以它开头的助词结尾源词`。
- *
- * 词表实测 14 对前缀重叠（取得 ⊂ 取得了、展现 ⊂ 展现出 ⊂ 展现出了、
- * 发挥 ⊂ 发挥着 ⊂ 发挥了、日益 ⊂ 日益增多/增加/增长…）。
- * `replaceVocab` 逐词条循环改写共享的 `base`，同一位置会被**整条前缀链**依次命中。
- *
- * 探针日志实录（本轮最贵的一次定位）：
- *
- *     [SCAN] from=取得了 idx=2   ← 类别守卫命中，跳过（base 未被改写）
- *     [SCAN] from=取得   idx=2   ← 「取得了」原样还在，前缀立刻顶上来
- *     OUT:  我们拿到了地这件事      ← 词干被换、助词残留 ⇒ 病句
- *
- * 所以**只拦长词条是无效的**——拦住的瞬间前缀就补位。必须让**前缀也知道**
- * 「我这条链上有以助词结尾的词条」，一起让位，源词才能完整保留。
- *
- * 这里取「前缀 → 该前缀下最长的助词结尾词条」，一个前缀只需登记一次。
- */
-const PARTICLE_PREFIX_BLOCK: Set<string> = (() => {
-  const keys = REPLACE_VOCAB_CANDIDATES.map(([k]) => k);
-  const s = new Set<string>();
-  for (const k of keys) {
-    // ⚠️ 只看「了/着」，与 guardBlocks 的类别规则保持一致。
-    //   收「地/得」会把「取得」「获得」「落地」的前缀也拦掉——它们是正常词条。
-    if (!"了着".includes(k[k.length - 1])) continue;
-    for (let i = 1; i < k.length; i++) s.add(k.slice(0, i)); // 登记它的所有真前缀
-  }
-  return s;
-})();
-
-/**
- * 该替身是否**本身也是词表里的源词**（即会不会被下一轮词条循环再替一次）。
- *
- * 导出它是为了让 `humanize-quality-v0922.test.ts` 能白盒钉住这个集合——
- * 端到端那条断言当前被「落地」的前置守卫遮蔽（见下方用例注释），
- * 光靠端到端会变成一条永远绿的假绿断言。
- */
-export function wouldCascade(rep: string): boolean {
-  return VOCAB_KEY_SET.has(rep);
-}
-
-/**
- * v0.9.22 类别级守卫：口语「结果动词」不能带抽象名词宾语。
- *
- * 这些替身（搞出/弄出/干出/整出…）是**动结式口语动词**，语义上要求宾语是
- * 具体、可做出来的东西（"搞出一个方案""弄出个结果"）。接抽象名词就成了病句：
- *   实测「建立健全的监管框架」→「搞出健全的监管框架」
- *        （框架是抽象制度，不是"搞出来"的物件）
- *
- * 为什么做成**类别级**而不是给「建立」加一条 GUARD_AFTER：
- *   ——这条错的不是「建立」这一个词，是"口语结果动词 + 抽象名词"这**一类**搭配。
- *   给「建立」打补丁，下次有人给「制定/形成/确立」配上「搞出」照样翻车。
- *   类别级守卫一次覆盖全表，且替身表将来加词也自动受保护。
- */
-const COLLOQUIAL_RESULT_VERBS = new Set([
-  "搞出",
-  "弄出",
-  "干出",
-  "整出",
-  "弄成",
-  "搞成",
-  "搞出来",
-  "弄出来",
-  "干出来",
-  "整出来",
-  "搞起",
-  "弄起",
-]);
-
-/**
- * v0.9.31：方向/性质类修饰语（正向/逆向/良性/负向）**接行为动词** = 搭配不当。
- *
- * 实测：`积极→正向`（v0.9.22 特意保留的替身，原注释写"可搭配"）产出
- * 「我们应当**正向拥抱**人工智能技术」「各家企业都在**正向构建**自身的技术护城河」
- * ——150 次运行命中 56 次。而同一批运行里「正向作用/正向影响/正向反馈」有 27 次且都成立。
- *
- * ⇒ 结论不是"这个词不能用"，是**位置**：正向 + 名词（作用/影响/反馈/情绪）成立，
- *   正向 + 行为动词（拥抱/构建/推动/参与…）不成立。所以做位置守卫，不删词条
- *   ——删掉会连那 27 次合法替换一起废掉，白丢去味机会。
- *
- * ⚠️ 守卫与探针（`scan-bugs` v8.0「方向修饰语+行为动词」）**共用这一条正则**：
- *   守卫侧测 `rep + 右邻2字`，探针侧测整段输出。同表才不会出现
- *   "守卫否掉的比签名抓的多/少"这类对不齐（NP_TAIL_RE 的教训）。
- */
-export const DIR_MODIFIER_VERB_CLASH_RE =
-  /(?:\u6b63\u5411|\u9006\u5411|\u8d1f\u5411|\u826f\u6027|\u6076\u6027)(?:\u62e5\u62b1|\u63a8\u52a8|\u53c2\u4e0e|\u54cd\u5e94|\u63a8\u8fdb|\u5e94\u5bf9|\u5f00\u5c55|\u53d1\u6325|\u843d\u5b9e|\u6539\u8fdb|\u8c03\u6574|\u63a2\u7d22|\u5c1d\u8bd5|\u914d\u5408|\u534f\u8c03|\u5bf9\u63a5|\u5f15\u5bfc|\u5e26\u52a8|\u4fc3\u8fdb|\u5021\u5bfc|\u5b66\u4e60|\u501f\u9274|\u5e03\u5c40|\u8ddf\u8fdb|\u4e89\u53d6|\u91c7\u7eb3|\u6c9f\u901a|\u5ba3\u4f20|\u57f9\u80b2|\u6276\u6301|\u6784\u5efa|\u5efa\u7acb|\u5b8c\u5584|\u4f18\u5316|\u63d0\u5347|\u63d0\u9ad8|\u5b9e\u73b0|\u4fdd\u969c|\u52a0\u5f3a|\u90e8\u7f72|\u843d\u5730|\u53d1\u529b|\u53c2\u52a0)/;
-
-/** 抽象名词宾语（8 字窗口内出现即判为抽象宾语位）
- *
- *  v0.9.31：补**制度法规类**（法律/法规/法令/条例/规章/纪律/规矩/公约/条约）。
- *  起因是 `建立→搞出` 命中「建立健全相关的法律法规」→ **「搞出健全相关的法律法规」**
- *  （实测 27/30，scan-bugs v8.0「口语动词+制度法规宾语」）。旧表收了「制度/规范/规则」
- *  却漏了「法律法规」——同一语义场的词，漏一半等于这条守卫只在半个场里生效。 */
-/**
- * v0.9.22：口语结果动词（见 COLLOQUIAL_RESULT_VERBS）不该接抽象名词宾语。
- *
- * ⚠️ v0.9.46 距离上限 6 → 12（与调用处 slice 窗口同步 8 → 14）：
- * 真实案例 C2 公众号观点文实测产出「我们需要搞出一个清晰的自我认识体系」——
- * 宾语前に9 字修饰语（"一个清晰的自我认识"），在 6 字窗口内完全看不到"体系"，
- * 于是 clashAbstract 不命中、病句放行。模板语料的宾语几乎都是零修饰，测不出这个洞。
- * 放宽方向是**多否决替换**（宁可少改，不可错改），与既定方针同向。
- */
-const ABSTRACT_OBJECT_RE =
-  /^[\s\S]{0,12}(?:框架|机制|体系|格局|价值|水平|质量|效率|意义|能力|模式|结构|制度|规范|标准|流程|生态|共识|关系|布局|目标|任务|要求|原则|方针|政策|战略|愿景|理念|文化|氛围|环境|条件|基础|保障|支撑|引领|指导|监管|治理|服务|管理|评价|评估|指标|模型|方法|方案|路径|思路|逻辑|规则|秩序|信誉|口碑|信任|权威|优势|潜力|空间|机遇|挑战|风险|压力|动力|活力|合力|效力|影响力|竞争力|凝聚力|创造力|生产力|法律法规|法律|法规|法令|条例|规章|纪律|规矩|公约|条约)/;
-
-/**
- * v0.9.46：正式语体下**不得采用**的口语替身（按"替身"而不是源词冻结）。
- *
- * 为什么是这张表：此前的处置方式是"事后打补丁"——先在 VOCAB 层把「努力」换成「使劲」、
- * 把「围绕」换成「环绕」，再靠 anti-fingerprint 的 FORMAL_RESTORE（和 v0.9.46 新增的
- * fixBrokenCollocations）把它们在正式语体下改回来。问题是补丁必须逐条写、且只在
- * formal 门控打开时跑；真实案例 C1（季度工作总结）实测照样产出「使劲在下一季度取得」
- * 「紧紧环绕公司年度战略目标」「主要看得出来在跨部门…」——说明补丁既不全也太晚。
- *
- * 治本：在**替换阶段**就把这些替身否掉，该处保留原词。
- * 取舍：宁可少改一处，不可先改成病句再指望下游救回来（与项目既定方针同向）。
- *
- * 收词口径（不自造新判断）：只收**当前真在 VOCAB 候选里**的替身。
- * 由 `vocab-formal-substitutes.test.ts` 自动校验这张表的两项合法性：
- *   ① 每个词必须在某个 VOCAB 词条的候选里出现（否则写了也拦不住任何东西）；
- *   ② 每个词要么已被 FORMAL_RESTORE 还原、要么有真实案例实证。
- *
- * ⚠️ 初版曾把 FORMAL_RESTORE 的 9 个目标词（死磕/摆平/捋顺/弄全/兜好/盯紧/把牢/兜住/搭起）
- *    一起抄进来，被第 ① 条当场抓出：**它们早已从 VOCAB 整条删除**（见 humanize-vocab.ts 的
- *    "构筑/完善"词条注释），FORMAL_RESTORE 里那些规则是历史保险。抄进来只会让表看起来很全、
- *    实际一个都拦不住。 ⇒ 教训：表必须从"当前词表"倒推，不能从"补丁表"顺推。
- *
- * ⚠️ 实现要点：只**否决**结果、不重新挑选，也不额外消耗 rng。
- *    原实现注释明确写着"每个命中位置无条件消耗一次 rng"，与其配套的所有 lithium
- *    （regression-12 / quality / bestof）都按这个序列复现；多调一次 pick 会让全仓 seed
- *    敏感断言整体漂移。
- */
-export const FORMAL_FORBIDDEN_SUBSTITUTES = new Set([
-  // —— FORMAL_RESTORE 已经在还原的（且当前 VOCAB 里仍然存在的）——
-  "拔高",
-  "稳当",
-  // —— 本轮真实案例新增（scripts/realcase C1 季度工作总结实测产出）——
-  "使劲", // 努力 → 使劲：「使劲在下一季度取得更加优异的成绩」——总结体里的语体崩
-  "环绕", // 围绕 → 环绕：「紧紧环绕公司年度战略目标」——FORMAL_RESTORE 只写了「环绕年度」这一组合
-  "看得出来", // 体现 → 看得出来：「主要看得出来在跨部门…」——谓词位置的错配
-  // —— v0.9.49：C1 剩余两条缺陷。这两条的源词条是**混合池**（含正式安全替身），
-  //    按收词口径不进 INFORMAL_ONLY_KEYS，坏的那一个替身在这里毙——
-  //    两条线各管各的：整池口语走词条级，混合池走替身级。
-  "做到位", // 落实 → 做到位：「方方面面做到位各项重点工作任务」——动补结构套名词短语
-  "一起", // 协同 → 一起：「跨部门一起效率有待提升」；通力 → 一起 同样毙（一起在正式体是语体崩）
-  // —— v0.9.49：赋能/心智的口语三人组。这两个源词是 LEAK_WORDS 营销黑话，
-  //    强度 1.0 下无论体裁都必须换掉（verify-quality 零泄漏门禁），所以不能整条冻结；
-  //    v0.9.49 给池子补了正式安全候选（赋能+「助力」、心智+「思路」），
-  //    其余口语替身在这里毙掉 ⇒ 正式体只可能挑中安全候选。
-  //    证据类别见 vocab-formal-substitutes.test.ts 的 LEAK_WORD_PROVEN。
-  "助攻", // 赋能 → 助攻（正式体语体崩）
-  "帮衬", // 赋能 → 帮衬
-  "帮着", // 赋能 → 帮着
-  "心思", // 心智 → 心思
-  "脑子", // 心智 → 脑子
-  "心神", // 心智 → 心神
-  // —— v0.9.50 第二批：来源不是"猜"，而是 scripts/realcase/leak-scan.ts 的
-  //    **多种子复核窗**（10 篇 × 12 seed，正式体裁产出里真的写了这些词）。
-  //    收词口径与上一版一致：混合池只毙坏的那一个，留下来的一定是正式可用的。
-  "变强", // 增强 → [强化, 变强, 加把劲]：「强化」正式安全，另两个毙
-  "加把劲", // 同上（正式体裁产出 6/12 seed）
-  "抓实", // 加强 → [强化, 抓实, 抓紧]：「强化」正式安全
-  "抓紧", // 同上
-  "联手", // 协同 / 通力 → 联手：「配合 / 合力」正式安全（跨篇累计 14 次命中）
-  "这么一来", // 从而 → [这么一来, 借此]：学术摘要实测「这么一来增强了模型的迁移能力」
-  // —— v0.9.51 曾把六个序数词替身加在这里，又被 vocab-formal-substitutes.test.ts
-  //    的第 ② 条当场抓出，已移除。教训：「首先/其次/最后」的口语替身
-  //    （先说一个/头一件/一来/最后说一句/收个尾/末了）走的是 replaceOpener
-  //    的 **OPENERS 平行路径**，根本不是 VOCAB 候选——加进这张表一个都拦不住
-  //    （首轮实测 C20 照旧泄漏），真修法在 humanizeSingle 的
-  //    `if (!formalRegister) s = replaceOpener(...)` 门控（见该处注释）。
-  //    表必须从「当前词表」倒推：VOCAB 里不存在的词，写进来只是死重。
-]);
 
 /* ------------------------------------------------------------------
   v0.9.50 试错存档：SCORING_EXCLUDE 派生冻结（已废弃，保留理由）
